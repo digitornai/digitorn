@@ -1,0 +1,231 @@
+package bifrost
+
+import (
+	"bytes"
+	"context"
+	"log/slog"
+	"strings"
+	"testing"
+	"time"
+
+	schemas "github.com/maximhq/bifrost/core/schemas"
+)
+
+func newCtxForTest() *schemas.BifrostContext {
+	bc, _ := schemas.NewBifrostContextWithTimeout(context.TODO(), 5*time.Second)
+	return bc
+}
+
+func chatReq(provider string) *schemas.BifrostRequest {
+	return &schemas.BifrostRequest{
+		ChatRequest: &schemas.BifrostChatRequest{
+			Provider: schemas.ModelProvider(provider),
+			Model:    "test-model",
+		},
+	}
+}
+
+// ---------- AuditPlugin ----------
+
+func TestAuditPlugin_LogsLineOnSuccess(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	p := NewAuditPlugin(logger, true)
+
+	ctx := newCtxForTest()
+	req, _, err := p.PreLLMHook(ctx, chatReq("anthropic"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req == nil {
+		t.Fatal("request mutated to nil")
+	}
+
+	resp := &schemas.BifrostResponse{}
+	_, _, err = p.PostLLMHook(ctx, resp, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "llm.call") {
+		t.Fatalf("expected audit log line; got: %s", buf.String())
+	}
+	if !strings.Contains(buf.String(), "success=true") {
+		t.Fatalf("expected success=true ; got: %s", buf.String())
+	}
+}
+
+func TestAuditPlugin_DisabledSuppresses(t *testing.T) {
+	var buf bytes.Buffer
+	p := NewAuditPlugin(slog.New(slog.NewTextHandler(&buf, nil)), false)
+	ctx := newCtxForTest()
+	p.PreLLMHook(ctx, chatReq("anthropic"))
+	p.PostLLMHook(ctx, &schemas.BifrostResponse{}, nil)
+	if buf.Len() != 0 {
+		t.Fatalf("disabled audit must not log ; got: %s", buf.String())
+	}
+}
+
+func TestAuditPlugin_FailureLogged(t *testing.T) {
+	var buf bytes.Buffer
+	p := NewAuditPlugin(slog.New(slog.NewTextHandler(&buf, nil)), true)
+	ctx := newCtxForTest()
+	p.PreLLMHook(ctx, chatReq("openai"))
+	msg := "bad key"
+	berr := &schemas.BifrostError{Error: &schemas.ErrorField{Message: msg}}
+	p.PostLLMHook(ctx, nil, berr)
+	if !strings.Contains(buf.String(), "success=false") {
+		t.Fatalf("expected success=false; got: %s", buf.String())
+	}
+	if !strings.Contains(buf.String(), msg) {
+		t.Fatalf("expected error message in log; got: %s", buf.String())
+	}
+}
+
+// ---------- MetricsPlugin ----------
+
+func TestMetricsPlugin_CountsAndLatency(t *testing.T) {
+	m := NewMetricsPlugin()
+
+	for i := 0; i < 5; i++ {
+		ctx := newCtxForTest()
+		m.PreLLMHook(ctx, chatReq("anthropic"))
+		time.Sleep(2 * time.Millisecond)
+		m.PostLLMHook(ctx, &schemas.BifrostResponse{}, nil)
+	}
+	for i := 0; i < 3; i++ {
+		ctx := newCtxForTest()
+		m.PreLLMHook(ctx, chatReq("openai"))
+		time.Sleep(1 * time.Millisecond)
+		typ := "rate_limited"
+		m.PostLLMHook(ctx, nil, &schemas.BifrostError{Type: &typ, Error: &schemas.ErrorField{Message: "x"}})
+	}
+
+	s := m.Stats()
+	if s.TotalRequests != 8 {
+		t.Fatalf("total_requests: %d", s.TotalRequests)
+	}
+	if s.TotalErrors != 3 {
+		t.Fatalf("total_errors: %d", s.TotalErrors)
+	}
+	if s.TotalAvgLatencyMs <= 0 {
+		t.Fatalf("avg latency missing: %f", s.TotalAvgLatencyMs)
+	}
+	ant := s.PerProvider["anthropic"]
+	if ant.Requests != 5 || ant.Errors != 0 {
+		t.Fatalf("anthropic: %+v", ant)
+	}
+	oai := s.PerProvider["openai"]
+	if oai.Requests != 3 || oai.Errors != 3 {
+		t.Fatalf("openai: %+v", oai)
+	}
+	if oai.MaxLatencyMs <= 0 {
+		t.Fatalf("max latency missing: %f", oai.MaxLatencyMs)
+	}
+}
+
+// ---------- CircuitBreakerPlugin ----------
+
+func TestCircuitBreaker_OpensAfterThresholdFailures(t *testing.T) {
+	cb := NewCircuitBreakerPlugin(3, 1*time.Second, 500*time.Millisecond)
+
+	for i := 0; i < 3; i++ {
+		ctx := newCtxForTest()
+		req, sc, _ := cb.PreLLMHook(ctx, chatReq("flaky-provider"))
+		if sc != nil {
+			t.Fatalf("not expected to short-circuit yet (i=%d)", i)
+		}
+		_ = req
+		cb.PostLLMHook(ctx, nil, &schemas.BifrostError{Error: &schemas.ErrorField{Message: "boom"}})
+	}
+
+	// 4th call should be short-circuited.
+	ctx := newCtxForTest()
+	_, sc, _ := cb.PreLLMHook(ctx, chatReq("flaky-provider"))
+	if sc == nil {
+		t.Fatal("circuit must be open after 3 failures within window")
+	}
+	if sc.Error == nil || sc.Error.Type == nil || *sc.Error.Type != "circuit_breaker_open" {
+		t.Fatalf("expected typed circuit_breaker_open error; got: %+v", sc.Error)
+	}
+
+	st := cb.Stats()
+	if len(st.OpenProviders) != 1 || st.OpenProviders[0] != "flaky-provider" {
+		t.Fatalf("open providers: %v", st.OpenProviders)
+	}
+	if st.TotalShorts == 0 {
+		t.Fatal("totalshorts not incremented")
+	}
+}
+
+func TestCircuitBreaker_ClosesAfterCooldown(t *testing.T) {
+	cb := NewCircuitBreakerPlugin(2, 1*time.Second, 100*time.Millisecond)
+
+	for i := 0; i < 2; i++ {
+		ctx := newCtxForTest()
+		cb.PreLLMHook(ctx, chatReq("p"))
+		cb.PostLLMHook(ctx, nil, &schemas.BifrostError{Error: &schemas.ErrorField{Message: "x"}})
+	}
+	// Confirm open.
+	if _, sc, _ := cb.PreLLMHook(newCtxForTest(), chatReq("p")); sc == nil {
+		t.Fatal("should be open")
+	}
+	// Wait for cooldown.
+	time.Sleep(150 * time.Millisecond)
+	if _, sc, _ := cb.PreLLMHook(newCtxForTest(), chatReq("p")); sc != nil {
+		t.Fatalf("should be closed after cooldown ; got %+v", sc)
+	}
+}
+
+func TestCircuitBreaker_DoesNotOpenForSuccess(t *testing.T) {
+	cb := NewCircuitBreakerPlugin(2, 1*time.Second, 1*time.Second)
+	for i := 0; i < 10; i++ {
+		ctx := newCtxForTest()
+		cb.PreLLMHook(ctx, chatReq("ok"))
+		cb.PostLLMHook(ctx, &schemas.BifrostResponse{}, nil)
+	}
+	if _, sc, _ := cb.PreLLMHook(newCtxForTest(), chatReq("ok")); sc != nil {
+		t.Fatal("success calls must not open the circuit")
+	}
+}
+
+func TestCircuitBreaker_PerProviderIsolation(t *testing.T) {
+	cb := NewCircuitBreakerPlugin(2, 1*time.Second, 1*time.Second)
+	// Provider A : fail twice → open
+	for i := 0; i < 2; i++ {
+		ctx := newCtxForTest()
+		cb.PreLLMHook(ctx, chatReq("A"))
+		cb.PostLLMHook(ctx, nil, &schemas.BifrostError{Error: &schemas.ErrorField{Message: "fail"}})
+	}
+	// Provider B : never fails.
+	for i := 0; i < 5; i++ {
+		ctx := newCtxForTest()
+		cb.PreLLMHook(ctx, chatReq("B"))
+		cb.PostLLMHook(ctx, &schemas.BifrostResponse{}, nil)
+	}
+	// A blocked, B OK.
+	if _, sc, _ := cb.PreLLMHook(newCtxForTest(), chatReq("A")); sc == nil {
+		t.Fatal("A must be open")
+	}
+	if _, sc, _ := cb.PreLLMHook(newCtxForTest(), chatReq("B")); sc != nil {
+		t.Fatal("B must NOT be affected by A's circuit")
+	}
+}
+
+// ---------- Plugin set wiring ----------
+
+func TestPluginSet_AsLLMPlugins_ReturnsAllThree(t *testing.T) {
+	ps := NewDefaultPluginSet(slog.Default(), false)
+	list := ps.AsLLMPlugins()
+	if len(list) != 3 {
+		t.Fatalf("expected 3 plugins, got %d", len(list))
+	}
+	names := map[string]bool{}
+	for _, p := range list {
+		names[p.GetName()] = true
+	}
+	for _, want := range []string{"digitorn.audit", "digitorn.metrics", "digitorn.circuit_breaker"} {
+		if !names[want] {
+			t.Errorf("missing plugin %s in set", want)
+		}
+	}
+}

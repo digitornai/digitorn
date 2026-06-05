@@ -1,0 +1,32 @@
+id: rag
+version: 1.0.0
+description: Retrieval-augmented generation (knowledge bases, embeddings, citations).
+config_schema:
+  backend: { type: object }
+  embedding_model: { type: string }
+  retrieval_strategy: { type: string }
+  chunking: { type: object }
+  reranker: { type: object }
+  cache: { type: object }
+  citations: { type: object }
+tools:
+  - { name: create_knowledge_base, description: Create a knowledge base., risk_level: medium, params: [{name: name, type: string, required: true}] }
+  - { name: delete_knowledge_base, description: Delete a knowledge base., risk_level: high, irreversible: true, params: [{name: name, type: string, required: true}] }
+  - { name: list_knowledge_bases, description: List knowledge bases., risk_level: low, params: [] }
+  - { name: knowledge_base_stats, description: Return statistics for a KB., risk_level: low, params: [{name: name, type: string, required: true}] }
+  - { name: ingest, description: Ingest a document., risk_level: medium, params: [{name: text, type: string}, {name: path, type: string}, {name: kb, type: string}] }
+  - { name: ingest_file, description: Ingest a file., risk_level: medium, params: [{name: path, type: string, required: true}] }
+  - { name: ingest_directory, description: Ingest a directory., risk_level: medium, params: [{name: path, type: string, required: true}] }
+  - { name: ingest_database, description: Ingest database rows as documents., risk_level: medium, params: [{name: connection_id, type: string, required: true}] }
+  - { name: query, description: Query a KB., risk_level: low, params: [{name: query, type: string, required: true}, {name: kb, type: string}] }
+  - { name: multi_query, description: Multi-query retrieval., risk_level: low, params: [{name: query, type: string, required: true}] }
+  - { name: sql_query, description: Text-to-SQL retrieval., risk_level: low, params: [{name: query, type: string, required: true}] }
+  - { name: migrate_embeddings, description: Migrate embeddings between backends., risk_level: high, params: [{name: from, type: string, required: true}, {name: to, type: string, required: true}] }
+  - { name: list_kbs, description: Alias for list_knowledge_bases., risk_level: low, params: [] }
+  - { name: delete_kb, description: Alias for delete_knowledge_base., risk_level: high, irreversible: true, params: [{name: name, type: string, required: true}] }
+  - { name: rebuild_index, description: Rebuild the search index., risk_level: medium, params: [{name: kb, type: string, required: true}] }
+  - { name: stats, description: Global RAG statistics., risk_level: low, params: [] }
+  - { name: search, description: Direct semantic search., risk_level: low, params: [{name: query, type: string, required: true}] }
+  - { name: verify_citations, description: Verify that citations resolve., risk_level: low, params: [{name: text, type: string, required: true}] }
+  - { name: list_models, description: List embedding models., risk_level: low, params: [] }
+  - { name: clear_cache, description: Clear the semantic cache., risk_level: medium, params: [] }

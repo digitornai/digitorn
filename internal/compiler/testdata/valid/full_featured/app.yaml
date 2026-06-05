@@ -1,0 +1,59 @@
+schema_version: 2
+
+app:
+  app_id: full_featured
+  name: Full Featured App
+  version: "1.2.3"
+  description: "Multi-agent app with hooks, modules, capabilities and runtime config."
+  author: "team@example.com"
+  category: "coding"
+  short_name: "ff"
+
+agents:
+  - id: planner
+    role: coordinator
+    brain:
+      provider: anthropic
+      model: claude-sonnet-4-6
+      temperature: 0.3
+      max_tokens: 8192
+      config:
+        api_key: "sk-ant-test"
+    system_prompt: |
+      You are a planner.
+    delegate_to: [coder]
+    modules:
+      - filesystem
+
+  - id: coder
+    role: worker
+    brain:
+      provider: anthropic
+      model: claude-sonnet-4-6
+      temperature: 0.7
+      max_tokens: 4096
+      config:
+        api_key: "sk-ant-test"
+    system_prompt: |
+      You write code.
+    modules:
+      - filesystem
+      - shell
+
+tools:
+  modules:
+    filesystem:
+      config:
+        workspace: "."
+        max_file_bytes: 1048576
+    shell:
+      config:
+        workdir: "."
+        timeout: "30s"
+  capabilities:
+    default_policy: auto
+    grant:
+      - module: filesystem
+        tools: [read, glob, grep]
+      - module: shell
+        tools: [exec]

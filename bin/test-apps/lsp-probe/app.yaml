@@ -1,0 +1,55 @@
+schema_version: 2
+
+app:
+  app_id: lsp-probe
+  name: LSP Probe
+  version: "0.1.0"
+  description: "Live worker E2E: agent edits a .go file; the lsp_diagnose hook + lsp.notify_change return gopls diagnostics from a worker."
+  author: "live-test@digitorn.local"
+  category: "coding"
+
+runtime:
+  tool_injection: direct
+  workdir_mode: required
+  hooks:
+    - id: lsp_on_write
+      on: tool_end
+      condition: { type: tool_name, match: "filesystem.write" }
+      action: { type: lsp_diagnose, path_field: tool.params.path, content_field: tool.params.content }
+
+agents:
+  - id: main
+    role: assistant
+    brain:
+      provider: openai
+      model: gpt-5-mini
+      temperature: 0.1
+      max_tokens: 512
+      config:
+        api_key: "{{env.OPENAI_API_KEY}}"
+    system_prompt: |
+      You are a Go coding agent with filesystem and lsp tools. Do EXACTLY these
+      steps, in order:
+      1. Use filesystem.write to create the file "main.go" with this content:
+         package main
+
+         func main() {
+         	var x int = "definitely not an int"
+         	_ = x
+         }
+      2. Call lsp.notify_change with path "main.go" to get the language server's
+         diagnostics for the file.
+      3. Reply with ONE line exactly:  RESULT: <the first diagnostic message, verbatim>
+      The diagnostic message comes ONLY from the lsp tool — never invent it.
+
+tools:
+  modules:
+    filesystem: {}
+    lsp: {}
+  capabilities:
+    default_policy: auto
+    grant:
+      - module: filesystem
+        actions: [read, write]
+      - module: lsp
+        tools: [notify_change, diagnostics]

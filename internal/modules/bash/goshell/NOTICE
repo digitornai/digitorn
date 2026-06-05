@@ -1,0 +1,28 @@
+busybox.exe — embedded GNU coreutils for the Windows bash backend
+================================================================
+
+This directory ships a prebuilt `busybox.exe` (BusyBox for Windows /
+busybox-w32, v1.38.0), v1.38.0-FRP, a single self-contained native Win32 executable. The
+daemon embeds it (//go:embed, Windows builds only) and extracts it at runtime to
+supply the standard Unix tools — sed, awk, grep, sort, cut, tr, wc, xargs, find,
+date, sleep, head, tail, cat, ls, … — that the agent's shell pipelines need on a
+Windows host that has no real bash / GNU coreutils. On Linux and macOS nothing is
+embedded; the host's native bash and coreutils are used.
+
+License
+-------
+BusyBox is licensed under the GNU General Public License, version 2 (GPLv2).
+The full license text is at: https://www.gnu.org/licenses/old-licenses/gpl-2.0.txt
+
+Source
+------
+BusyBox source (the basis of the binary distributed here):
+  https://busybox.net/                  (upstream BusyBox)
+  https://frippery.org/busybox/         (busybox-w32 Windows port)
+
+Per GPLv2, the complete corresponding source for this binary is available from
+the URLs above. Distributing this binary with the daemon obliges us to make that
+source available to recipients; the upstream URLs satisfy that obligation.
+
+The embedding (go:embed, extraction, PATH wiring) is the only modification on our
+side; the busybox binary itself is unmodified upstream busybox-w32.

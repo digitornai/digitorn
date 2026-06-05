@@ -1,0 +1,45 @@
+schema_version: 2
+
+app:
+  app_id: chat-ctx-small
+  name: Chat Context Demo (small window)
+  version: "0.2.0"
+  description: "Small context window + filesystem tools: watch the live ctx gauge climb (tool outputs included) to compaction."
+  author: "live-test@digitorn.local"
+  category: "coding"
+
+runtime:
+  context:
+    auto_compact: true
+    compression_trigger: 0.6
+    keep_recent: 4
+    strategy: truncate
+
+agents:
+  - id: assistant
+    role: assistant
+    brain:
+      provider: anthropic
+      model: claude-haiku-4-5-20251001
+      temperature: 0.3
+      max_tokens: 512
+      config:
+        api_key: claude-code
+      context:
+        max_tokens: 16000
+        output_reserved: 200
+    system_prompt: |
+      You are a concise coding assistant on a small context window.
+      Use the filesystem tools (read, write, edit, glob, grep) to inspect and
+      change files — never shell out. Say briefly what you do, do it, report.
+
+tools:
+  modules:
+    filesystem:
+      config:
+        max_file_bytes: 1048576
+  capabilities:
+    default_policy: auto
+    grant:
+      - module: filesystem
+        actions: [read, write, edit, glob, grep]

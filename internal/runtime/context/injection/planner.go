@@ -1,0 +1,271 @@
+package injection
+
+import (
+	"encoding/json"
+	"strings"
+
+	"github.com/mbathepaul/digitorn/internal/compiler/schema"
+	"github.com/mbathepaul/digitorn/internal/domain/tool"
+	"github.com/mbathepaul/digitorn/internal/llm"
+	"github.com/mbathepaul/digitorn/internal/runtime/context/index"
+)
+
+// sanitizeToolName converts a dotted FQN like "filesystem.read" to
+// the underscored form "filesystem__read" demanded by OpenAI-
+// compatible APIs (and the digitorn gateway's strict regex
+// ^[a-zA-Z0-9_-]{1,128}$). The runtime dispatcher accepts both
+// forms via meta.Canonicalize on the inbound tool_calls, so this
+// is a one-way outbound transformation only.
+//
+// Per docs-site/language/04-tools.md "Tool name sanitization" :
+//
+//	dispatcher catalog uses dots, OpenAI wire uses underscores.
+//
+// Centralised here so the planner is the single source of the
+// outbound form for every injection mode.
+func sanitizeToolName(name string) string {
+	idx := strings.Index(name, ".")
+	if idx == -1 {
+		return name
+	}
+	return name[:idx] + "__" + name[idx+1:]
+}
+
+// Planner is the stateless decision-maker. Construct one per daemon
+// (or just call package functions — Planner has no fields). Held as
+// a struct so future extensions (custom budget ratio, alternative
+// token estimators) plug in without breaking the API.
+type Planner struct {
+	// ContextRatio overrides MaxContextRatio for testing. 0 = use
+	// the documented default.
+	ContextRatio float64
+}
+
+// Plan computes the injection Decision for the given (idx, agent, runtime).
+//
+//	idx     : the per-agent ToolIndex (built by CB-1)
+//	agent   : the agent whose brain context window drives the budget
+//	runtime : the app's runtime block (for override + context defaults)
+//
+// Returns a Decision describing the mode chosen, the tool specs to
+// ship to the LLM, and the budget calculations for observability.
+//
+// nil idx is treated as an empty index. nil agent / runtime → the
+// algorithm uses DefaultContextWindow and no override.
+func (p *Planner) Plan(
+	idx *index.ToolIndex,
+	agent *schema.Agent,
+	runtime *schema.RuntimeBlock,
+) Decision {
+	if p == nil {
+		p = &Planner{}
+	}
+
+	mode, overrideUsed := resolveModeOverride(runtime)
+	contextWindow := resolveContextWindow(agent, runtime)
+	ratio := p.ContextRatio
+	if ratio <= 0 {
+		ratio = MaxContextRatio
+	}
+	budget := int(float64(contextWindow) * ratio)
+
+	// Always assemble the domain-tool full schemas first ; we need
+	// their JSON size for the auto-decision even if we end up not
+	// shipping them.
+	directSchemas := buildDirectSchemas(idx)
+	toolTokens := estimateToolTokens(directSchemas, idx)
+	total := 0
+	if idx != nil {
+		total = len(idx.Tools)
+	}
+	compactTokens := total * CompactBytesPerTool
+
+	if !overrideUsed {
+		mode = autoChooseMode(toolTokens, compactTokens, budget)
+	}
+
+	reason := ""
+	if overrideUsed && runtime != nil {
+		reason = "runtime.tool_injection forced " + string(runtime.ToolInjection)
+	}
+
+	return Decision{
+		Mode:           mode,
+		Tools:          assembleToolList(mode, directSchemas, idx),
+		ContextWindow:  contextWindow,
+		Budget:         budget,
+		ToolTokens:     toolTokens,
+		CompactTokens:  compactTokens,
+		OverrideUsed:   overrideUsed,
+		OverrideReason: reason,
+	}
+}
+
+// autoChooseMode applies the documented decision chain.
+//
+//	if tool_tokens <= budget    → direct
+//	elif compact_tokens <= budget → compact_direct
+//	else                         → discovery
+//
+// Verbatim from docs-site/docs/language/04-tools.md.
+func autoChooseMode(toolTokens, compactTokens, budget int) Mode {
+	switch {
+	case toolTokens <= budget:
+		return ModeDirect
+	case compactTokens <= budget:
+		return ModeCompactDirect
+	default:
+		return ModeDiscovery
+	}
+}
+
+// buildDirectSchemas converts every IndexedTool into a full llm.ToolSpec.
+// Used as input to estimateToolTokens (size of the direct mode payload)
+// and as the final output for direct mode.
+//
+// nil idx returns an empty slice.
+func buildDirectSchemas(idx *index.ToolIndex) []llm.ToolSpec {
+	if idx == nil {
+		return nil
+	}
+	fqns := idx.FQNList() // sorted for deterministic output
+	out := make([]llm.ToolSpec, 0, len(fqns))
+	for _, fqn := range fqns {
+		t := idx.Get(fqn)
+		if t == nil {
+			continue
+		}
+		out = append(out, llm.ToolSpec{
+			Name:        sanitizeToolName(t.FQN),
+			Description: t.Description,
+			Parameters:  paramsToJSONSchema(t.Params),
+		})
+	}
+	return out
+}
+
+// buildCompactSchemas produces the compact form : name + 1-line
+// description, NO params. The LLM must call get_tool to fetch the
+// full schema before invoking the tool — that's the documented
+// compact-direct workflow.
+func buildCompactSchemas(idx *index.ToolIndex) []llm.ToolSpec {
+	if idx == nil {
+		return nil
+	}
+	fqns := idx.FQNList()
+	out := make([]llm.ToolSpec, 0, len(fqns))
+	for _, fqn := range fqns {
+		t := idx.Get(fqn)
+		if t == nil {
+			continue
+		}
+		desc := t.Description
+		if i := indexOf(desc, '.'); i > 0 && i < 120 {
+			desc = desc[:i+1] // keep first sentence
+		}
+		out = append(out, llm.ToolSpec{
+			Name:        sanitizeToolName(t.FQN),
+			Description: desc,
+		})
+	}
+	return out
+}
+
+// assembleToolList builds the final []llm.ToolSpec given the chosen
+// mode. Only the builtins RELEVANT for the mode are injected (the
+// activation-by-relevance policy — see builtinsForMode), so a pure-chat
+// agent with no tools gets none, and direct mode isn't polluted with the
+// discovery meta-tools. The mode-relevant builtins go first.
+func assembleToolList(mode Mode, direct []llm.ToolSpec, idx *index.ToolIndex) []llm.ToolSpec {
+	hasTools := idx != nil && len(idx.Tools) > 0
+	builtins := builtinsForMode(mode, hasTools)
+	// Sanitize builtin names to match the doc-conform OpenAI wire
+	// form. The Inner side (MetaDispatcher) canonicalises back.
+	for i := range builtins {
+		builtins[i].Name = sanitizeToolName(builtins[i].Name)
+	}
+	switch mode {
+	case ModeDirect:
+		out := make([]llm.ToolSpec, 0, len(builtins)+len(direct))
+		out = append(out, builtins...)
+		out = append(out, direct...)
+		return out
+	case ModeCompactDirect:
+		compact := buildCompactSchemas(idx)
+		out := make([]llm.ToolSpec, 0, len(builtins)+len(compact))
+		out = append(out, builtins...)
+		out = append(out, compact...)
+		return out
+	case ModeDiscovery:
+		// Only the meta-tools — domain tools sit behind execute_tool.
+		return builtins
+	default:
+		return builtins
+	}
+}
+
+// estimateToolTokens approximates the input-token cost of shipping
+// `direct` as the ChatRequest.Tools payload. Uses the documented
+// formula : sum(len(json.dumps(t)) // 4 for t in tools). Falls back
+// to total_tools * FallbackTokensPerTool when direct is empty.
+func estimateToolTokens(direct []llm.ToolSpec, idx *index.ToolIndex) int {
+	if len(direct) == 0 {
+		total := 0
+		if idx != nil {
+			total = len(idx.Tools)
+		}
+		return total * FallbackTokensPerTool
+	}
+	total := 0
+	for _, t := range direct {
+		b, err := json.Marshal(t)
+		if err == nil {
+			total += len(b) / 4
+		}
+	}
+	return total
+}
+
+// paramsToJSONSchema converts the tool.ParamSpec list into the JSON
+// Schema shape an LLM provider expects. Adds the wrapper
+// {type: object, properties, required} every provider wants.
+func paramsToJSONSchema(params []tool.ParamSpec) map[string]any {
+	props := make(map[string]any, len(params))
+	required := make([]string, 0, len(params))
+	for _, p := range params {
+		props[p.Name] = paramToSchema(p)
+		if p.Required {
+			required = append(required, p.Name)
+		}
+	}
+	return map[string]any{
+		"type":       "object",
+		"properties": props,
+		"required":   required,
+	}
+}
+
+func paramToSchema(p tool.ParamSpec) map[string]any {
+	m := map[string]any{
+		"type":        p.Type,
+		"description": p.Description,
+	}
+	if p.Default != nil {
+		m["default"] = p.Default
+	}
+	if len(p.Enum) > 0 {
+		m["enum"] = p.Enum
+	}
+	return m
+}
+
+// indexOf is a tiny strings.IndexByte replacement to avoid the
+// strings import on a hot path that does many short calls.
+func indexOf(s string, c byte) int {
+	for i := 0; i < len(s); i++ {
+		if s[i] == c {
+			return i
+		}
+	}
+	return -1
+}

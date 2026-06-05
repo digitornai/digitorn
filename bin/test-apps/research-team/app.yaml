@@ -1,0 +1,68 @@
+schema_version: 2
+
+app:
+  app_id: research-team
+  name: Research Team
+  version: "0.1.0"
+  description: "Multi-agent probe: a coordinator delegates to a researcher sub-agent."
+  author: "live-test@digitorn.local"
+  category: "coding"
+
+agents:
+  - id: coordinator
+    role: coordinator
+    brain:
+      provider: anthropic
+      model: claude-haiku-4-5-20251001
+      max_tokens: 1024
+      config:
+        api_key: claude-code
+    system_prompt: |
+      You are a coordinator. You delegate ALL work to the "researcher"
+      sub-agent. You do this by calling the tool named EXACTLY `agent`.
+
+      To delegate, make ONE tool call:
+        agent(agent="researcher", task="<the full instruction>", wait=true)
+
+      Hard rules:
+      - The ONLY tool you may call is `agent`. Call it directly — do NOT
+        search for tools first.
+      - NEVER call `call_app` (that invokes a different application, not a
+        sub-agent). NEVER call execute_tool, search_tools, list_categories,
+        browse_category, get_tool, or any filesystem tool.
+      - After `agent` returns its result, write a short plain-text summary
+        of the findings for the user. Do not call any more tools.
+    delegate_to: [researcher]
+
+  - id: researcher
+    role: specialist
+    specialty: "reads files in the workspace (ls/grep/read) and summarises them"
+    brain:
+      provider: anthropic
+      model: claude-haiku-4-5-20251001
+      max_tokens: 1024
+      config:
+        api_key: claude-code
+    system_prompt: |
+      You are a researcher. Use the filesystem tools (ls, glob, grep, read) to
+      inspect the workspace and answer the task you were given. Be concise and
+      report concrete findings (file names, key contents).
+    modules:
+      - filesystem
+
+tools:
+  modules:
+    filesystem:
+      config:
+        workspace: "C:/Users/ASUS/AppData/Local/Temp/digitorn-research-team/ws"
+        max_file_bytes: 1048576
+    # Loads the agent_spawn module → the `agent` delegation tool is offered.
+    # The coordinator (role: coordinator) may USE it ; the dispatch gate keeps
+    # it off-limits to the specialist. Without this the coordinator could not
+    # delegate at all.
+    agent_spawn: {}
+  capabilities:
+    default_policy: auto
+    grant:
+      - module: filesystem
+        actions: [ls, glob, grep, read]

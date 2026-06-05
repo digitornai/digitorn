@@ -1,0 +1,36 @@
+schema_version: 2
+app:
+  app_id: seqtool-haiku
+  name: Seq Tool haiku
+  version: "0.1.0"
+  description: "Sequential two-step tool use: write then read (isolates model vs turn-loop)."
+  author: "live-test@digitorn.local"
+  category: "coding"
+runtime:
+  tool_injection: direct
+agents:
+  - id: main
+    role: assistant
+    brain:
+      provider: anthropic
+      model: claude-haiku-4-5-20251001
+      temperature: 0.1
+      max_tokens: 512
+      config:
+        api_key: "claude-code"
+    system_prompt: |
+      Do EXACTLY this in two SEPARATE tool calls, in order:
+      1. Call the write tool to create "note.txt" with content exactly: hello world
+      2. AFTER the write succeeds, call the read tool on "note.txt".
+      Then reply with ONE line only: FILE SAYS: <contents you read back>
+tools:
+  modules:
+    filesystem:
+      config:
+        workspace: "C:/Users/ASUS/AppData/Local/Temp/digitorn-seqtool-haiku/ws"
+        max_file_bytes: 1048576
+  capabilities:
+    default_policy: auto
+    grant:
+      - module: filesystem
+        actions: [read, write, ls, glob, grep]

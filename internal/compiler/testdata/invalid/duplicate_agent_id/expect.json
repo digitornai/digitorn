@@ -1,0 +1,4 @@
+{
+  "description": "Two agents share the same id — must be caught",
+  "codes": ["DGT-E0400"]
+}

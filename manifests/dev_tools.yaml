@@ -1,0 +1,12 @@
+id: dev_tools
+version: 1.0.0
+description: Developer affordances (test, format, debug, build).
+tools:
+  - { name: run_test, description: Run a test suite., risk_level: low, params: [{name: path, type: string}] }
+  - { name: format, description: Format code., risk_level: low, params: [{name: path, type: string, required: true}] }
+  - { name: debug, description: Start a debug session., risk_level: medium, params: [{name: target, type: string, required: true}] }
+  - { name: lint, description: Lint a project., risk_level: low, params: [{name: path, type: string}] }
+  - { name: build, description: Build a project., risk_level: medium, params: [{name: target, type: string}] }
+  - { name: app, description: Manage a Digitorn app., risk_level: low, params: [{name: action, type: string, required: true}] }
+  - { name: chat, description: Open an interactive chat., risk_level: low, params: [{name: app_id, type: string, required: true}] }
+  - { name: run, description: Run a Digitorn app., risk_level: medium, params: [{name: app_id, type: string, required: true}, {name: input, type: string}] }

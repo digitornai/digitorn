@@ -1,0 +1,45 @@
+# Live test config : filesystem workerised through a generic
+# digitorn-worker pool. Boot the daemon with -config bin/config-pools.yaml
+# and the filesystem module will run in a SEPARATE subprocess, accessed
+# from the daemon via gRPC ProxyModule.
+
+server:
+  host: 127.0.0.1
+  port: 18001
+  read_timeout: 30s
+  write_timeout: 30s
+  shutdown_timeout: 5s
+
+database:
+  driver: sqlite
+  dsn: C:/Users/ASUS/AppData/Local/Temp/digitornd-pools/digitorn.db
+
+sessions:
+  root: C:/Users/ASUS/AppData/Local/Temp/digitornd-pools/sessions
+  num_shards: 4
+  queue_cap_per_shard: 4096
+  batch_max: 100
+  flush_interval: 5ms
+  fsync: true
+
+apps:
+  root: C:/Users/ASUS/AppData/Local/Temp/digitornd-pools/apps
+
+auth:
+  enabled: false
+  dev_mode: true
+
+workers:
+  llm:
+    count: 0
+  pools:
+    - id: fs-pool
+      modules: [filesystem]
+      count: 1
+      start_timeout: 15s
+      env:
+        DIGITORN_MODULE_FILESYSTEM_CONFIG: '{"workspace": "C:/Users/ASUS/AppData/Local/Temp/digitornd-pools/workspace", "max_file_bytes": 1048576}'
+
+logging:
+  level: info
+  format: tint

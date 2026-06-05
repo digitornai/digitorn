@@ -1,0 +1,42 @@
+# Live test config for the App Manager install of digitorn-lovable.
+# DB is sqlite under C:/Users/ASUS/AppData/Local/Temp/digitornd-live, sessions + apps are under the
+# same root so we can wipe the whole test by `rm -rf C:/Users/ASUS/AppData/Local/Temp/digitornd-live`.
+
+server:
+  host: 127.0.0.1
+  port: 18000
+  read_timeout: 30s
+  write_timeout: 30s
+  shutdown_timeout: 5s
+
+database:
+  driver: sqlite
+  dsn: C:/Users/ASUS/AppData/Local/Temp/digitornd-live/digitorn.db
+
+sessions:
+  root: C:/Users/ASUS/AppData/Local/Temp/digitornd-live/sessions
+  num_shards: 4
+  queue_cap_per_shard: 4096
+  batch_max: 100
+  flush_interval: 5ms
+  fsync: true
+
+apps:
+  root: C:/Users/ASUS/AppData/Local/Temp/digitornd-live/apps
+  hub:
+    url: http://localhost:9999
+    timeout: 5s
+    verify_ssl: false
+    max_archive_bytes: 104857600
+
+auth:
+  enabled: false
+  dev_mode: true
+
+workers:
+  llm:
+    count: 0  # don't spawn the LLM worker for this test ; we don't need it.
+
+logging:
+  level: info
+  format: tint

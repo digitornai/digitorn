@@ -1,0 +1,39 @@
+schema_version: 2
+
+app:
+  app_id: bash-probe
+  name: Bash Probe
+  version: "0.1.0"
+  description: "Live probe: the agent runs a real shell command via bash.run."
+  author: "live-test@digitorn.local"
+  category: "coding"
+
+runtime:
+  tool_injection: direct
+
+agents:
+  - id: main
+    role: assistant
+    brain:
+      provider: openai
+      model: gpt-5-mini
+      temperature: 0.1
+      max_tokens: 512
+      config:
+        api_key: "{{env.OPENAI_API_KEY}}"
+    system_prompt: |
+      You have a shell tool: bash.run. To answer, you MUST call bash.run to
+      execute the command the user gives you, then report what it printed.
+      Run exactly the command:  printf 'BASHPROOF=%s' $$
+      Then reply with ONE line:  RESULT: <the exact stdout of that command>
+
+tools:
+  modules:
+    bash:
+      config:
+        workdir: "C:/Users/ASUS/AppData/Local/Temp/digitorn-bash-probe/ws"
+  capabilities:
+    default_policy: auto
+    grant:
+      - module: bash
+        tools: [run]

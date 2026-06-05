@@ -1,0 +1,53 @@
+# Binaries
+/bin/
+/dist/
+*.exe
+*.exe~
+# Exception: the embedded busybox coreutils binary is a tracked source asset
+# (GPLv2 — must ship with the daemon). See its NOTICE for license terms.
+!internal/modules/bash/goshell/busybox.exe
+*.dll
+*.so
+*.dylib
+
+# Test
+*.test
+*.out
+coverage.html
+coverage.txt
+
+# Go
+/vendor/
+go.work
+go.work.sum
+
+# Vendor references (cloned for pattern lookup only — not part of build)
+/vendor-references/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Logs
+*.log
+/logs/
+
+# Local data
+*.db
+*.db-journal
+/data/
+/tmp/
+
+# Secrets
+.env
+.env.local
+*.pem
+*.key
+/credentials/
+
+# Config local overrides
+config.local.yaml
+config.local.toml

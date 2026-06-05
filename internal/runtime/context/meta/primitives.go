@@ -1,0 +1,805 @@
+package meta
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"runtime/debug"
+	"sort"
+	"strings"
+
+	"github.com/mbathepaul/digitorn/internal/llm"
+	"github.com/mbathepaul/digitorn/internal/runtime"
+	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
+)
+
+// This file implements the 5 always-direct primitives documented
+// in docs-site/docs/language/04b-builtin-tools.md :
+//
+//   - run_parallel    : fan-out N tool calls concurrently
+//   - background_run  : launch / status / wait / cancel / list
+//   - ask_user        : pause the loop for human input
+//   - use_skill       : load a reusable workflow markdown
+//   - call_app        : invoke another deployed app as a sub-tool
+//
+// Each primitive is wired by extending dispatchMetaTool's switch.
+// V1 scope :
+//
+//   - run_parallel  : full implementation (independent tool calls,
+//                     concurrent, isolated errors)
+//   - background_run: launch + status + list_tasks (no wait/cancel
+//                     for V1 — the tasks live in BackgroundManager)
+//   - ask_user      : wired to the SG-5 approval registry when
+//                     present ; otherwise returns "no approval
+//                     registry"
+//   - use_skill     : wired through SkillLoader when present
+//   - call_app      : wired through AppCaller when present
+
+// AskUserBridge resolves an ask_user request synchronously : it
+// emits the question (typically onto the session bus as an
+// EventApprovalRequest variant) and blocks until the user answers
+// via REST/Socket.IO. Returns the user's reply text on success ;
+// returns ("", error) on timeout or cancellation.
+//
+// The production implementation lives in the daemon's approval
+// registry (SG-5 reused for ask_user — the doc reference treats
+// "ask user a question" and "approve a risky action" as the same
+// human-in-the-loop primitive with different UI hints).
+type AskUserBridge interface {
+	Ask(ctx context.Context, req AskUserRequest) (string, error)
+}
+
+// AskUserRequest is what the bridge gets at ask time. It carries the
+// full interaction shape (doc-conform with the reference daemon) :
+// a plain question, an optional reviewable/editable content blob,
+// clickable choices (single or multi-select), or a structured form —
+// so the client can render buttons / a form rather than a bare text box.
+type AskUserRequest struct {
+	SessionID     string
+	AppID         string
+	UserID        string
+	TurnID        string
+	Question      string
+	Content       string           // optional reviewable / editable markdown
+	Choices       []string         // optional clickable choices (buttons / dropdown)
+	AllowMultiple bool             // with Choices : user may pick several
+	Form          []map[string]any // optional structured form fields
+	TimeoutSecs   float64          // 0 = bridge default
+}
+
+// SkillLoader resolves a slash command (e.g. "/commit") to a skill
+// entry the agent loads as a workflow. The loader matches against
+// the app's compiled `dev.skills[]` entries — the canonical source
+// of truth per docs-site/language/21-skills.md.
+//
+// `command` is matched case-sensitively against SkillEntry.Command.
+// The leading "/" is accepted both with and without — both forms
+// resolve to the same entry.
+type SkillLoader interface {
+	Load(ctx context.Context, appID, command string) (SkillEntry, error)
+}
+
+// SkillEntry is what use_skill returns to the agent. Matches the
+// doc-defined result shape (21-skills.md "How an agent uses a skill") :
+//
+//	{ "success": true,
+//	  "data": { "command": "/commit",
+//	            "description": "...",
+//	            "content": "<md>",
+//	            "note": "Follow these instructions to complete the task." } }
+type SkillEntry struct {
+	Command     string
+	Description string
+	Content     string
+}
+
+// AppCaller invokes another deployed app as a sub-tool and returns
+// the called app's final agent reply. The caller is responsible
+// for isolation (the sub-app runs in its own session). V2 may
+// surface streaming, agent picks, etc ; V1 is round-trip.
+type AppCaller interface {
+	Call(ctx context.Context, callerAppID, calledAppID, prompt, userID string) (string, error)
+}
+
+// BackgroundManager handles the 5 modes of background_run :
+// launch / status / wait / cancel / list_tasks. The doc lets the
+// runtime pick its implementation ; we expose the contract so
+// tests can swap a fake.
+//
+// Launch takes the full caller identity (LaunchRequest) so the manager
+// can (a) key tasks by the real session id — not a tenancy stand-in —
+// and (b) emit correctly-routed lifecycle events for the live client
+// view. The other modes address a task by (sessionID, taskID).
+type BackgroundManager interface {
+	Launch(ctx context.Context, req LaunchRequest) (taskID string, err error)
+	Status(ctx context.Context, sessionID, taskID string) (BackgroundStatus, error)
+	Wait(ctx context.Context, sessionID, taskID string, timeoutSecs float64) (BackgroundStatus, error)
+	Cancel(ctx context.Context, sessionID, taskID string) error
+	List(ctx context.Context, sessionID string) ([]BackgroundStatus, error)
+}
+
+// LaunchRequest carries the caller identity + target for a background
+// launch. SessionID/AppID/UserID/AgentID are the real routing ids (so
+// lifecycle events reach the session's realtime room) ; Tool + Args are
+// the wrapped tool call.
+type LaunchRequest struct {
+	SessionID string
+	AppID     string
+	UserID    string
+	AgentID   string
+	Tool      string
+	Args      map[string]any
+}
+
+// BackgroundStatus is what the manager returns to the LLM about a
+// background task.
+type BackgroundStatus struct {
+	TaskID    string `json:"task_id"`
+	Name      string `json:"name"`
+	State     string `json:"state"` // running | completed | errored | cancelled
+	Result    any    `json:"result,omitempty"`
+	Error     string `json:"error,omitempty"`
+	StartedAt int64  `json:"started_at_unix,omitempty"`
+	// Log is the live output tail of a still-running task (captured as it
+	// streams), so a status check shows progress before the task finishes.
+	Log string `json:"log,omitempty"`
+}
+
+// runParallelMaxActions caps how many actions one run_parallel call
+// may fan out. Doc-mandated upper bound is 50.
+const runParallelMaxActions = 50
+
+// ctxKey is the private type for context values this package stores, so
+// the keys can never collide with another package's.
+type ctxKey int
+
+// parallelDepthKey carries the run_parallel nesting depth so a
+// run_parallel reached from inside another run_parallel can be refused
+// before it fans out (see the recursion guard in handleRunParallel).
+const parallelDepthKey ctxKey = iota
+
+// maxParallelDepth caps run_parallel nesting. 1 means a run_parallel may
+// not contain another run_parallel — the one structure that explodes the
+// goroutine count (50^depth) and can OOM the daemon. It bounds a single
+// call's fan-out to runParallelMaxActions goroutines.
+const maxParallelDepth = 1
+
+func parallelDepth(ctx context.Context) int {
+	d, _ := ctx.Value(parallelDepthKey).(int)
+	return d
+}
+
+// handleRunParallel : fan out the `actions` slice via asyncio.gather
+// equivalent (one goroutine per action, all join). Doc-conform
+// semantics (04c-primitives.md "Parallel execution") :
+//
+//   - param key is `actions`, NOT `calls` (V0 typo, corrected here).
+//   - `actions` is a list of {name, params}, 1-50 elements.
+//   - Each action is independent — failures in one don't cancel the
+//     others.
+//   - Results come back in the same order as input.
+//   - Result envelope is `{results: [<r1>, <r2>, ...]}`.
+//   - Each <ri> is the verbatim ToolOutcome-as-JSON shape : status,
+//     content (joined text parts), error if any.
+//
+// parallelWrapperKeys are the argument keys we accept for the action list, in
+// preference order. The LLM-facing schema advertises "tasks", but models vary
+// wildly, so we also accept the legacy "actions" + natural synonyms, a bare
+// array stashed under llm.ArgsArrayKey, and (last resort) the sole array-valued
+// field — so a reasonable run_parallel call NEVER fails on shape alone.
+var parallelWrapperKeys = []string{"tasks", "actions", "calls", "tools", "invocations", "steps", "items", llm.ArgsArrayKey}
+
+// extractParallelActions liberally pulls the list of actions out of the call
+// args, tolerating every common shape a model produces.
+func extractParallelActions(args map[string]any) []any {
+	if args == nil {
+		return nil
+	}
+	for _, k := range parallelWrapperKeys {
+		if arr, ok := asActionArray(args[k]); ok {
+			return arr
+		}
+	}
+	// Any field whose (possibly string-encoded) array's first item looks like an
+	// action object (a map carrying a tool/name key) — covers a model that wraps
+	// the list under an unexpected key, possibly alongside stray scalar fields.
+	for _, v := range args {
+		if arr, ok := asActionArray(v); ok {
+			if obj, ok := arr[0].(map[string]any); ok && parallelToolName(obj) != "" {
+				return arr
+			}
+		}
+	}
+	if len(args) == 1 { // a single array-valued field under any other name
+		for _, v := range args {
+			if arr, ok := asActionArray(v); ok {
+				return arr
+			}
+		}
+	}
+	return nil
+}
+
+// asActionArray returns v as a non-empty []any, decoding a STRING that holds a
+// JSON array first. Models frequently double-encode list params — sending
+// {"tasks":"[{...},{...}]"} instead of {"tasks":[{...},{...}]} — which a plain
+// type assertion drops, failing the whole run_parallel call on shape alone.
+func asActionArray(v any) ([]any, bool) {
+	switch t := v.(type) {
+	case []any:
+		return t, len(t) > 0
+	case string:
+		s := strings.TrimSpace(t)
+		if strings.HasPrefix(s, "[") {
+			var arr []any
+			if json.Unmarshal([]byte(s), &arr) == nil && len(arr) > 0 {
+				return arr, true
+			}
+		}
+	}
+	return nil, false
+}
+
+// parallelToolName reads the target tool name from an action object under any of
+// the accepted keys ("tool" is canonical ; name/action/tool_name tolerated).
+func parallelToolName(obj map[string]any) string {
+	for _, k := range []string{"tool", "name", "action", "tool_name"} {
+		if s, ok := obj[k].(string); ok && strings.TrimSpace(s) != "" {
+			return s
+		}
+	}
+	return ""
+}
+
+// parallelArgs reads the per-action argument object under any accepted key
+// ("args" is canonical ; params/arguments/input/parameters tolerated).
+func parallelArgs(obj map[string]any) any {
+	for _, k := range []string{"args", "params", "arguments", "input", "parameters"} {
+		if v, ok := obj[k]; ok {
+			return v
+		}
+	}
+	return nil
+}
+
+func (m *MetaDispatcher) handleRunParallel(ctx context.Context, call runtime.ToolInvocation) runtime.ToolOutcome {
+	// Recursion guard : a run_parallel reached from inside another
+	// run_parallel would fan out 50^depth goroutines and can OOM the
+	// daemon. Meta-tools bypass the security gate by design, so this is
+	// the only place to bound it. Nested fan-out has no legitimate use —
+	// the model should flatten its actions into one call.
+	if parallelDepth(ctx) >= maxParallelDepth {
+		return errored("run_parallel: nested run_parallel is not allowed; flatten the actions into a single call")
+	}
+
+	raw := extractParallelActions(call.Args)
+	if len(raw) == 0 {
+		return errored(`run_parallel: provide a non-empty list of {tool, args}, e.g. {"tasks":[{"tool":"filesystem.read","args":{"path":"a.go"}}]} (a bare array also works)`)
+	}
+	if len(raw) > runParallelMaxActions {
+		return errored(fmt.Sprintf("run_parallel: too many actions (%d > %d)", len(raw), runParallelMaxActions))
+	}
+
+	// One result slot per input action, in input order. A malformed action
+	// becomes a single errored result instead of aborting the whole batch
+	// (doc : "failures in one do not cancel the others").
+	n := len(raw)
+	names := make([]string, n)
+	outcomes := make([]runtime.ToolOutcome, n)
+	filled := make([]bool, n)
+
+	type childResult struct {
+		idx     int
+		outcome runtime.ToolOutcome
+	}
+	// Buffered to the action count so a sender NEVER blocks : even if we
+	// stop reading early on cancellation, every goroutine still delivers
+	// into the buffer and exits cleanly — no leak, and no write to a slice
+	// the collector is reading, so no data race.
+	resCh := make(chan childResult, n)
+
+	// Children run one recursion level deeper so a nested run_parallel hits
+	// the guard above. WithValue keeps the parent's Done/Err, so
+	// cancellation still propagates.
+	childCtx := context.WithValue(ctx, parallelDepthKey, parallelDepth(ctx)+1)
+
+	launched := 0
+	for i := range raw {
+		obj, ok := raw[i].(map[string]any)
+		if !ok {
+			outcomes[i] = errored(fmt.Sprintf("run_parallel: item %d is not an object — expected {tool, args}", i))
+			filled[i] = true
+			continue
+		}
+		name := parallelToolName(obj)
+		names[i] = name
+		if name == "" {
+			outcomes[i] = errored(fmt.Sprintf("run_parallel: item %d must name a tool (key \"tool\")", i))
+			filled[i] = true
+			continue
+		}
+		params := coerceParamMap(parallelArgs(obj))
+		launched++
+		go func(i int, name string, params map[string]any) {
+			// Panic isolation : a sub-tool that panics must surface as one
+			// errored result, never crash the daemon or cancel its siblings.
+			// An unrecovered panic in any goroutine takes the whole process
+			// down, so every child runs under its own recover.
+			defer func() {
+				if r := recover(); r != nil {
+					if m.Logger != nil {
+						m.Logger.Error("run_parallel: action panicked",
+							slog.String("action", name),
+							slog.Any("panic", r),
+							slog.String("stack", string(debug.Stack())))
+					}
+					resCh <- childResult{i, runtime.ToolOutcome{
+						Status: "errored",
+						Error:  fmt.Sprintf("run_parallel: action %q panicked: %v", name, r),
+					}}
+				}
+			}()
+			child := runtime.ToolInvocation{
+				CallID: fmt.Sprintf("%s:%d", call.CallID, i),
+				// ResolveAlias as well as Canonicalize so the GATE below sees the
+				// same resolved FQN that execute_tool gates and that Dispatch will
+				// run — otherwise a bare alias (remember, task_update, agent) is
+				// gated under its unresolved name and fail-closed denied even
+				// though the identical call works directly or via execute_tool.
+				Name:       ResolveAlias(Canonicalize(name)),
+				Args:       params,
+				AppID:      call.AppID,
+				AgentID:    call.AgentID,
+				UserID:     call.UserID,
+				SessionID:  call.SessionID,
+				AgentRunID: call.AgentRunID,
+				UserJWT:    call.UserJWT,
+			}
+			// SG-4 chokepoint : gate each fanned-out child before it runs.
+			if blocked := m.gateTarget(childCtx, child); blocked != nil {
+				resCh <- childResult{i, *blocked}
+				return
+			}
+			resCh <- childResult{i, m.Dispatch(childCtx, child)}
+		}(i, name, params)
+	}
+
+	// Fan-in : collect the launched children in completion order, store each
+	// in its input slot so the envelope stays input-ordered. Never block
+	// past the parent context — on cancellation, return at once with
+	// whatever finished plus a ctx error for the stragglers (their
+	// goroutines drain into the buffer and exit).
+	for got := 0; got < launched; {
+		select {
+		case r := <-resCh:
+			outcomes[r.idx] = r.outcome
+			filled[r.idx] = true
+			got++
+			// Tell the client THIS action finished, without waiting for the
+			// batch. Transient observability only — not projected into the
+			// agent's history, so the combined barrier result it gets is
+			// unchanged. Emitted here (the fan-in), so every tool — present and
+			// future — is covered identically.
+			if m.Progress != nil {
+				m.Progress(ctx, sessionstore.Event{
+					Type:          sessionstore.EventToolProgress,
+					SessionID:     call.SessionID,
+					AppID:         call.AppID,
+					UserID:        call.UserID,
+					CorrelationID: call.CallID,
+					Tool: &sessionstore.ToolPayload{
+						CallID:   fmt.Sprintf("%s:%d", call.CallID, r.idx),
+						Name:     ResolveAlias(Canonicalize(names[r.idx])), // canonical FQN, like every other tool event
+						Status:   r.outcome.Status,
+						Error:    r.outcome.Error,
+						Metadata: map[string]any{"index": r.idx, "total": n, "completed": got},
+					},
+				})
+			}
+		case <-childCtx.Done():
+			for j := range outcomes {
+				if !filled[j] {
+					outcomes[j] = runtime.ToolOutcome{
+						Status: "errored",
+						Error:  "run_parallel: cancelled before completion: " + childCtx.Err().Error(),
+					}
+					filled[j] = true
+				}
+			}
+			got = launched
+		}
+	}
+
+	results := make([]map[string]any, n)
+	for i := range outcomes {
+		results[i] = map[string]any{
+			"name":   names[i],
+			"status": outcomes[i].Status,
+		}
+		if outcomes[i].Error != "" {
+			results[i]["error"] = outcomes[i].Error
+		}
+		// Compress text parts to a single content string. Multi-format
+		// outcomes (e.g. text + image) join their text fields ; binary
+		// parts (image/audio) need a separate channel in V2.
+		var content string
+		for _, p := range outcomes[i].Parts {
+			content += p.Text
+		}
+		if content != "" {
+			results[i]["content"] = content
+		}
+	}
+	return jsonOutcome(map[string]any{"results": results})
+}
+
+// handleAskUser : pause the loop and ask the user a typed question.
+// Returns the reply text when AskUser bridge is wired ; otherwise
+// errors with "ask_user not wired" so the LLM sees the failure.
+func (m *MetaDispatcher) handleAskUser(ctx context.Context, call runtime.ToolInvocation) runtime.ToolOutcome {
+	question, _ := call.Args["question"].(string)
+	if question == "" {
+		return errored("ask_user: 'question' is required")
+	}
+	if m.AskUser == nil {
+		return errored("ask_user not wired (no AskUserBridge)")
+	}
+	content, _ := call.Args["content"].(string)
+	timeout, _ := call.Args["timeout"].(float64)
+	choices := stringSliceArg(call.Args["choices"])
+	allowMultiple, _ := call.Args["allow_multiple"].(bool)
+	form := mapSliceArg(call.Args["form"])
+
+	req := AskUserRequest{
+		SessionID:     call.SessionID,
+		AppID:         call.AppID,
+		UserID:        call.UserID,
+		TurnID:        call.AgentRunID,
+		Question:      question,
+		Content:       content,
+		Choices:       choices,
+		AllowMultiple: allowMultiple,
+		Form:          form,
+		TimeoutSecs:   timeout,
+	}
+	reply, err := m.AskUser.Ask(ctx, req)
+	if err != nil {
+		return errored("ask_user: " + err.Error())
+	}
+
+	// Rich response (doc-conform) : the raw reply plus a human-readable
+	// formatting, and — when content was offered — whether the user
+	// edited it. A form reply is the field JSON ; a multi-select reply
+	// is comma-separated choices.
+	out := map[string]any{
+		"status":        "answered",
+		"question":      question,
+		"raw_response":  reply,
+		"user_response": formatAskUserResponse(req, reply),
+	}
+	if content != "" {
+		out["content_was_edited"] = reply != "" && strings.TrimSpace(reply) != strings.TrimSpace(content)
+		if reply != "" {
+			out["edited_content"] = reply
+		}
+	}
+	return jsonOutcome(out)
+}
+
+// formatAskUserResponse renders the raw user reply into a readable form
+// based on the question shape : a form's JSON object becomes a labelled
+// list, a multi-select becomes "User selected: a, b", everything else
+// passes through. Mirrors the reference daemon's _format_ask_user_response.
+func formatAskUserResponse(req AskUserRequest, raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if len(req.Form) > 0 {
+		var fields map[string]any
+		if err := json.Unmarshal([]byte(raw), &fields); err == nil && len(fields) > 0 {
+			keys := make([]string, 0, len(fields))
+			for k := range fields {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			var b strings.Builder
+			b.WriteString("User submitted form:")
+			for _, k := range keys {
+				fmt.Fprintf(&b, "\n  - %s: %v", k, fields[k])
+			}
+			return b.String()
+		}
+	}
+	if len(req.Choices) > 0 && req.AllowMultiple {
+		parts := strings.Split(raw, ",")
+		picked := parts[:0]
+		for _, p := range parts {
+			if s := strings.TrimSpace(p); s != "" {
+				picked = append(picked, s)
+			}
+		}
+		if len(picked) > 1 {
+			return "User selected: " + strings.Join(picked, ", ")
+		}
+	}
+	return raw
+}
+
+// stringSliceArg coerces a JSON array arg into []string (nil when absent
+// or wrong-typed). JSON numbers/bools are stringified defensively.
+func stringSliceArg(v any) []string {
+	arr, ok := v.([]any)
+	if !ok || len(arr) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(arr))
+	for _, e := range arr {
+		if s, ok := e.(string); ok {
+			out = append(out, s)
+		} else if e != nil {
+			out = append(out, fmt.Sprintf("%v", e))
+		}
+	}
+	return out
+}
+
+// mapSliceArg coerces a JSON array-of-objects arg into []map[string]any
+// (nil when absent or wrong-typed) — used for ask_user's form fields.
+func mapSliceArg(v any) []map[string]any {
+	arr, ok := v.([]any)
+	if !ok || len(arr) == 0 {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(arr))
+	for _, e := range arr {
+		if mm, ok := e.(map[string]any); ok {
+			out = append(out, mm)
+		}
+	}
+	return out
+}
+
+// handleBackgroundRun : dispatch to one of the 5 modes based on
+// params, per the doc-defined polymorphic shape.
+func (m *MetaDispatcher) handleBackgroundRun(ctx context.Context, call runtime.ToolInvocation) runtime.ToolOutcome {
+	// background_run targeting the `agent` delegation tool IS a sub-agent spawn,
+	// not a background task. A delegated agent already runs asynchronously and is
+	// tracked by the AgentManager (status / wait / list via the `agent` tool,
+	// resync via GET /agents), so wrapping it in a background task would hand back
+	// a task_id the caller can't correlate to the run. Transform it : spawn the
+	// agent ASYNC and return its run_id — "background_run → agent". Handled before
+	// the BackgroundManager check because it routes to Agents, not Background. The
+	// caller then collects with agent(wait=true, run_id=...) ; handleAgent applies
+	// the coordinator-role gate, so this stays as restricted as a direct call.
+	if name, _ := call.Args["name"].(string); name != "" && IsAgentSpawnTool(ResolveAlias(Canonicalize(name))) {
+		params := coerceParamMap(call.Args["params"])
+		spawn := call
+		spawn.Name = ResolveAlias(Canonicalize(name))
+		spawn.Args = withoutWait(params) // force async : hand back a run_id, never block
+		return m.handleAgent(ctx, spawn)
+	}
+	if m.Background == nil {
+		return errored("background_run not wired (no BackgroundManager)")
+	}
+	if listTasks, _ := call.Args["list_tasks"].(bool); listTasks {
+		statuses, err := m.Background.List(ctx, m.SessionID(call))
+		if err != nil {
+			return errored("background_run list: " + err.Error())
+		}
+		return jsonOutcome(map[string]any{"tasks": statuses})
+	}
+	taskID, _ := call.Args["task_id"].(string)
+	if cancel, _ := call.Args["cancel"].(bool); cancel {
+		if taskID == "" {
+			return errored("background_run cancel: 'task_id' is required")
+		}
+		if err := m.Background.Cancel(ctx, m.SessionID(call), taskID); err != nil {
+			return errored("background_run cancel: " + err.Error())
+		}
+		return jsonOutcome(map[string]any{"cancelled": taskID})
+	}
+	if wait, _ := call.Args["wait"].(bool); wait {
+		if taskID == "" {
+			return errored("background_run wait: 'task_id' is required")
+		}
+		timeout, _ := call.Args["timeout"].(float64)
+		st, err := m.Background.Wait(ctx, m.SessionID(call), taskID, timeout)
+		if err != nil {
+			return errored("background_run wait: " + err.Error())
+		}
+		return jsonOutcome(statusToMap(st))
+	}
+	if taskID != "" {
+		st, err := m.Background.Status(ctx, m.SessionID(call), taskID)
+		if err != nil {
+			return errored("background_run status: " + err.Error())
+		}
+		return jsonOutcome(statusToMap(st))
+	}
+	// Launch mode : name + params are required.
+	name, _ := call.Args["name"].(string)
+	if name == "" {
+		return errored("background_run launch: 'name' is required")
+	}
+	params := coerceParamMap(call.Args["params"])
+	// SG-4 chokepoint : gate the launch target with the caller's real
+	// identity BEFORE scheduling, so a denied / approve tool can't be
+	// smuggled in as a background task (the manager dispatches later
+	// with a tenancy-key AppID that can't be gated downstream).
+	// ResolveAlias as well as Canonicalize so the gate + the later background
+	// dispatch both see the same resolved FQN execute_tool uses (a bare alias
+	// like remember/task_update would otherwise be gated under its unresolved
+	// name and fail-closed denied).
+	resolved := ResolveAlias(Canonicalize(name))
+	target := runtime.ToolInvocation{
+		CallID:    call.CallID,
+		Name:      resolved,
+		Args:      params,
+		AppID:     call.AppID,
+		AgentID:   call.AgentID,
+		UserID:    call.UserID,
+		SessionID: call.SessionID,
+	}
+	if blocked := m.gateTarget(ctx, target); blocked != nil {
+		return *blocked
+	}
+	tid, err := m.Background.Launch(ctx, LaunchRequest{
+		SessionID: m.SessionID(call),
+		AppID:     call.AppID,
+		UserID:    call.UserID,
+		AgentID:   call.AgentID,
+		Tool:      resolved,
+		Args:      params,
+	})
+	if err != nil {
+		return errored("background_run launch: " + err.Error())
+	}
+
+	// Settle window : give a fast-failing task (a bad port / EADDRINUSE, a crash,
+	// a missing module, a syntax error) a moment to fail so the agent gets the
+	// error SYNCHRONOUSLY — exactly like a foreground call — instead of a vague
+	// "running" followed seconds later by a "[BACKGROUND TASK FAILED]". A healthy
+	// long-running server is still alive when the window closes, so it launched
+	// OK and keeps running in the background (the agent is woken when it
+	// eventually finishes/fails). Default ~2s ; settle_seconds:0 disables it for
+	// true fire-and-forget (e.g. a long download you don't want to block on).
+	settle := 2.0
+	if v, ok := call.Args["settle_seconds"].(float64); ok {
+		settle = v
+	}
+	if settle > 0 {
+		if st, werr := m.Background.Wait(ctx, m.SessionID(call), tid, settle); werr == nil {
+			// Finished inside the window → return its terminal result (state +
+			// error + captured output) so a crash is seen immediately.
+			res := statusToMap(st)
+			res["settled"] = true
+			return jsonOutcome(res)
+		}
+	}
+	return jsonOutcome(map[string]any{
+		"task_id": tid, "state": "running",
+		"note": "started — still running after the start-up window, so it launched OK and now runs in the background. You'll be notified when it finishes or fails; use background_run with this task_id to check its status/output.",
+	})
+}
+
+// withoutWait returns a shallow copy of the params with "wait" removed, so a
+// background_run → agent spawn is always asynchronous (returns a run_id) even if
+// the model passed wait=true. Returns nil for nil input.
+func withoutWait(params map[string]any) map[string]any {
+	if params == nil {
+		return nil
+	}
+	out := make(map[string]any, len(params))
+	for k, v := range params {
+		if k == "wait" {
+			continue
+		}
+		out[k] = v
+	}
+	return out
+}
+
+// handleUseSkill : invoke a /command skill from dev.skills (or the
+// bundle's skills/ dir). Doc-conform shape (21-skills.md) :
+//
+//	Param  : { "command": "/commit" }  (leading "/" optional — auto-added)
+//	Result : { "success": true,
+//	           "data": { "command", "description", "content", "note" } }
+//
+// The note "Follow these instructions to complete the task." is
+// fixed (the Python runtime hard-codes it) so the agent treats the
+// returned markdown as actionable instructions, not informational.
+func (m *MetaDispatcher) handleUseSkill(ctx context.Context, call runtime.ToolInvocation) runtime.ToolOutcome {
+	command, _ := call.Args["command"].(string)
+	if command == "" {
+		return errored("use_skill: 'command' is required")
+	}
+	if !strings.HasPrefix(command, "/") {
+		command = "/" + command
+	}
+	if m.SkillLoader == nil {
+		return errored("use_skill not wired (no SkillLoader)")
+	}
+	entry, err := m.SkillLoader.Load(ctx, call.AppID, command)
+	if err != nil {
+		return errored("use_skill: " + err.Error())
+	}
+	return jsonOutcome(map[string]any{
+		"success": true,
+		"data": map[string]any{
+			"command":     entry.Command,
+			"description": entry.Description,
+			"content":     entry.Content,
+			"note":        "Follow these instructions to complete the task.",
+		},
+	})
+}
+
+// handleCallApp : invoke another deployed app and return its
+// final reply as the tool result. Isolation is preserved by the
+// AppCaller — the sub-app runs in its own session, never sharing
+// state with the caller's session.
+func (m *MetaDispatcher) handleCallApp(ctx context.Context, call runtime.ToolInvocation) runtime.ToolOutcome {
+	appID, _ := call.Args["app_id"].(string)
+	if appID == "" {
+		return errored("call_app: 'app_id' is required")
+	}
+	prompt, _ := call.Args["prompt"].(string)
+	if prompt == "" {
+		return errored("call_app: 'prompt' is required")
+	}
+	if m.AppCaller == nil {
+		return errored("call_app not wired (no AppCaller)")
+	}
+	reply, err := m.AppCaller.Call(ctx, call.AppID, appID, prompt, call.UserID)
+	if err != nil {
+		return errored("call_app: " + err.Error())
+	}
+	return jsonOutcome(map[string]any{
+		"app_id": appID,
+		"reply":  reply,
+	})
+}
+
+// statusToMap converts a BackgroundStatus into a generic map for
+// jsonOutcome. We don't marshal directly because jsonOutcome's
+// signature takes map[string]any.
+func statusToMap(s BackgroundStatus) map[string]any {
+	out := map[string]any{
+		"task_id": s.TaskID,
+		"name":    s.Name,
+		"state":   s.State,
+	}
+	if s.Error != "" {
+		out["error"] = s.Error
+	}
+	if s.Result != nil {
+		out["result"] = s.Result
+	}
+	if s.StartedAt > 0 {
+		out["started_at_unix"] = s.StartedAt
+	}
+	// Live tail of a still-running task (empty once it finishes — the full output
+	// is then in result). Lets the agent watch progress / spot a startup error.
+	if s.Log != "" {
+		out["log"] = s.Log
+	}
+	return out
+}
+
+// SessionID returns the session key the BackgroundManager uses to scope
+// a session's tasks. The real session id (carried on the invocation) is
+// authoritative — it routes lifecycle events to the right realtime room
+// and isolates tasks per session. Only when it is absent (older callers
+// that don't set it) do we fall back to the (app, user) tenancy pair.
+func (m *MetaDispatcher) SessionID(call runtime.ToolInvocation) string {
+	if call.SessionID != "" {
+		return call.SessionID
+	}
+	if call.AppID == "" {
+		return "anon"
+	}
+	return call.AppID + ":" + call.UserID
+}

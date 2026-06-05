@@ -1,0 +1,7 @@
+id: web
+version: 1.0.0
+description: Search the web and fetch pages as clean text/markdown.
+declared_permissions: [network.http]
+tools:
+  - { name: search, description: Search the web and return ranked results (title, URL, snippet)., risk_level: low, params: [{name: query, type: string, required: true}, {name: limit, type: integer}] }
+  - { name: fetch, description: Fetch a web page and return its content as text/markdown/html (extract=true keeps the main article body)., risk_level: low, params: [{name: url, type: string, required: true}, {name: format, type: string}, {name: extract, type: boolean}, {name: prompt, type: string}] }

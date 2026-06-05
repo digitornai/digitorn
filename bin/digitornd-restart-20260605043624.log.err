@@ -1,0 +1,16 @@
+2026/06/05 04:36:27 maxprocs: Leaving GOMAXPROCS=16: CPU quota undefined
+[2m2026-06-05T04:36:27+02:00[0m [92mINF[0m daemon: starting [2maddr=[0m127.0.0.1:8000 [2mdb_driver=[0msqlite [2msessions_root=[0mC:/Users/ASUS/AppData/Local/Temp/digitorn-live-chat/sessions
+[2m2026-06-05T04:36:27+02:00[0m [92mINF[0m jwks: refreshed [2mkeys=[0m1 [2murl=[0mhttps://auth.digitorn.ai/.well-known/jwks.json
+[2m2026-06-05T04:36:27+02:00[0m [92mINF[0m daemon: runtime engine ready [2mturn_pool_global=[0m4096 [2mturn_pool_per_app=[0m256 [2mturn_pool_per_user=[0m32 [2mdispatcher_wired=[0mtrue [2mhooks_wired=[0mtrue
+[2m2026-06-05T04:36:27+02:00[0m [92mINF[0m worker: instance ready [2mid=[0mtokenizer#0 [2mkind=[0mtokenizer [2maddr=[0m127.0.0.1:52881
+[2m2026-06-05T04:36:27+02:00[0m [92mINF[0m daemon: tokenizer worker pool ready [2mcount=[0m1 [2mbinary=[0mC:\Users\ASUS\Documents\digitorn_go\bin\digitorn-worker-tokenizer.exe
+[2m2026-06-05T04:36:27+02:00[0m [92mINF[0m appmgr: bootstrap done [2menabled_in_db=[0m10 [2mdiscovered_on_disk=[0m0 [2mloaded=[0m10
+[2m2026-06-05T04:36:28+02:00[0m [92mINF[0m worker: instance ready [2mid=[0mllm#0 [2mkind=[0mllm [2maddr=[0m127.0.0.1:52882
+[2m2026-06-05T04:36:28+02:00[0m [92mINF[0m http: listening [2maddr=[0m127.0.0.1:8000
+[2m2026-06-05T04:36:28+02:00[0m [92mINF[0m worker: instance ready [2mid=[0mllm#1 [2mkind=[0mllm [2maddr=[0m127.0.0.1:52883
+[2m2026-06-05T04:36:28+02:00[0m [92mINF[0m worker: instance ready [2mid=[0mllm#2 [2mkind=[0mllm [2maddr=[0m127.0.0.1:52884
+[2m2026-06-05T04:36:28+02:00[0m [92mINF[0m daemon: LLM worker pool ready [2mcount=[0m3 [2mbinary=[0mC:\Users\ASUS\Documents\digitorn_go\bin\digitorn-worker-llm.exe [2mgateway_url=[0mhttp://127.0.0.1:8002/v1
+[2m2026-06-05T04:36:30+02:00[0m [92mINF[0m http [2mmethod=[0mGET [2mpath=[0m/health [2mstatus=[0m200 [2mbytes=[0m15 [2mduration=[0m0s [2mrequest_id=[0mLAPTOP-056MI79B/5yPvCWW6xN-000001
+[2m2026-06-05T04:36:36+02:00[0m [92mINF[0m worker: instance ready [2mid=[0membeddings#0 [2mkind=[0membeddings [2maddr=[0m127.0.0.1:52893
+[2m2026-06-05T04:36:36+02:00[0m [92mINF[0m daemon: embeddings worker pool ready [2mcount=[0m1 [2mbinary=[0mC:\Users\ASUS\Documents\digitorn_go\bin\digitorn-worker-embeddings.exe [2mbackend=[0monnx
+[2m2026-06-05T04:36:43+02:00[0m [92mINF[0m http [2mmethod=[0mGET [2mpath=[0m/health [2mstatus=[0m200 [2mbytes=[0m15 [2mduration=[0m3.1077ms [2mrequest_id=[0mLAPTOP-056MI79B/5yPvCWW6xN-000002

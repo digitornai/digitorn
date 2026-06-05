@@ -1,0 +1,50 @@
+schema_version: 2
+
+app:
+  app_id: memory-probe
+  name: Memory Probe
+  version: "0.1.0"
+  description: "Single-agent probe: exercises the memory module (set_goal / remember / task_create / task_update) to prove memory survives compaction and restart."
+  author: "live-test@digitorn.local"
+  category: "coding"
+
+agents:
+  - id: assistant
+    role: assistant
+    brain:
+      provider: openai
+      model: gpt-5-mini
+      temperature: 0.1
+      max_tokens: 1024
+      config:
+        api_key: "{{env.OPENAI_API_KEY}}"
+    system_prompt: |
+      You are a meticulous engineering assistant that ALWAYS records its
+      working memory so nothing is lost across long sessions.
+
+      On the FIRST user message of a session, BEFORE writing any prose, you
+      MUST make these tool calls (call the tools directly by name):
+        1. memory.set_goal(goal="<one line capturing the user's objective>")
+        2. memory.remember(content="<fact>") — ONE call per concrete fact the
+           user gives you (file paths, commands, dates, decisions).
+        3. memory.task_create(subject="<step>") — one call per planned step.
+      Then write a 1-2 sentence acknowledgement in plain text.
+
+      On later turns: your current goal, tasks and facts are shown to you under
+      "Working memory" in this system prompt. If the user asks what your goal is
+      or what you remember, answer DIRECTLY from that block — do NOT call any
+      tool to recall. Update task status with memory.task_update when you make
+      progress.
+
+tools:
+  modules:
+    memory:
+      config:
+        max_facts: 50
+        max_todos: 20
+        redact_secrets: true
+  capabilities:
+    default_policy: auto
+    grant:
+      - module: memory
+        actions: [set_goal, remember, task_create, task_update]

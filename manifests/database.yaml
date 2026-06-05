@@ -1,0 +1,25 @@
+id: database
+version: 1.0.0
+description: SQL access (Postgres, MySQL, SQLite, MSSQL, Oracle).
+declared_permissions: [database.read, database.write]
+constraints:
+  - { name: allowed_actions, type: string_list, scope: universal }
+config_schema:
+  setup: { type: array }
+tools:
+  - { name: query, description: Execute a SELECT query., risk_level: low, params: [{name: sql, type: string, required: true}, {name: connection_id, type: string}] }
+  - { name: execute, description: Execute a write statement (INSERT/UPDATE/DELETE)., risk_level: high, irreversible: true, params: [{name: sql, type: string, required: true}] }
+  - { name: execute_query, description: Alias for query., risk_level: low, params: [{name: sql, type: string, required: true}] }
+  - { name: batch_execute, description: Execute a batch of statements., risk_level: high, irreversible: true, params: [{name: statements, type: array, required: true}] }
+  - { name: transaction, description: Run statements inside a transaction., risk_level: high, params: [{name: statements, type: array, required: true}] }
+  - { name: schema, description: Return the database schema., risk_level: low, params: [] }
+  - { name: describe, description: Describe a table., risk_level: low, params: [{name: table, type: string, required: true}] }
+  - { name: describe_table, description: Describe a table (long form)., risk_level: low, params: [{name: table, type: string, required: true}] }
+  - { name: get_table_schema, description: Get a table schema., risk_level: low, params: [{name: table, type: string, required: true}] }
+  - { name: list_tables, description: List tables., risk_level: low, params: [] }
+  - { name: introspect, description: Introspect the connection., risk_level: low, params: [] }
+  - { name: sample, description: Sample rows from a table., risk_level: low, params: [{name: table, type: string, required: true}, {name: limit, type: integer}] }
+  - { name: connect, description: Open a connection., risk_level: medium, params: [{name: connection_id, type: string, required: true}, {name: driver, type: string, required: true}] }
+  - { name: disconnect, description: Close a connection., risk_level: low, params: [{name: connection_id, type: string, required: true}] }
+  - { name: fetch_results, description: Fetch results of a deferred query., risk_level: low, params: [{name: cursor, type: string, required: true}] }
+  - { name: set_policy, description: Set a runtime policy., risk_level: medium, params: [{name: policy, type: string, required: true}] }

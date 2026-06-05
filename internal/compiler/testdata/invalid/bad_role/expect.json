@@ -1,0 +1,4 @@
+{
+  "description": "agent.role must be one of [worker, coordinator, specialist, assistant]",
+  "codes": ["DGT-E0104"]
+}

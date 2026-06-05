@@ -1,0 +1,10 @@
+{
+  "goal": "Ship the memory alignment",
+  "remembered": [
+    {
+      "id": "mem-1",
+      "content": "Test command: go test ./internal/runtime/",
+      "stored": true
+    }
+  ]
+}

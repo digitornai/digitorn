@@ -1,0 +1,4 @@
+{
+  "description": "alpha -> beta -> gamma -> alpha : delegate cycle",
+  "codes": ["DGT-E0401"]
+}

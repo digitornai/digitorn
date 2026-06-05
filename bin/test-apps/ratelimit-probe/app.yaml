@@ -1,0 +1,49 @@
+schema_version: 2
+
+app:
+  app_id: ratelimit-probe
+  name: Rate Limit Probe
+  version: "0.1.0"
+  description: "Probe: capabilities.rate_limits caps filesystem.read at 1/min — gate 6 must deny the repeat reads."
+  author: "live-test@digitorn.local"
+  category: "coding"
+
+runtime:
+  tool_injection: direct
+
+agents:
+  - id: main
+    role: assistant
+    brain:
+      provider: openai
+      model: gpt-5-mini
+      temperature: 0.1
+      max_tokens: 512
+      config:
+        api_key: "{{env.OPENAI_API_KEY}}"
+    system_prompt: |
+      Do EXACTLY this, in order, with separate tool calls:
+      1. write a file "note.txt" containing exactly: ping
+      2. read "note.txt"
+      3. read "note.txt" AGAIN
+      4. read "note.txt" a THIRD time
+      Then reply with one line per read attempt in the form:
+      READ 1: <result-or-error>
+      READ 2: <result-or-error>
+      READ 3: <result-or-error>
+      Report the VERBATIM error text for any read that failed. Do NOT skip a read
+      just because a previous one failed — attempt all three.
+
+tools:
+  modules:
+    filesystem:
+      config:
+        workspace: "C:/Users/ASUS/AppData/Local/Temp/digitorn-ratelimit-probe/ws"
+        max_file_bytes: 1048576
+  capabilities:
+    default_policy: auto
+    grant:
+      - module: filesystem
+        actions: [read, write, ls, glob, grep]
+    rate_limits:
+      "filesystem.read": 1

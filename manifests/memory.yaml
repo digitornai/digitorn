@@ -1,0 +1,24 @@
+id: memory
+version: 1.0.0
+description: Per-session working memory (goals, todos, facts).
+tools:
+  - { name: remember, description: Store a memory entry., risk_level: low, params: [{name: key, type: string, required: true}, {name: value, type: string, required: true}] }
+  - { name: recall, description: Recall a memory entry., risk_level: low, params: [{name: key, type: string, required: true}] }
+  - { name: forget, description: Forget a memory entry., risk_level: medium, params: [{name: key, type: string, required: true}] }
+  - { name: set_goal, description: Set the active goal for the session., risk_level: low, params: [{name: goal, type: string, required: true}] }
+  - { name: get_goal, description: Read the active goal., risk_level: low, params: [] }
+  - { name: clear_goal, description: Clear the active goal., risk_level: low, params: [] }
+  - { name: add_todo, description: Add a todo., risk_level: low, params: [{name: text, type: string, required: true}] }
+  - { name: update_todo, description: Update an existing todo., risk_level: low, params: [{name: id, type: string, required: true}, {name: text, type: string}, {name: status, type: string}] }
+  - { name: list_todos, description: List active todos., risk_level: low, params: [] }
+  - { name: delete_todo, description: Delete a todo., risk_level: medium, params: [{name: id, type: string, required: true}] }
+  - { name: task_create, description: Create a tracked task., risk_level: low, params: [{name: title, type: string, required: true}] }
+  - { name: task_update, description: Update a tracked task., risk_level: low, params: [{name: id, type: string, required: true}] }
+  - { name: task_list, description: List tracked tasks., risk_level: low, params: [] }
+  - { name: task_delete, description: Delete a tracked task., risk_level: medium, params: [{name: id, type: string, required: true}] }
+  - { name: task_get, description: Get a tracked task., risk_level: low, params: [{name: id, type: string, required: true}] }
+  - { name: task_wait, description: Wait for a task to complete., risk_level: low, params: [{name: id, type: string, required: true}] }
+  - { name: set_fact, description: Store a structured fact., risk_level: low, params: [{name: key, type: string, required: true}, {name: value, type: string, required: true}] }
+  - { name: get_facts, description: Read stored facts., risk_level: low, params: [{name: prefix, type: string}] }
+  - { name: list_facts, description: List all facts., risk_level: low, params: [] }
+  - { name: delete_fact, description: Delete a fact., risk_level: medium, params: [{name: key, type: string, required: true}] }

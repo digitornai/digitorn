@@ -1,0 +1,89 @@
+# Digitorn Go - default local daemon config.
+# Boot: bin\digitornd.exe -config bin\config.yaml
+# Port 8000 is the CLI's default target — no env overrides needed.
+
+server:
+  host: 127.0.0.1
+  port: 8000
+  read_timeout: 60s
+  write_timeout: 60s
+  shutdown_timeout: 5s
+  # Browser front-ends allowed to call the daemon (HTTP + socket.io).
+  cors_origins:
+    - http://localhost:3000
+    - http://127.0.0.1:3000
+    - http://localhost:5173
+    - http://127.0.0.1:5173
+
+database:
+  driver: sqlite
+  dsn: C:/Users/ASUS/AppData/Local/Temp/digitorn-live-chat/digitorn.db
+
+sessions:
+  root: C:/Users/ASUS/AppData/Local/Temp/digitorn-live-chat/sessions
+  num_shards: 2
+  queue_cap_per_shard: 1024
+  batch_max: 50
+  flush_interval: 5ms
+  fsync: true
+
+apps:
+  root: C:/Users/ASUS/AppData/Local/Temp/digitorn-live-chat/apps
+
+auth:
+  # Real JWT auth : the daemon validates the CLI's bearer against auth.digitorn.ai's
+  # JWKS and identifies the user from the token (no more X-User-ID dev pinning).
+  # Values matched to the actual token : iss="digitorn", user id in the "sub" claim,
+  # no "aud" claim (audience left empty → audience check skipped).
+  enabled: true
+  dev_mode: false
+  issuer: digitorn
+  jwks_url: https://auth.digitorn.ai/.well-known/jwks.json
+  user_id_claim: sub
+
+workers:
+  llm:
+    # 3 worker processes so concurrent turns / sub-agents / run_parallel branches
+    # each get their own LLM stream instead of serializing through one worker.
+    # This does NOT speed up a single call (the TTFT is upstream at the gateway),
+    # only removes queueing when several calls are in flight at once.
+    count: 3
+    start_timeout: 15s
+    # Local digitorn-gateway. Frozen here so no env override is needed.
+    gateway_url: http://127.0.0.1:8002/v1
+  embeddings:
+    # Real semantic search : ONNX paraphrase-multilingual-MiniLM-L12-v2.
+    # onnxruntime.dll sits next to the worker in bin/ ; the model is
+    # cached under ~/.digitorn/models and auto-downloaded on first start.
+    # NOTE: the worker now spawns OFF the boot path, so even a broken
+    # (non-ONNX) digitorn-worker-embeddings.exe no longer blocks startup — it
+    # just crash-loops harmlessly in the background and semantic search stays
+    # off. Set count: 0 to silence it, or rebuild the worker with -tags onnx.
+    count: 1
+    backend: onnx
+    start_timeout: 90s
+    client_timeout: 30s
+  tokenizer:
+    # EXACT context-token counting in the background (CTX-7). Pure-Go, no
+    # model download : tiktoken dictionaries are embedded in the binary. The
+    # background Context Service uses it to recount system/tools/messages off
+    # the turn loop and emit context_tokens (gauge + window) to clients. With
+    # count: 0 the service stays off and the provider usage anchor remains the
+    # gauge — so this is purely additive.
+    count: 1
+    start_timeout: 15s
+    client_timeout: 5s
+  pools:
+    # Generic worker pools (workers.pools). The workspace git module runs in its
+    # OWN subprocess so the shadow-git work (status/diff/commit + the live preview
+    # refresh) never burns daemon CPU at scale. count: 1 keeps go-git writes safe —
+    # the module serialises the SAME workdir via its per-repo mutex while different
+    # workdirs run concurrently in the worker; count>1 would need cross-process git
+    # locking. Set count: 0 to fall back to the in-proc module.
+    - id: workspace
+      modules: [workspace]
+      count: 1
+
+logging:
+  level: info
+  format: tint

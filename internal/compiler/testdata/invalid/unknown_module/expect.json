@@ -1,0 +1,4 @@
+{
+  "description": "Reference to a module that is not declared in any manifest source",
+  "codes": ["DGT-E0301"]
+}
