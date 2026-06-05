@@ -1,0 +1,19 @@
+id: workspace
+version: 1.0.0
+description: Per-session workspace manager (file tree, metadata, switching).
+tools:
+  - { name: list, description: List files in the workspace., risk_level: low, params: [{name: path, type: string}] }
+  - { name: switch, description: Switch the active workspace., risk_level: medium, params: [{name: workspace, type: string, required: true}] }
+  - { name: info, description: Return current workspace info., risk_level: low, params: [] }
+  - { name: metadata, description: Get workspace metadata., risk_level: low, params: [] }
+  - { name: set_metadata, description: Update workspace metadata., risk_level: medium, params: [{name: key, type: string, required: true}, {name: value, type: string}] }
+  - { name: read, description: Read a file from the workspace., risk_level: low, params: [{name: path, type: string, required: true}] }
+  - { name: write, description: Write a file in the workspace., risk_level: medium, irreversible: true, params: [{name: path, type: string, required: true}, {name: content, type: string, required: true}] }
+  - { name: edit, description: Edit a workspace file., risk_level: medium, irreversible: true, params: [{name: path, type: string, required: true}] }
+  - { name: ls, description: List workspace entries., risk_level: low, params: [{name: path, type: string}] }
+  - { name: glob, description: Glob workspace files., risk_level: low, params: [{name: pattern, type: string, required: true}] }
+  - { name: grep, description: Grep workspace files., risk_level: low, params: [{name: pattern, type: string, required: true}] }
+  - { name: delete, description: Delete a workspace file., risk_level: high, irreversible: true, params: [{name: path, type: string, required: true}] }
+  - { name: stat, description: Stat a workspace file., risk_level: low, params: [{name: path, type: string, required: true}] }
+  - { name: mkdir, description: Create a directory in the workspace., risk_level: low, params: [{name: path, type: string, required: true}] }
+  - { name: tree, description: Render the workspace tree., risk_level: low, params: [{name: path, type: string}] }

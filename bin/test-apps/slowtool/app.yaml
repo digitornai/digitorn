@@ -1,0 +1,34 @@
+schema_version: 2
+app:
+  app_id: slowtool
+  name: Slow Tool
+  version: "0.1.0"
+  description: "One slow (6s) shell dispatch then a final LLM round — tests worker connection across a multi-second tool gap."
+  author: "live-test@digitorn.local"
+  category: "coding"
+runtime:
+  tool_injection: direct
+agents:
+  - id: main
+    role: assistant
+    brain:
+      provider: anthropic
+      model: claude-haiku-4-5-20251001
+      temperature: 0.1
+      max_tokens: 256
+      config:
+        api_key: "claude-code"
+    system_prompt: |
+      Call the exec tool EXACTLY once to run this command: Start-Sleep -Seconds 6
+      After the tool result comes back, reply with exactly one line: SLEPT OK
+tools:
+  modules:
+    shell:
+      config:
+        shell: powershell
+        timeout: 30s
+  capabilities:
+    default_policy: auto
+    grant:
+      - module: shell
+        actions: [exec]

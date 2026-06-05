@@ -1,0 +1,9 @@
+id: widget
+version: 1.0.0
+description: Declarative UI widgets exposed to the agent.
+tools:
+  - { name: render, description: Render a widget., risk_level: low, params: [{name: name, type: string, required: true}, {name: data, type: object}] }
+  - { name: update, description: Update a widget's state., risk_level: low, params: [{name: name, type: string, required: true}, {name: data, type: object, required: true}] }
+  - { name: list, description: List active widgets., risk_level: low, params: [] }
+  - { name: show, description: Show a hidden widget., risk_level: low, params: [{name: name, type: string, required: true}] }
+  - { name: hide, description: Hide a widget., risk_level: low, params: [{name: name, type: string, required: true}] }

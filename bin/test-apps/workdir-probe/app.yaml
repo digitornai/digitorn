@@ -1,0 +1,43 @@
+schema_version: 2
+
+app:
+  app_id: workdir-probe
+  name: Workdir Probe
+  version: "0.1.0"
+  description: "Probe: workdir_mode required → session needs a workdir; agent is confined to it."
+  author: "live-test@digitorn.local"
+  category: "coding"
+
+runtime:
+  tool_injection: discovery
+  workdir_mode: required
+
+agents:
+  - id: main
+    role: assistant
+    brain:
+      provider: openai
+      model: gpt-5-mini
+      temperature: 0.1
+      max_tokens: 512
+      config:
+        api_key: "{{env.OPENAI_API_KEY}}"
+    system_prompt: |
+      Do EXACTLY this, in order, using the filesystem tools:
+      1. write a file "note.txt" containing exactly: workdir-ok
+      2. read "note.txt" back
+      3. attempt to read "../../../../../../etc/passwd"
+      Then reply with two lines:
+      WROTE: <contents of note.txt>
+      ESCAPE: <the verbatim result or error of step 3>
+
+tools:
+  modules:
+    filesystem:
+      config:
+        max_file_bytes: 1048576
+  capabilities:
+    default_policy: auto
+    grant:
+      - module: filesystem
+        actions: [read, write, ls, glob, grep]

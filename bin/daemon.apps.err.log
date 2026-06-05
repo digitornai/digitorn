@@ -1,0 +1,35 @@
+2026/06/05 14:04:08 maxprocs: Leaving GOMAXPROCS=16: CPU quota undefined
+[2m2026-06-05T14:04:09+02:00[0m [92mINF[0m daemon: starting [2maddr=[0m127.0.0.1:8000 [2mdb_driver=[0msqlite [2msessions_root=[0mC:/Users/ASUS/AppData/Local/Temp/digitorn-live-chat/sessions
+[2m2026-06-05T14:04:09+02:00[0m [92mINF[0m jwks: refreshed [2mkeys=[0m1 [2murl=[0mhttps://auth.digitorn.ai/.well-known/jwks.json
+[2m2026-06-05T14:04:09+02:00[0m [92mINF[0m daemon: runtime engine ready [2mturn_pool_global=[0m4096 [2mturn_pool_per_app=[0m256 [2mturn_pool_per_user=[0m32 [2mdispatcher_wired=[0mtrue [2mhooks_wired=[0mtrue
+[2m2026-06-05T14:04:09+02:00[0m [92mINF[0m appmgr: bootstrap done [2menabled_in_db=[0m12 [2mdiscovered_on_disk=[0m0 [2mloaded=[0m12
+[2m2026-06-05T14:04:09+02:00[0m [92mINF[0m worker: instance ready [2mid=[0mtokenizer#0 [2mkind=[0mtokenizer [2maddr=[0m127.0.0.1:54341
+[2m2026-06-05T14:04:09+02:00[0m [92mINF[0m daemon: tokenizer worker pool ready [2mcount=[0m1 [2mbinary=[0mC:\Users\ASUS\Documents\digitorn_go\bin\digitorn-worker-tokenizer.exe
+[2m2026-06-05T14:04:09+02:00[0m [92mINF[0m worker: instance ready [2mid=[0mllm#0 [2mkind=[0mllm [2maddr=[0m127.0.0.1:54342
+[2m2026-06-05T14:04:09+02:00[0m [92mINF[0m worker: instance ready [2mid=[0mllm#1 [2mkind=[0mllm [2maddr=[0m127.0.0.1:54343
+[2m2026-06-05T14:04:09+02:00[0m [92mINF[0m http: listening [2maddr=[0m127.0.0.1:8000
+[2m2026-06-05T14:04:10+02:00[0m [92mINF[0m worker: instance ready [2mid=[0mllm#2 [2mkind=[0mllm [2maddr=[0m127.0.0.1:54344
+[2m2026-06-05T14:04:10+02:00[0m [92mINF[0m daemon: LLM worker pool ready [2mcount=[0m3 [2mbinary=[0mC:\Users\ASUS\Documents\digitorn_go\bin\digitorn-worker-llm.exe [2mgateway_url=[0mhttp://127.0.0.1:8002/v1
+[2m2026-06-05T14:04:10+02:00[0m [92mINF[0m http [2mmethod=[0mGET [2mpath=[0m/socket.io/ [2mstatus=[0m0 [2mbytes=[0m0 [2mduration=[0m546.2µs [2mrequest_id=[0mLAPTOP-056MI79B/9POiB8WjdW-000001
+[2m2026-06-05T14:04:10+02:00[0m [92mINF[0m socketio: client connected [2mclient_id=[0mNWeUgiOpDLkAXAAAAAAAAAAB
+[2m2026-06-05T14:04:13+02:00[0m [92mINF[0m http [2mmethod=[0mGET [2mpath=[0m/socket.io/ [2mstatus=[0m0 [2mbytes=[0m0 [2mduration=[0m2.2259ms [2mrequest_id=[0mLAPTOP-056MI79B/9POiB8WjdW-000002
+[2m2026-06-05T14:04:13+02:00[0m [92mINF[0m socketio: client connected [2mclient_id=[0mHoFp9RKZomESZwAAAAAAAAAE
+[2m2026-06-05T14:04:18+02:00[0m [92mINF[0m worker: instance ready [2mid=[0membeddings#0 [2mkind=[0membeddings [2maddr=[0m127.0.0.1:64971
+[2m2026-06-05T14:04:18+02:00[0m [92mINF[0m daemon: embeddings worker pool ready [2mcount=[0m1 [2mbinary=[0mC:\Users\ASUS\Documents\digitorn_go\bin\digitorn-worker-embeddings.exe [2mbackend=[0monnx
+[2m2026-06-05T14:04:40+02:00[0m [92mINF[0m http [2mmethod=[0mGET [2mpath=[0m/api/apps [2mstatus=[0m200 [2mbytes=[0m10208 [2mduration=[0m17.7893ms [2mrequest_id=[0mLAPTOP-056MI79B/9POiB8WjdW-000003
+[2m2026-06-05T14:04:40+02:00[0m [92mINF[0m http [2mmethod=[0mGET [2mpath=[0m/api/apps [2mstatus=[0m200 [2mbytes=[0m10208 [2mduration=[0m1.0203ms [2mrequest_id=[0mLAPTOP-056MI79B/9POiB8WjdW-000004
+[2m2026-06-05T14:04:49+02:00[0m [92mINF[0m http [2mmethod=[0mGET [2mpath=[0m/api/apps/chat-deepseek/sessions [2mstatus=[0m200 [2mbytes=[0m2942 [2mduration=[0m9.4487316s [2mrequest_id=[0mLAPTOP-056MI79B/9POiB8WjdW-000005
+[2m2026-06-05T14:06:11+02:00[0m [92mINF[0m socketio: client disconnected [2mclient_id=[0mNWeUgiOpDLkAXAAAAAAAAAAB [2mreason=[0m"ping timeout"
+[2m2026-06-05T14:06:12+02:00[0m [92mINF[0m http [2mmethod=[0mGET [2mpath=[0m/socket.io/ [2mstatus=[0m0 [2mbytes=[0m0 [2mduration=[0m377.0847ms [2mrequest_id=[0mLAPTOP-056MI79B/9POiB8WjdW-000006
+[2m2026-06-05T14:06:27+02:00[0m [92mINF[0m http [2mmethod=[0mPOST [2mpath=[0m/api/apps/chat-claude/sessions/b3ddfeae-1454-412c-9133-cc29e5ec88d1/messages [2mstatus=[0m201 [2mbytes=[0m113 [2mduration=[0m374.6735ms [2mrequest_id=[0mLAPTOP-056MI79B/9POiB8WjdW-000007
+[2m2026-06-05T14:06:31+02:00[0m [92mINF[0m runtime: llm first token [2mprovider_ttft=[0m3.7937204s [2mmodel=[0mclaude-haiku-4-5-20251001 [2mprompt_msgs=[0m20
+[2m2026-06-05T14:06:31+02:00[0m [92mINF[0m http [2mmethod=[0mPOST [2mpath=[0m/api/apps/chat-claude/sessions/b3ddfeae-1454-412c-9133-cc29e5ec88d1/messages [2mstatus=[0m201 [2mbytes=[0m114 [2mduration=[0m5.6747ms [2mrequest_id=[0mLAPTOP-056MI79B/9POiB8WjdW-000008
+[2m2026-06-05T14:06:32+02:00[0m [92mINF[0m runtime: turn complete [2mturn_id=[0m81200233-0425-4132-b476-a5980af913c4 [2mapp_id=[0mchat-claude [2msession_id=[0mb3ddfeae-1454-412c-9133-cc29e5ec88d1 [2mmodel=[0m"" [2mtokens_in=[0m52012 [2mtokens_out=[0m111 [2mseq=[0m173
+[2m2026-06-05T14:06:34+02:00[0m [92mINF[0m runtime: turn complete [2mturn_id=[0m1da64387-f9d7-4aaf-879d-6a54b4c3b903 [2mapp_id=[0mchat-claude [2msession_id=[0mb3ddfeae-1454-412c-9133-cc29e5ec88d1 [2mmodel=[0m"" [2mtokens_in=[0m52122 [2mtokens_out=[0m3 [2mseq=[0m183
+[2m2026-06-05T14:06:59+02:00[0m [92mINF[0m http [2mmethod=[0mGET [2mpath=[0m/socket.io/ [2mstatus=[0m0 [2mbytes=[0m0 [2mduration=[0m60.8382ms [2mrequest_id=[0mLAPTOP-056MI79B/9POiB8WjdW-000010
+[2m2026-06-05T14:06:59+02:00[0m [92mINF[0m socketio: client connected [2mclient_id=[0mNWeUgiOpDLkAXAAAAAAAAAAB
+[2m2026-06-05T14:06:59+02:00[0m [92mINF[0m socketio: client disconnected [2mclient_id=[0mNWeUgiOpDLkAXAAAAAAAAAAB [2mreason=[0m"server namespace disconnect"
+[2m2026-06-05T14:06:59+02:00[0m [93mWRN[0m socketio: connection handler error [2mclient_id=[0mNWeUgiOpDLkAXAAAAAAAAAAB [2merr=[0m"bridge: connection without resolved user_id"
+[2m2026-06-05T14:07:10+02:00[0m [92mINF[0m http [2mmethod=[0mGET [2mpath=[0m/api/apps/chat-claude/sessions [2mstatus=[0m200 [2mbytes=[0m51004 [2mduration=[0m13.1977717s [2mrequest_id=[0mLAPTOP-056MI79B/9POiB8WjdW-000009
+[2m2026-06-05T14:07:10+02:00[0m [92mINF[0m http [2mmethod=[0mGET [2mpath=[0m/api/apps/chat-claude/sessions/4e22b218-a751-48e1-97fe-45c846c2b003/history [2mstatus=[0m200 [2mbytes=[0m149706 [2mduration=[0m99.2692ms [2mrequest_id=[0mLAPTOP-056MI79B/9POiB8WjdW-000012
+[2m2026-06-05T14:07:10+02:00[0m [92mINF[0m http [2mmethod=[0mGET [2mpath=[0m/api/apps/chat-claude/sessions [2mstatus=[0m200 [2mbytes=[0m51004 [2mduration=[0m334.5021ms [2mrequest_id=[0mLAPTOP-056MI79B/9POiB8WjdW-000011

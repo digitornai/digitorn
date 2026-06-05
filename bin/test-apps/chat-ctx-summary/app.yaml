@@ -1,0 +1,53 @@
+schema_version: 2
+
+app:
+  app_id: chat-ctx-summary
+  name: Chat Context Demo (summarize)
+  version: "0.1.0"
+  description: "Small window + summarize strategy: each compaction produces a cumulative LLM summary (summary-of-summary), not a plain truncation."
+  author: "live-test@digitorn.local"
+  category: "coding"
+
+runtime:
+  context:
+    auto_compact: true
+    compression_trigger: 0.2
+    keep_recent: 4
+    strategy: summarize
+    summary_max_tokens: 400
+    summary_brain:
+      provider: anthropic
+      model: claude-haiku-4-5-20251001
+      temperature: 0.2
+      max_tokens: 500
+      config:
+        api_key: claude-code
+
+agents:
+  - id: assistant
+    role: assistant
+    brain:
+      provider: anthropic
+      model: claude-haiku-4-5-20251001
+      temperature: 0.3
+      max_tokens: 512
+      config:
+        api_key: claude-code
+      context:
+        max_tokens: 16000
+        output_reserved: 200
+    system_prompt: |
+      You are a concise coding assistant on a small context window.
+      Use the filesystem tools (read, write, edit, glob, grep) to inspect and
+      change files — never shell out. Say briefly what you do, do it, report.
+
+tools:
+  modules:
+    filesystem:
+      config:
+        max_file_bytes: 1048576
+  capabilities:
+    default_policy: auto
+    grant:
+      - module: filesystem
+        actions: [read, write, edit, glob, grep]

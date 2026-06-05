@@ -1,0 +1,195 @@
+package meta
+
+import (
+	"context"
+	"strings"
+
+	"github.com/mbathepaul/digitorn/internal/runtime"
+)
+
+// AgentManager is the slice of the multi-agent orchestrator the `agent` tool
+// drives. The daemon wires an adapter over the concrete agent.Manager. Timeouts
+// are in seconds (the LLM passes floats).
+type AgentManager interface {
+	Spawn(ctx context.Context, req AgentSpawnRequest) (runID string, err error)
+	Wait(ctx context.Context, rootSession, runID string, timeoutSecs float64) (AgentSnapshot, error)
+	WaitAll(ctx context.Context, rootSession string, runIDs []string, timeoutSecs float64) ([]AgentSnapshot, error)
+	Status(rootSession, runID string) (AgentSnapshot, error)
+	List(rootSession string) []AgentSnapshot
+	Cancel(rootSession, runID string) error
+}
+
+// AgentSpawnRequest is one delegation issued by a coordinator.
+type AgentSpawnRequest struct {
+	AppID        string
+	RootSession  string
+	UserID       string
+	UserJWT      string // gateway bearer forwarded to the sub-agent's isolated turn
+	AgentID      string // target logical agent id
+	Task         string
+	MemorySeed   string
+	ParentRunID  string // the calling agent's run id ("" / logical for the entry agent)
+	ParentCallID string // the tool call_id of the delegating `agent` call (chip key)
+}
+
+// AgentSnapshot is the live view of one agent returned to the LLM.
+type AgentSnapshot struct {
+	RunID       string `json:"run_id"`
+	AgentID     string `json:"agent_id"`
+	ParentRunID string `json:"parent_run_id,omitempty"`
+	Status      string `json:"status"`
+	Depth       int    `json:"depth"`
+	DurationMs  int64  `json:"duration_ms"`
+	ToolCalls   int64  `json:"tool_calls"`
+	LLMCalls    int64  `json:"llm_calls"`
+	TokensIn    int64  `json:"tokens_in"`
+	TokensOut   int64  `json:"tokens_out"`
+	Children    int64  `json:"children"`
+	Content     string `json:"content,omitempty"`
+	Error       string `json:"error,omitempty"`
+}
+
+// handleAgent dispatches the `agent` delegation tool. Modes (mirroring the
+// reference agent_spawn) :
+//
+//	spawn          : { agent, task, memory_seed? }        → { run_id, status }
+//	spawn + wait   : { agent, task, wait:true, timeout? } → finished snapshot
+//	wait           : { wait:true, run_id|run_ids, timeout? }
+//	status         : { run_id }
+//	list           : { list:true }                        → { agents:[...] }
+//	cancel         : { cancel:true, run_id }
+//
+// The presence of a delegation target (`agent` / `specialist`) selects spawn —
+// a target with wait:true spawns THEN blocks on the child and returns its
+// finished snapshot, so a coordinator delegates and collects the answer in a
+// single tool call. Without a target, wait/status operate on existing run ids.
+//
+// Only coordinator-role agents may call it.
+func (m *MetaDispatcher) handleAgent(ctx context.Context, call runtime.ToolInvocation) runtime.ToolOutcome {
+	if m.Agents == nil {
+		return errored("agent not wired (no AgentManager)")
+	}
+	// Fail CLOSED : the `agent` tool is reserved for coordinator-role agents.
+	// A nil lookup means the role check can't be performed, so we DENY rather
+	// than wave the call through — a missing dependency must never silently
+	// disable a security gate (the same fail-open class as the gate2 risk
+	// ceiling). Production always wires CoordinatorLookup ; the tool is also
+	// gated upstream by the app declaring tools.modules.agent_spawn.
+	if m.CoordinatorLookup == nil || !m.CoordinatorLookup(call.AppID, call.AgentID) {
+		return errored("the `agent` tool requires a coordinator-role agent")
+	}
+	root := rootSessionOf(m.SessionID(call))
+
+	if list, _ := call.Args["list"].(bool); list {
+		return jsonOutcome(map[string]any{"agents": m.Agents.List(root)})
+	}
+	if cancel, _ := call.Args["cancel"].(bool); cancel {
+		runID, _ := call.Args["run_id"].(string)
+		if runID == "" {
+			return errored("agent cancel: 'run_id' is required")
+		}
+		if err := m.Agents.Cancel(root, runID); err != nil {
+			return errored("agent cancel: " + err.Error())
+		}
+		return jsonOutcome(map[string]any{"cancelled": runID})
+	}
+
+	wait, _ := call.Args["wait"].(bool)
+	timeout, _ := call.Args["timeout"].(float64)
+
+	// A delegation target selects spawn — optionally with an inline wait.
+	if target := firstString(call.Args, "agent", "specialist"); target != "" {
+		task := firstString(call.Args, "task", "prompt")
+		if task == "" {
+			return errored("agent spawn: 'task' is required")
+		}
+		seed, _ := call.Args["memory_seed"].(string)
+		runID, err := m.Agents.Spawn(ctx, AgentSpawnRequest{
+			AppID:        call.AppID,
+			RootSession:  root,
+			UserID:       call.UserID,
+			UserJWT:      call.UserJWT,
+			AgentID:      target,
+			Task:         task,
+			MemorySeed:   seed,
+			ParentRunID:  call.AgentRunID,
+			ParentCallID: call.CallID,
+		})
+		if err != nil {
+			return errored("agent spawn: " + err.Error())
+		}
+		if !wait {
+			return jsonOutcome(map[string]any{"run_id": runID, "status": "running"})
+		}
+		snap, werr := m.Agents.Wait(ctx, root, runID, timeout)
+		if werr != nil {
+			return errored("agent wait: " + werr.Error())
+		}
+		return jsonOutcome(agentSnapMap(snap))
+	}
+
+	// No target : control operations on already-running agents.
+	if wait {
+		if ids := stringSliceArg(call.Args["run_ids"]); len(ids) > 0 {
+			snaps, err := m.Agents.WaitAll(ctx, root, ids, timeout)
+			if err != nil {
+				return errored("agent wait_all: " + err.Error())
+			}
+			return jsonOutcome(map[string]any{"agents": snaps})
+		}
+		runID, _ := call.Args["run_id"].(string)
+		if runID == "" {
+			return errored("agent wait: 'run_id' or 'run_ids' is required")
+		}
+		snap, err := m.Agents.Wait(ctx, root, runID, timeout)
+		if err != nil {
+			return errored("agent wait: " + err.Error())
+		}
+		return jsonOutcome(agentSnapMap(snap))
+	}
+	if runID, _ := call.Args["run_id"].(string); runID != "" {
+		snap, err := m.Agents.Status(root, runID)
+		if err != nil {
+			return errored("agent status: " + err.Error())
+		}
+		return jsonOutcome(agentSnapMap(snap))
+	}
+	return errored("agent spawn: 'agent' (target agent id) is required")
+}
+
+// rootSessionOf strips the "::agent::<id>" sub-session suffix(es) so a
+// sub-agent calling the tool resolves the SAME root table as the entry agent.
+func rootSessionOf(s string) string {
+	if i := strings.Index(s, "::agent::"); i >= 0 {
+		return s[:i]
+	}
+	return s
+}
+
+func firstString(args map[string]any, keys ...string) string {
+	for _, k := range keys {
+		if s, ok := args[k].(string); ok && s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
+func agentSnapMap(s AgentSnapshot) map[string]any {
+	m := map[string]any{
+		"run_id": s.RunID, "agent_id": s.AgentID, "status": s.Status,
+		"depth": s.Depth, "duration_ms": s.DurationMs,
+		"tool_calls": s.ToolCalls, "llm_calls": s.LLMCalls,
+		"tokens_in": s.TokensIn, "tokens_out": s.TokensOut, "children": s.Children,
+	}
+	if s.ParentRunID != "" {
+		m["parent_run_id"] = s.ParentRunID
+	}
+	if s.Content != "" {
+		m["content"] = s.Content
+	}
+	if s.Error != "" {
+		m["error"] = s.Error
+	}
+	return m
+}

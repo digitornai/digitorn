@@ -1,0 +1,4 @@
+{
+  "description": "Grant references a module that is not declared anywhere",
+  "codes": ["DGT-E0301"]
+}

@@ -1,0 +1,39 @@
+# Minimal Digitorn app: one agent backed by Claude with read-only filesystem access.
+# Schema matches packages/digitorn/core/app/schema.py (AppDefinition v2).
+schema_version: 2
+
+app:
+  app_id: chat
+  name: Chat
+  version: "0.1.0"
+  description: "Minimal chat agent with filesystem read access."
+  author: "you@example.com"
+  category: "coding"
+
+agents:
+  - id: main
+    role: worker
+    brain:
+      provider: anthropic
+      model: claude-sonnet-4-6
+      temperature: 0.7
+      max_tokens: 4096
+      config:
+        api_key: "{{env.ANTHROPIC_API_KEY}}"
+    system_prompt: |
+      You are a helpful assistant with filesystem access.
+      Use filesystem.read and filesystem.grep when you need to look at code.
+    modules:
+      - filesystem
+
+tools:
+  modules:
+    filesystem:
+      config:
+        workspace: "."
+        max_file_bytes: 1048576
+  capabilities:
+    default_policy: auto
+    grant:
+      - module: filesystem
+        tools: [read, glob, grep]

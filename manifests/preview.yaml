@@ -1,0 +1,8 @@
+id: preview
+version: 1.0.0
+description: Live preview rendering for client UI.
+tools:
+  - { name: render, description: Render content for preview., risk_level: low, params: [{name: content, type: string, required: true}, {name: kind, type: string}] }
+  - { name: update, description: Update the preview., risk_level: low, params: [{name: content, type: string, required: true}] }
+  - { name: get_url, description: Get the preview URL., risk_level: low, params: [] }
+  - { name: close, description: Close the preview., risk_level: low, params: [] }

@@ -1,0 +1,19 @@
+id: http
+version: 1.0.0
+description: HTTP client for outbound requests.
+declared_permissions: [network.http]
+constraints:
+  - { name: allowed_hosts, type: string_list, scope: module }
+  - { name: blocked_hosts, type: string_list, scope: module }
+tools:
+  - { name: get, description: Issue a GET request., risk_level: low, params: [{name: url, type: string, required: true}, {name: headers, type: object}] }
+  - { name: post, description: Issue a POST request., risk_level: medium, params: [{name: url, type: string, required: true}, {name: body, type: object}, {name: headers, type: object}] }
+  - { name: put, description: Issue a PUT request., risk_level: medium, params: [{name: url, type: string, required: true}, {name: body, type: object}] }
+  - { name: delete, description: Issue a DELETE request., risk_level: high, irreversible: true, params: [{name: url, type: string, required: true}] }
+  - { name: patch, description: Issue a PATCH request., risk_level: medium, params: [{name: url, type: string, required: true}, {name: body, type: object}] }
+  - { name: head, description: Issue a HEAD request., risk_level: low, params: [{name: url, type: string, required: true}] }
+  - { name: options, description: Issue an OPTIONS request., risk_level: low, params: [{name: url, type: string, required: true}] }
+  - { name: request, description: Generic request with full control., risk_level: medium, params: [{name: method, type: string, required: true}, {name: url, type: string, required: true}] }
+  - { name: download, description: Download a file., risk_level: low, params: [{name: url, type: string, required: true}, {name: path, type: string, required: true}] }
+  - { name: json_api, description: Convenience wrapper for JSON APIs., risk_level: low, params: [{name: url, type: string, required: true}, {name: method, type: string}] }
+  - { name: fetch_page, description: Fetch and parse an HTML page., risk_level: low, params: [{name: url, type: string, required: true}] }

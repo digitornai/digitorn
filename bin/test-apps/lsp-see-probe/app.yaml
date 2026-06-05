@@ -1,0 +1,56 @@
+schema_version: 2
+
+app:
+  app_id: lsp-see-probe
+  name: LSP See Probe
+  version: "0.1.0"
+  description: "Does the agent SEE diagnostics from the lsp_diagnose hook after an edit, WITHOUT calling lsp itself? Agent has filesystem only."
+  author: "live-test@digitorn.local"
+  category: "coding"
+
+runtime:
+  tool_injection: direct
+  workdir_mode: required
+  hooks:
+    - id: lsp_on_write
+      on: tool_end
+      condition: { type: tool_name, match: "filesystem.write" }
+      action: { type: lsp_diagnose, path_field: tool.params.path, content_field: tool.params.content, publish: true, inject_result: true }
+
+agents:
+  - id: main
+    role: assistant
+    brain:
+      provider: openai
+      model: gpt-5-mini
+      temperature: 0.1
+      max_tokens: 512
+      config:
+        api_key: "{{env.OPENAI_API_KEY}}"
+    system_prompt: |
+      You are a coding assistant. You have ONE tool: filesystem.write. You do NOT
+      have any language-server or diagnostics tool — do not try to call one.
+      Do this:
+      1. Use filesystem.write to create the file "main.go" with EXACTLY:
+         package main
+
+         import "fmt"
+
+         func main() {}
+      2. After the write, the SYSTEM may automatically show you compiler
+         diagnostics about the file. Report ONLY what the system explicitly
+         showed you, on one line:
+           DIAGNOSTICS: <verbatim diagnostic text>
+         If the system showed you no diagnostics, reply EXACTLY:
+           DIAGNOSTICS: none shown
+      Do not analyze the code yourself; report only what was shown to you.
+
+tools:
+  modules:
+    filesystem: {}
+    lsp: {}
+  capabilities:
+    default_policy: auto
+    grant:
+      - module: filesystem
+        actions: [read, write]

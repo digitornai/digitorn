@@ -1,0 +1,4 @@
+{
+  "description": "Unterminated quoted string — YAML syntax error",
+  "codes": ["DGT-E0001"]
+}

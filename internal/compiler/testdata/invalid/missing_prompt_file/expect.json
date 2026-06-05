@@ -1,0 +1,4 @@
+{
+  "description": "Reference to prompts/does_not_exist.md when no such file exists in bundle",
+  "codes": ["DGT-E0203"]
+}

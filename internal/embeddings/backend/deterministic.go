@@ -1,0 +1,98 @@
+package backend
+
+import (
+	"context"
+	"hash/fnv"
+	"math"
+	"strings"
+)
+
+// Deterministic is the fallback inference backend : it produces
+// stable 384-dim vectors using a hashing scheme. It does NOT do
+// real semantic matching — two synonymous queries get unrelated
+// vectors. But it preserves the contract (length, normalisation,
+// reproducibility) so the rest of the runtime can be tested and
+// the daemon can boot without a downloaded model.
+//
+// Useful for :
+//   - CI runs where downloading the ONNX model adds 90s
+//   - Cross-compile builds where ONNX-CGO is not available
+//     (mobile, WASM) — the worker stays callable but degrades to
+//     keyword-only effective behaviour (semantic hits are
+//     basically random)
+//   - Local smoke tests without disk space for the model
+//
+// Production deployments MUST use the ONNX backend (build with
+// `-tags onnx`).
+type Deterministic struct {
+	dim int
+}
+
+// NewDeterministic constructs the fallback backend. dim should
+// always be 384 to match the doc-mandated EmbeddingDim ; an
+// override is exposed for tests.
+func NewDeterministic(dim int) *Deterministic {
+	if dim <= 0 {
+		dim = 384
+	}
+	return &Deterministic{dim: dim}
+}
+
+func (d *Deterministic) Model() string  { return "deterministic-hash-v1" }
+func (d *Deterministic) Dimension() int { return d.dim }
+func (d *Deterministic) Close() error   { return nil }
+
+// Embed computes per-input vectors. Token-bag : each space-split
+// token contributes to D coordinates determined by FNV hashes of
+// the token. Same input → same vector (reproducible). Different
+// inputs sharing tokens get correlated vectors, so the property
+// "swap two words and the cosine stays high" still holds — good
+// enough for sanity tests that only need monotonic behaviour.
+func (d *Deterministic) Embed(_ context.Context, inputs []string, l2norm bool) ([][]float32, error) {
+	out := make([][]float32, len(inputs))
+	for i, text := range inputs {
+		vec := make([]float32, d.dim)
+		text = strings.ToLower(strings.TrimSpace(text))
+		for _, tok := range strings.Fields(text) {
+			for j := 0; j < 4; j++ { // 4 hash projections per token
+				h := fnv.New32a()
+				h.Write([]byte(tok))
+				h.Write([]byte{byte(j)})
+				slot := int(h.Sum32()) % d.dim
+				if slot < 0 {
+					slot += d.dim
+				}
+				// Sign from another hash so contributions can cancel.
+				sh := fnv.New32a()
+				sh.Write([]byte(tok))
+				sh.Write([]byte{byte(j ^ 0x80)})
+				if sh.Sum32()%2 == 0 {
+					vec[slot] += 1
+				} else {
+					vec[slot] -= 1
+				}
+			}
+		}
+		if l2norm {
+			normalize(vec)
+		}
+		out[i] = vec
+	}
+	return out, nil
+}
+
+// normalize divides v by its L2 norm in-place. No-op on a
+// zero-vector (which happens for empty input).
+func normalize(v []float32) {
+	var sumSq float64
+	for _, x := range v {
+		sumSq += float64(x) * float64(x)
+	}
+	if sumSq == 0 {
+		return
+	}
+	norm := float32(math.Sqrt(sumSq))
+	for i := range v {
+		v[i] /= norm
+	}
+}

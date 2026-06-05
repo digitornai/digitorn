@@ -1,0 +1,49 @@
+# R-5 live test config : gateway-mode chat (no Anthropic API key required).
+#
+# The gateway URL is INTENTIONALLY not hardcoded here — bin\live-test-chat.ps1
+# sets it via the env var DIGITORN_WORKERS__LLM__GATEWAY_URL before booting
+# the daemon, so the same config works against localhost:8002 / staging /
+# prod without YAML edits.
+#
+# Boot : bin\digitornd.exe -config bin\config-live-chat.yaml
+# Live test : powershell -File bin\live-test-chat.ps1
+
+server:
+  host: 127.0.0.1
+  port: 28002
+  read_timeout: 60s
+  write_timeout: 60s
+  shutdown_timeout: 5s
+
+database:
+  driver: sqlite
+  dsn: C:/Users/ASUS/AppData/Local/Temp/digitorn-live-chat/digitorn.db
+
+sessions:
+  root: C:/Users/ASUS/AppData/Local/Temp/digitorn-live-chat/sessions
+  num_shards: 2
+  queue_cap_per_shard: 1024
+  batch_max: 50
+  flush_interval: 5ms
+  fsync: true
+
+apps:
+  root: C:/Users/ASUS/AppData/Local/Temp/digitorn-live-chat/apps
+
+auth:
+  # Local daemon stays in dev mode : the BYOK flag + JWT bearer ride
+  # through to the LLM gateway, which does the real auth.
+  enabled: false
+  dev_mode: true
+
+workers:
+  llm:
+    count: 1
+    start_timeout: 15s
+    # gateway_url is injected by live-test-chat.ps1 via
+    # DIGITORN_WORKERS__LLM__GATEWAY_URL — defaults to
+    # http://127.0.0.1:8002/v1 (local digitorn-gateway).
+
+logging:
+  level: info
+  format: tint

@@ -1,0 +1,78 @@
+
+2026/06/05 18:05:21 [31;1mC:/Users/ASUS/Documents/digitorn_go/internal/appmgr/lookups.go:77 [35;1mrecord not found
+[0m[33m[38.284ms] [34;1m[rows:0][0m SELECT * FROM `apps` WHERE app_id = "chat-simple" ORDER BY `apps`.`app_id` LIMIT 1
+
+2026/06/05 18:05:42 [31;1mC:/Users/ASUS/Documents/digitorn_go/internal/appmgr/lookups.go:77 [35;1mrecord not found
+[0m[33m[0.506ms] [34;1m[rows:0][0m SELECT * FROM `apps` WHERE app_id = "chat-simple" ORDER BY `apps`.`app_id` LIMIT 1
+
+2026/06/05 18:05:42 [31;1mC:/Users/ASUS/Documents/digitorn_go/internal/appmgr/lookups.go:77 [35;1mrecord not found
+[0m[33m[1.108ms] [34;1m[rows:0][0m SELECT * FROM `apps` WHERE app_id = "chat-simple" ORDER BY `apps`.`app_id` LIMIT 1
+
+2026/06/05 18:05:42 [31;1mC:/Users/ASUS/Documents/digitorn_go/internal/appmgr/lookups.go:77 [35;1mrecord not found
+[0m[33m[0.000ms] [34;1m[rows:0][0m SELECT * FROM `apps` WHERE app_id = "chat-simple" ORDER BY `apps`.`app_id` LIMIT 1
+
+2026/06/05 18:05:43 [31;1mC:/Users/ASUS/Documents/digitorn_go/internal/appmgr/lookups.go:77 [35;1mrecord not found
+[0m[33m[0.000ms] [34;1m[rows:0][0m SELECT * FROM `apps` WHERE app_id = "chat-simple" ORDER BY `apps`.`app_id` LIMIT 1
+
+2026/06/05 18:05:43 [31;1mC:/Users/ASUS/Documents/digitorn_go/internal/appmgr/lookups.go:77 [35;1mrecord not found
+[0m[33m[0.510ms] [34;1m[rows:0][0m SELECT * FROM `apps` WHERE app_id = "chat-simple" ORDER BY `apps`.`app_id` LIMIT 1
+
+2026/06/05 18:06:38 [31;1mC:/Users/ASUS/Documents/digitorn_go/internal/appmgr/lookups.go:77 [35;1mrecord not found
+[0m[33m[2.127ms] [34;1m[rows:0][0m SELECT * FROM `apps` WHERE app_id = "chat-simple" ORDER BY `apps`.`app_id` LIMIT 1
+
+2026/06/05 18:06:38 [31;1mC:/Users/ASUS/Documents/digitorn_go/internal/appmgr/lookups.go:77 [35;1mrecord not found
+[0m[33m[1.943ms] [34;1m[rows:0][0m SELECT * FROM `apps` WHERE app_id = "chat-simple" ORDER BY `apps`.`app_id` LIMIT 1
+
+2026/06/05 18:06:38 [31;1mC:/Users/ASUS/Documents/digitorn_go/internal/appmgr/lookups.go:77 [35;1mrecord not found
+[0m[33m[0.000ms] [34;1m[rows:0][0m SELECT * FROM `apps` WHERE app_id = "chat-simple" ORDER BY `apps`.`app_id` LIMIT 1
+
+2026/06/05 18:06:38 [31;1mC:/Users/ASUS/Documents/digitorn_go/internal/appmgr/lookups.go:77 [35;1mrecord not found
+[0m[33m[0.000ms] [34;1m[rows:0][0m SELECT * FROM `apps` WHERE app_id = "chat-simple" ORDER BY `apps`.`app_id` LIMIT 1
+
+2026/06/05 18:08:13 [31;1mC:/Users/ASUS/Documents/digitorn_go/internal/appmgr/lookups.go:77 [35;1mrecord not found
+[0m[33m[0.553ms] [34;1m[rows:0][0m SELECT * FROM `apps` WHERE app_id = "chat-simple" ORDER BY `apps`.`app_id` LIMIT 1
+
+2026/06/05 18:10:23 [31;1mC:/Users/ASUS/Documents/digitorn_go/internal/appmgr/lookups.go:77 [35;1mrecord not found
+[0m[33m[16.132ms] [34;1m[rows:0][0m SELECT * FROM `apps` WHERE app_id = "chat-simple" ORDER BY `apps`.`app_id` LIMIT 1
+
+2026/06/05 18:10:23 [31;1mC:/Users/ASUS/Documents/digitorn_go/internal/appmgr/lookups.go:77 [35;1mrecord not found
+[0m[33m[0.537ms] [34;1m[rows:0][0m SELECT * FROM `apps` WHERE app_id = "chat-simple" ORDER BY `apps`.`app_id` LIMIT 1
+
+2026/06/05 18:10:23 [31;1mC:/Users/ASUS/Documents/digitorn_go/internal/appmgr/lookups.go:77 [35;1mrecord not found
+[0m[33m[1.097ms] [34;1m[rows:0][0m SELECT * FROM `apps` WHERE app_id = "chat-simple" ORDER BY `apps`.`app_id` LIMIT 1
+
+2026/06/05 18:10:23 [31;1mC:/Users/ASUS/Documents/digitorn_go/internal/appmgr/lookups.go:77 [35;1mrecord not found
+[0m[33m[0.546ms] [34;1m[rows:0][0m SELECT * FROM `apps` WHERE app_id = "chat-simple" ORDER BY `apps`.`app_id` LIMIT 1
+
+2026/06/05 18:10:23 [31;1mC:/Users/ASUS/Documents/digitorn_go/internal/appmgr/lookups.go:77 [35;1mrecord not found
+[0m[33m[0.525ms] [34;1m[rows:0][0m SELECT * FROM `apps` WHERE app_id = "chat-simple" ORDER BY `apps`.`app_id` LIMIT 1
+
+2026/06/05 18:14:46 [31;1mC:/Users/ASUS/Documents/digitorn_go/internal/appmgr/lookups.go:77 [35;1mrecord not found
+[0m[33m[1.498ms] [34;1m[rows:0][0m SELECT * FROM `apps` WHERE app_id = "chat-simple" ORDER BY `apps`.`app_id` LIMIT 1
+
+2026/06/05 18:14:50 [31;1mC:/Users/ASUS/Documents/digitorn_go/internal/appmgr/lookups.go:77 [35;1mrecord not found
+[0m[33m[0.000ms] [34;1m[rows:0][0m SELECT * FROM `apps` WHERE app_id = "chat-simple" ORDER BY `apps`.`app_id` LIMIT 1
+
+2026/06/05 18:14:50 [31;1mC:/Users/ASUS/Documents/digitorn_go/internal/appmgr/lookups.go:77 [35;1mrecord not found
+[0m[33m[1.109ms] [34;1m[rows:0][0m SELECT * FROM `apps` WHERE app_id = "chat-simple" ORDER BY `apps`.`app_id` LIMIT 1
+
+2026/06/05 18:14:50 [31;1mC:/Users/ASUS/Documents/digitorn_go/internal/appmgr/lookups.go:77 [35;1mrecord not found
+[0m[33m[0.000ms] [34;1m[rows:0][0m SELECT * FROM `apps` WHERE app_id = "chat-simple" ORDER BY `apps`.`app_id` LIMIT 1
+
+2026/06/05 18:14:50 [31;1mC:/Users/ASUS/Documents/digitorn_go/internal/appmgr/lookups.go:77 [35;1mrecord not found
+[0m[33m[0.000ms] [34;1m[rows:0][0m SELECT * FROM `apps` WHERE app_id = "chat-simple" ORDER BY `apps`.`app_id` LIMIT 1
+
+2026/06/05 18:14:50 [31;1mC:/Users/ASUS/Documents/digitorn_go/internal/appmgr/lookups.go:77 [35;1mrecord not found
+[0m[33m[0.556ms] [34;1m[rows:0][0m SELECT * FROM `apps` WHERE app_id = "chat-simple" ORDER BY `apps`.`app_id` LIMIT 1
+
+2026/06/05 18:15:02 [31;1mC:/Users/ASUS/Documents/digitorn_go/internal/appmgr/lookups.go:77 [35;1mrecord not found
+[0m[33m[0.000ms] [34;1m[rows:0][0m SELECT * FROM `apps` WHERE app_id = "chat-simple" ORDER BY `apps`.`app_id` LIMIT 1
+
+2026/06/05 18:15:02 [31;1mC:/Users/ASUS/Documents/digitorn_go/internal/appmgr/lookups.go:77 [35;1mrecord not found
+[0m[33m[2.130ms] [34;1m[rows:0][0m SELECT * FROM `apps` WHERE app_id = "chat-simple" ORDER BY `apps`.`app_id` LIMIT 1
+
+2026/06/05 18:15:02 [31;1mC:/Users/ASUS/Documents/digitorn_go/internal/appmgr/lookups.go:77 [35;1mrecord not found
+[0m[33m[0.000ms] [34;1m[rows:0][0m SELECT * FROM `apps` WHERE app_id = "chat-simple" ORDER BY `apps`.`app_id` LIMIT 1
+
+2026/06/05 18:15:02 [31;1mC:/Users/ASUS/Documents/digitorn_go/internal/appmgr/lookups.go:77 [35;1mrecord not found
+[0m[33m[0.540ms] [34;1m[rows:0][0m SELECT * FROM `apps` WHERE app_id = "chat-simple" ORDER BY `apps`.`app_id` LIMIT 1

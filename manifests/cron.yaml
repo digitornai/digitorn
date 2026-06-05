@@ -1,0 +1,11 @@
+id: cron
+version: 1.0.0
+description: Cron scheduling (LLM-driven).
+tools:
+  - { name: schedule, description: Schedule a job., risk_level: medium, params: [{name: expr, type: string, required: true}, {name: action, type: string, required: true}] }
+  - { name: schedule_job, description: Alias for schedule., risk_level: medium, params: [{name: expr, type: string, required: true}] }
+  - { name: cancel, description: Cancel a scheduled job., risk_level: medium, params: [{name: id, type: string, required: true}] }
+  - { name: cancel_schedule, description: Alias for cancel., risk_level: medium, params: [{name: id, type: string, required: true}] }
+  - { name: list, description: List scheduled jobs., risk_level: low, params: [] }
+  - { name: run_now, description: Run a scheduled job immediately., risk_level: medium, params: [{name: id, type: string, required: true}] }
+  - { name: remind, description: One-shot reminder., risk_level: low, params: [{name: when, type: string, required: true}, {name: text, type: string, required: true}] }

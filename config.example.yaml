@@ -1,0 +1,69 @@
+# Digitorn Go - Example configuration
+# Copy to config.yaml and adjust for your environment
+
+server:
+  host: "127.0.0.1"
+  port: 8000
+  read_timeout: "30s"
+  write_timeout: "30s"
+  shutdown_timeout: "30s"
+  cors_origins:
+    - "http://localhost:3000"
+    - "http://localhost:5173"
+  auth_enabled: true
+
+socketio:
+  ping_interval: "25s"
+  ping_timeout: "20s"
+  max_http_buffer_size: 1000000  # 1 MB
+  connect_timeout: "45s"
+  # Redis adapter for horizontal scaling (optional)
+  redis_url: ""  # e.g. "redis://localhost:6379/0"
+
+database:
+  # Supported drivers: postgres, mysql, sqlite, sqlserver, oracle
+  driver: "sqlite"
+  dsn: "digitorn.db"
+  # Examples:
+  #   postgres:  "host=localhost user=digitorn password=secret dbname=digitorn port=5432 sslmode=disable"
+  #   mysql:     "digitorn:secret@tcp(localhost:3306)/digitorn?charset=utf8mb4&parseTime=True&loc=Local"
+  #   sqlserver: "sqlserver://digitorn:secret@localhost:1433?database=digitorn"
+  #   oracle:    "digitorn/secret@localhost:1521/XE"
+  max_open_conns: 25
+  max_idle_conns: 5
+  conn_max_lifetime: "5m"
+  log_level: "warn"  # silent, error, warn, info
+
+modules:
+  # Discovery: scan these directories for modules
+  paths:
+    - "internal/modules"
+  # Whitelist (empty = load all discovered)
+  enabled: []
+  # Blacklist
+  disabled: []
+
+runtime:
+  max_turns: 200
+  max_consecutive_failures: 8
+  tool_timeout: "60s"
+  context_pressure_threshold: 0.75
+
+logging:
+  level: "info"  # debug, info, warn, error
+  format: "tint"  # tint (color), json
+
+llm:
+  providers:
+    anthropic:
+      api_key: ""  # or env: ANTHROPIC_API_KEY
+    openai:
+      api_key: ""  # or env: OPENAI_API_KEY
+    ollama:
+      base_url: "http://localhost:11434"
+
+observability:
+  metrics_enabled: true
+  metrics_path: "/metrics"
+  tracing_enabled: false
+  otlp_endpoint: ""

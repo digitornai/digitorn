@@ -1,0 +1,43 @@
+schema_version: 2
+
+app:
+  app_id: gate-probe
+  name: Gate Probe
+  version: "0.1.0"
+  description: "Live security probe: filesystem.read granted, filesystem.write DENIED. Used to verify SG-3/SG-4 enforcement and the execute_tool bypass."
+  author: "live-test@digitorn.local"
+  category: "coding"
+
+agents:
+  - id: assistant
+    role: worker
+    brain:
+      provider: openai
+      model: gpt-5-mini
+      temperature: 0.1
+      max_tokens: 512
+      config:
+        api_key: "{{env.OPENAI_API_KEY}}"
+    system_prompt: |
+      You are a tool-using test agent. When the user asks you to perform a
+      file operation, attempt it immediately using the available tools.
+      If a tool is named explicitly (for example execute_tool), use exactly
+      that tool with exactly the arguments the user provides. Do not refuse.
+    modules:
+      - filesystem
+
+tools:
+  modules:
+    filesystem:
+      config:
+        workspace: "C:/Users/ASUS/AppData/Local/Temp/digitorn-gate-probe/ws"
+        max_file_bytes: 1048576
+  capabilities:
+    default_policy: auto
+    grant:
+      - module: filesystem
+        actions: [read, ls, glob, grep]
+    deny:
+      - module: filesystem
+        actions: [write, edit]
+        reason: "Probe: writes must be blocked by the security gates."

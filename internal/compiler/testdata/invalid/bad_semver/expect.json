@@ -1,0 +1,4 @@
+{
+  "description": "app.version must be valid semver",
+  "codes": ["DGT-E0107"]
+}

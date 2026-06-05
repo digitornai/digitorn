@@ -1,0 +1,26 @@
+schema_version: 2
+
+app:
+  app_id: chat-simple
+  name: Chat Simple
+  version: "0.1.0"
+  description: "Live test fixture for R-5 : minimal single-turn chat with embedded Anthropic credential."
+  author: "live-test@digitorn.local"
+  category: "coding"
+
+agents:
+  - id: assistant
+    role: worker
+    brain:
+      provider: openai
+      model: gpt-5-mini
+      temperature: 0.3
+      max_tokens: 256
+      config:
+        # Placeholder credential : kept non-empty so the compile-time
+        # validator passes. Ignored at runtime in gateway mode (the
+        # default). To exercise BYOK with a real OpenAI key, run
+        # PUT /api/apps/chat-simple/byok {enabled:true} after install.
+        api_key: "{{env.OPENAI_API_KEY}}"
+    system_prompt: |
+      You are a helpful assistant. Answer in one short sentence.

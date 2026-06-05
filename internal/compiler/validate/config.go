@@ -1,0 +1,118 @@
+package validate
+
+import (
+	"fmt"
+
+	"github.com/mbathepaul/digitorn/internal/compiler/catalog"
+	"github.com/mbathepaul/digitorn/internal/compiler/diagnostic"
+	"github.com/mbathepaul/digitorn/internal/compiler/schema"
+	"github.com/mbathepaul/digitorn/internal/compiler/suggest"
+)
+
+// CheckConfig validates each module's `tools.modules.<id>.config` block against
+// the schema declared in its manifest. The schema accepts the compact form
+// used in our manifests:
+//
+//	field_name: { type: string, default: ..., required: true, enum: [...] }
+func CheckConfig(file string, def *schema.AppDefinition, cat *catalog.Catalog, bag *diagnostic.Bag) {
+	if def.Tools == nil {
+		return
+	}
+	for modID, block := range def.Tools.Modules {
+		schemaMap, ok := cat.ConfigSchema(modID)
+		if !ok || len(block.Config) == 0 {
+			continue
+		}
+		path := fmt.Sprintf("tools.modules.%s.config", modID)
+		checkConfigAgainstSchema(block.Config, schemaMap, path, bag)
+	}
+}
+
+func checkConfigAgainstSchema(cfg, schemaMap map[string]any, path string, bag *diagnostic.Bag) {
+	for name, value := range cfg {
+		fieldRaw, ok := schemaMap[name]
+		if !ok {
+			pool := make([]string, 0, len(schemaMap))
+			for k := range schemaMap {
+				pool = append(pool, k)
+			}
+			d := diagnostic.Errorf(diagnostic.CodeUnknownField, posUnknown,
+				"%s.%s: unknown config field", path, name)
+			if s, ok := suggest.Closest(name, pool, 2); ok {
+				d = d.WithSuggestion(s, fmt.Sprintf("did you mean %q?", s))
+			}
+			bag.Add(d)
+			continue
+		}
+		field, _ := fieldRaw.(map[string]any)
+		if field == nil {
+			continue
+		}
+		expected, _ := field["type"].(string)
+		if expected != "" {
+			if err := matchScalarType(expected, value); err != nil {
+				bag.Add(diagnostic.Errorf(diagnostic.CodeWrongType, posUnknown,
+					"%s.%s: %s", path, name, err.Error()))
+			}
+		}
+		if enum, ok := field["enum"].([]any); ok && len(enum) > 0 {
+			if !inEnum(value, enum) {
+				bag.Add(diagnostic.Errorf(diagnostic.CodeBadEnum, posUnknown,
+					"%s.%s: %v not in enum %v", path, name, value, enum))
+			}
+		}
+	}
+	for name, fieldRaw := range schemaMap {
+		field, _ := fieldRaw.(map[string]any)
+		if field == nil {
+			continue
+		}
+		if req, _ := field["required"].(bool); !req {
+			continue
+		}
+		if _, ok := cfg[name]; !ok {
+			bag.Add(diagnostic.Errorf(diagnostic.CodeMissingRequired, posUnknown,
+				"%s.%s: missing required config field", path, name))
+		}
+	}
+}
+
+// matchScalarType checks a value against a manifest-declared type name. The
+// type vocabulary mirrors what pkg/module.ConstraintType + JSON-Schema usage
+// already gives us: string, integer, number, boolean, array, object, size,
+// duration, any.
+func matchScalarType(expected string, value any) error {
+	switch expected {
+	case "any", "":
+		return nil
+	case "string", "url", "size", "duration":
+		if _, ok := value.(string); !ok {
+			return fmt.Errorf("expected %s, got %T", expected, value)
+		}
+	case "integer":
+		switch value.(type) {
+		case int, int32, int64, uint, uint32, uint64, float64:
+		default:
+			return fmt.Errorf("expected integer, got %T", value)
+		}
+	case "number":
+		switch value.(type) {
+		case int, int32, int64, uint, uint32, uint64, float32, float64:
+		default:
+			return fmt.Errorf("expected number, got %T", value)
+		}
+	case "boolean":
+		if _, ok := value.(bool); !ok {
+			return fmt.Errorf("expected boolean, got %T", value)
+		}
+	case "array", "string_list":
+		if _, ok := value.([]any); !ok {
+			return fmt.Errorf("expected array, got %T", value)
+		}
+	case "object", "map":
+		if _, ok := value.(map[string]any); !ok {
+			return fmt.Errorf("expected object, got %T", value)
+		}
+	}
+	return nil
+}

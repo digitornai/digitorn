@@ -1,0 +1,10 @@
+id: queue
+version: 1.0.0
+description: In-process task queue.
+tools:
+  - { name: enqueue, description: Add an item to the queue., risk_level: low, params: [{name: queue, type: string, required: true}, {name: payload, type: object, required: true}] }
+  - { name: dequeue, description: Pop an item., risk_level: low, params: [{name: queue, type: string, required: true}] }
+  - { name: peek, description: Peek at the head., risk_level: low, params: [{name: queue, type: string, required: true}] }
+  - { name: size, description: Queue size., risk_level: low, params: [{name: queue, type: string, required: true}] }
+  - { name: purge, description: Empty the queue., risk_level: high, irreversible: true, params: [{name: queue, type: string, required: true}] }
+  - { name: list, description: List queues., risk_level: low, params: [] }

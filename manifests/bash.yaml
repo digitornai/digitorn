@@ -1,0 +1,25 @@
+id: bash
+version: 1.0.0
+description: Run shell commands in a persistent per-session shell (cd, export, variables and source survive across calls).
+supported_platforms: [linux, darwin, windows]
+declared_permissions: [process.exec]
+config_schema:
+  workdir: { type: string }
+  shell: { type: string }
+  max_output: { type: integer }
+  timeout_seconds: { type: integer }
+  idle_seconds: { type: integer }
+  env_allow: { type: array }
+constraints:
+  - { name: allowed_commands, type: string_list, scope: universal }
+  - { name: blocked_commands, type: string_list, scope: universal }
+tools:
+  - name: run
+    description: Execute a shell command and return its stdout, stderr, exit code and working directory. The shell is persistent per session, so cd/export/variables/functions/source survive across calls. Long-running commands (servers, watchers) must be started with background_run instead.
+    risk_level: high
+    irreversible: true
+    aliases: [bash, sh, shell]
+    params:
+      - { name: command, type: string, required: true }
+      - { name: timeout_seconds, type: integer }
+      - { name: input, type: string }

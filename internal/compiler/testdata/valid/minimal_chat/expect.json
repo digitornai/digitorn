@@ -1,0 +1,4 @@
+{
+  "description": "Minimal viable app : 1 agent, 1 module, literal API key (no env var dependency)",
+  "build_ok": true
+}

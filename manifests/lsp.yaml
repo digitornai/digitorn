@@ -1,0 +1,6 @@
+id: lsp
+version: 1.0.0
+description: Live code diagnostics (errors/warnings) via Language Server Protocol.
+tools:
+  - { name: notify_change, description: Report a changed file and return the language server's current diagnostics (triggered by the lsp_diagnose hook)., risk_level: low, params: [{name: path, type: string, required: true}, {name: content, type: string}] }
+  - { name: diagnostics, description: Return the language server's current diagnostics for a file., risk_level: low, params: [{name: path, type: string, required: true}] }

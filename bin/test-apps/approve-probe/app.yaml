@@ -1,0 +1,45 @@
+schema_version: 2
+
+app:
+  app_id: approve-probe
+  name: Approve Probe
+  version: "0.1.0"
+  description: "Live probe for the approval flow: filesystem.read is gated behind the approve policy."
+  author: "live-test@digitorn.local"
+  category: "coding"
+
+runtime:
+  tool_injection: direct
+
+agents:
+  - id: assistant
+    role: worker
+    brain:
+      provider: openai
+      model: gpt-5-mini
+      temperature: 0.1
+      max_tokens: 512
+      config:
+        api_key: "{{env.OPENAI_API_KEY}}"
+    system_prompt: |
+      You are a file assistant. When the user asks about a file, call the
+      filesystem read tool directly (the one named "read") and answer from
+      its contents. Do not use execute_tool. Do not guess.
+    modules:
+      - filesystem
+
+tools:
+  modules:
+    filesystem:
+      config:
+        workspace: "C:/Users/ASUS/AppData/Local/Temp/digitorn-approve-probe/ws"
+        max_file_bytes: 1048576
+  capabilities:
+    default_policy: auto
+    grant:
+      - module: filesystem
+        actions: [ls, glob, grep]
+    approve:
+      - module: filesystem
+        actions: [read]
+        reason: "Reads require human approval (probe)."

@@ -1,0 +1,4 @@
+{
+  "description": "brain.temperature out of valid range (must be 0.0-2.0)",
+  "codes": ["DGT-E0103"]
+}

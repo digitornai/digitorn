@@ -1,0 +1,33 @@
+# Apps from digitorn-bridge/examples that reference modules outside the
+# 24 modules shipped by the Python daemon. These would fail to validate in
+# Python too (they require plugin-supplied or MCP-provided modules).
+# Maintained as a glob list, one pattern per line, `#` for comments.
+
+# Uses non-built-in modules
+examples/browser-agent.yaml             # browser
+examples/chat.yaml                      # hello
+examples/claude-code.yaml               # git, notebook
+examples/claude-code-opus.yaml          # git, notebook
+examples/code-reviewer.yaml             # pdf
+examples/competitive-intel.yaml         # pdf
+examples/cv-builder.yaml                # pdf
+examples/data-analyst.yaml              # pdf, spreadsheet
+examples/doc-generator.yaml             # pdf
+examples/hello-oneshot.yaml             # hello
+examples/http-agent.yaml                # fs/net/sys shorthand aliases
+examples/invoice-generator.yaml         # pdf
+examples/market-research.yaml           # pdf, spreadsheet
+examples/meeting-summarizer.yaml        # pdf
+examples/ollama-chat.yaml               # hello
+examples/presentation-demo.yaml         # presentation
+examples/rag/20-multi-format.yaml       # spreadsheet
+examples/rag/29-enterprise-multi-source.yaml  # spreadsheet
+examples/rag/30-ultimate-multiagent.yaml      # spreadsheet
+examples/seo-auditor.yaml               # pdf, spreadsheet
+examples/spreadsheet-demo.yaml          # spreadsheet
+examples/thinking-chat.yaml             # hello
+examples/workbench-test.yaml            # hello
+
+# Broken YAML in source (api_key: ***REMOVED*** — invalid alias syntax)
+examples/test-deepseek.yaml
+examples/test-full.yaml

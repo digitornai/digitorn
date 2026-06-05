@@ -1,0 +1,4 @@
+{
+  "description": "Two-agent app with delegation, multiple modules and grants — must compile clean and build artifact deterministically",
+  "build_ok": true
+}

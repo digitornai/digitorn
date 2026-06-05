@@ -1,0 +1,7 @@
+id: cron_native
+version: 1.0.0
+description: Native OS cron registrations.
+tools:
+  - { name: schedule, description: Schedule a native cron job., risk_level: medium, params: [{name: expr, type: string, required: true}, {name: command, type: string, required: true}] }
+  - { name: cancel, description: Cancel a native cron job., risk_level: medium, params: [{name: id, type: string, required: true}] }
+  - { name: list, description: List native cron jobs., risk_level: low, params: [] }

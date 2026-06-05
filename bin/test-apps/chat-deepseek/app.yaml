@@ -1,0 +1,36 @@
+schema_version: 2
+
+app:
+  app_id: chat-deepseek
+  name: Chat DeepSeek V4
+  version: "0.1.0"
+  description: "Assistant on deepseek-ai/DeepSeek-V4-Pro with filesystem tools. DeepSeek emits text-format tool calls; the daemon's toolcall library recovers them."
+  author: "live-test@digitorn.local"
+  category: "coding"
+
+agents:
+  - id: assistant
+    role: assistant
+    brain:
+      provider: openai
+      model: deepseek-ai/DeepSeek-V4-Pro
+      temperature: 0.3
+      max_tokens: 1024
+      config:
+        api_key: "{{env.OPENAI_API_KEY}}"
+    system_prompt: |
+      You are a helpful, concise assistant running on DeepSeek V4.
+      When the user asks you to work with files, use the filesystem tools
+      (read, write, edit, ls, glob, grep). Briefly say what you're doing,
+      then do it, then report the result.
+
+tools:
+  modules:
+    filesystem:
+      config:
+        max_file_bytes: 1048576
+  capabilities:
+    default_policy: auto
+    grant:
+      - module: filesystem
+        actions: [read, write, edit, ls, glob, grep]

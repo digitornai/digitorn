@@ -1,0 +1,54 @@
+schema_version: 2
+
+app:
+  app_id: lsp-py-probe
+  name: LSP Python Probe
+  version: "0.1.0"
+  description: "Live worker E2E (Python): agent edits a .py file; lsp.notify_change returns pyright diagnostics from a worker."
+  author: "live-test@digitorn.local"
+  category: "coding"
+
+runtime:
+  tool_injection: direct
+  workdir_mode: required
+  hooks:
+    - id: lsp_on_write
+      on: tool_end
+      condition: { type: tool_name, match: "filesystem.write" }
+      action: { type: lsp_diagnose, path_field: tool.params.path, content_field: tool.params.content }
+
+agents:
+  - id: main
+    role: assistant
+    brain:
+      provider: openai
+      model: gpt-5-mini
+      temperature: 0.1
+      max_tokens: 512
+      config:
+        api_key: "{{env.OPENAI_API_KEY}}"
+    system_prompt: |
+      You are a Python coding agent with filesystem and lsp tools. Do EXACTLY,
+      in order:
+      1. Use filesystem.write to create the file "buggy.py" with this content:
+         def add(a, b):
+             return a + b
+
+         result = add(2, "3")
+         print(res)
+      2. Call lsp.notify_change with path "buggy.py" to get the language server's
+         diagnostics.
+      3. Reply with ONE line exactly:  RESULT: <the first diagnostic message, verbatim>
+      The diagnostic message comes ONLY from the lsp tool — never invent it.
+
+tools:
+  modules:
+    filesystem: {}
+    lsp: {}
+  capabilities:
+    default_policy: auto
+    grant:
+      - module: filesystem
+        actions: [read, write]
+      - module: lsp
+        tools: [notify_change, diagnostics]

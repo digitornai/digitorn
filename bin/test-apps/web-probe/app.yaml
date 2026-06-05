@@ -1,0 +1,38 @@
+schema_version: 2
+
+app:
+  app_id: web-probe
+  name: Web Probe
+  version: "0.1.0"
+  description: "Live probe: the agent fetches a public page via web.fetch and reports its token."
+  author: "live-test@digitorn.local"
+  category: "coding"
+
+runtime:
+  tool_injection: direct
+
+agents:
+  - id: main
+    role: assistant
+    brain:
+      provider: openai
+      model: gpt-5-mini
+      temperature: 0.1
+      max_tokens: 512
+      config:
+        api_key: "{{env.OPENAI_API_KEY}}"
+    system_prompt: |
+      You have a web tool: web.fetch. To answer, you MUST call web.fetch on the
+      exact URL the user gives you, read the returned page content, find the
+      token that starts with WEBPROOF, and reply with ONE line:
+        RESULT: <the WEBPROOF... token>
+      Do not guess the token; it only exists on the fetched page.
+
+tools:
+  modules:
+    web: {}
+  capabilities:
+    default_policy: auto
+    grant:
+      - module: web
+        tools: [fetch, search]

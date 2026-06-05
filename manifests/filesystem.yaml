@@ -1,0 +1,60 @@
+id: filesystem
+version: 1.0.0
+description: File I/O confined to a workspace path.
+supported_platforms: [linux, darwin, windows]
+declared_permissions: [filesystem.read, filesystem.write]
+config_schema:
+  workspace: { type: string }
+  max_file_bytes: { type: integer }
+constraints:
+  - { name: allowed_paths, type: string_list, scope: module }
+  - { name: blocked_actions, type: string_list, scope: universal }
+tools:
+  - name: read
+    description: Read a file from the workspace and return its contents.
+    risk_level: low
+    params:
+      - { name: path, type: string, required: true }
+      - { name: offset, type: integer }
+      - { name: limit, type: integer }
+  - name: write
+    description: Write content to a file (creates if absent, overwrites).
+    risk_level: medium
+    irreversible: true
+    params:
+      - { name: path, type: string, required: true }
+      - { name: content, type: string, required: true }
+  - name: edit
+    description: Replace exact text occurrences inside a file.
+    risk_level: medium
+    irreversible: true
+    params:
+      - { name: path, type: string, required: true }
+      - { name: old_string, type: string, required: true }
+      - { name: new_string, type: string, required: true }
+      - { name: replace_all, type: boolean }
+  - name: ls
+    description: List directory entries (non-recursive).
+    risk_level: low
+    params:
+      - { name: path, type: string, required: true }
+  - name: glob
+    description: Find files matching a glob pattern.
+    risk_level: low
+    params:
+      - { name: pattern, type: string, required: true }
+  - name: grep
+    description: Search file contents matching a regular expression.
+    risk_level: low
+    params:
+      - { name: pattern, type: string, required: true }
+      - { name: path, type: string }
+      - { name: include, type: string }
+      - { name: max_results, type: integer }
+  - { name: mkdir, description: Create a directory, risk_level: low, params: [{name: path, type: string, required: true}] }
+  - { name: rm, description: Remove a file or empty directory, risk_level: high, irreversible: true, params: [{name: path, type: string, required: true}] }
+  - { name: mv, description: Move/rename a file or directory, risk_level: medium, params: [{name: from, type: string, required: true}, {name: to, type: string, required: true}] }
+  - { name: cp, description: Copy a file or directory, risk_level: low, params: [{name: from, type: string, required: true}, {name: to, type: string, required: true}] }
+  - { name: stat, description: Return file metadata, risk_level: low, params: [{name: path, type: string, required: true}] }
+  - { name: delete, description: Alias for rm., risk_level: high, irreversible: true, params: [{name: path, type: string, required: true}] }
+  - { name: exists, description: Test whether a path exists., risk_level: low, params: [{name: path, type: string, required: true}] }

@@ -1,0 +1,3 @@
+
+2026/06/04 13:32:35 [31;1mC:/Users/ASUS/Documents/digitorn_go/internal/appmgr/lookups.go:55 [35;1mrecord not found
+[0m[33m[32.239ms] [34;1m[rows:0][0m SELECT * FROM `apps` WHERE app_id = "digitorn-chat" ORDER BY `apps`.`app_id` LIMIT 1
