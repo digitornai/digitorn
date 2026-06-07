@@ -3,10 +3,11 @@ package schema
 import "gopkg.in/yaml.v3"
 
 type McpModuleConfig struct {
-	Workspace  string           `yaml:"workspace,omitempty"`
-	Servers    any              `yaml:"servers,omitempty"`
-	Cache      MCPCacheConfig   `yaml:"cache,omitempty"`
-	Middleware []map[string]any `yaml:"middleware,omitempty"`
+	Workspace   string           `yaml:"workspace,omitempty"`
+	Servers     any              `yaml:"servers,omitempty"`
+	Cache       MCPCacheConfig   `yaml:"cache,omitempty"`
+	Middleware  []map[string]any `yaml:"middleware,omitempty"`
+	AutoInstall bool             `yaml:"auto_install,omitempty"`
 }
 
 type MCPServerConfig struct {

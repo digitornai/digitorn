@@ -60,14 +60,20 @@ func New() *Module {
 
 func (m *Module) Init(ctx context.Context, cfg map[string]any) error {
 	servers, _ := schema.NormalizeServers(cfg["servers"])
+	autoInstall := autoInstallEnabled(cfg)
 	for id, sc := range servers {
-		spec, ok := toConnectSpec(sc)
+		spec, ok := m.resolveServer(id, sc, autoInstall)
 		if !ok {
-			continue // bare/catalog ref — resolved in a later chunk
+			continue
 		}
 		_, _ = m.pool.connect(ctx, id, spec)
 	}
 	return nil
+}
+
+func autoInstallEnabled(cfg map[string]any) bool {
+	v, _ := cfg["auto_install"].(bool)
+	return v
 }
 
 func (m *Module) Start(ctx context.Context) error {
@@ -232,12 +238,13 @@ func (m *Module) ensureConnected(ctx context.Context) {
 		return
 	}
 	servers, _ := schema.NormalizeServers(cfg["servers"])
+	autoInstall := autoInstallEnabled(cfg)
 	userID := callerUserID(ctx)
 	authCtx, _ := module.AuthContextFrom(ctx)
 	for id, sc := range servers {
-		spec, ok := toConnectSpec(sc)
+		spec, ok := m.resolveServer(id, sc, autoInstall)
 		if !ok {
-			continue // bare/catalog ref — resolved in a later chunk
+			continue
 		}
 		key := physicalKey(id, sc, userID)
 		stdioAuth := userID != "" && isStdioOAuth(sc)

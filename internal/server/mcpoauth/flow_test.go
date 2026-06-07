@@ -206,6 +206,38 @@ func TestRefresh_BasicUsesSameEncoding(t *testing.T) {
 	}
 }
 
+func TestRefreshIfNeeded_RejectsEmptyAccessToken(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"token_type":"Bearer","expires_in":3600}`))
+	}))
+	defer srv.Close()
+	f := NewFlow()
+	ra := resolvedAuth{TokenURL: srv.URL, TokenAuthMethod: "body", ClientID: "c", ClientSecret: "s"}
+	expired := &Token{AccessToken: "old", RefreshToken: "rt", ExpiresAt: 1}
+	if _, err := f.refreshIfNeeded(context.Background(), ra, expired); err == nil {
+		t.Fatal("expected error when refresh response omits access_token")
+	}
+}
+
+func TestRevoke_HitsProviderEndpoint(t *testing.T) {
+	var gotToken string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		gotToken = r.PostFormValue("token")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	f := NewFlow()
+	ra := resolvedAuth{RevokeURL: srv.URL, TokenAuthMethod: "body", ClientID: "c", ClientSecret: "s"}
+	if err := f.revoke(context.Background(), ra, "AT"); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	if gotToken != "AT" {
+		t.Fatalf("provider did not receive the token, got %q", gotToken)
+	}
+}
+
 func TestExchange_ProviderErrorIsSurfaced(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)

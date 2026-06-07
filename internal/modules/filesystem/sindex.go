@@ -38,17 +38,21 @@ var sindexIgnoredDirs = map[string]bool{
 }
 
 type sChunk struct {
-	path  string
-	line  int
-	text  string
-	vec   []float32
+	path string
+	line int
+	text string
+	sym  string // "func Deploy" etc. (AST chunks) ; empty for line windows
+	vec  []float32
 }
 
 type sHit struct {
-	Path    string  `json:"path"`
-	Line    int     `json:"line"`
-	Snippet string  `json:"snippet"`
-	Score   float32 `json:"score"`
+	Path    string   `json:"path"`
+	Line    int      `json:"line"`
+	Symbol  string   `json:"symbol,omitempty"`
+	Callers []string `json:"callers,omitempty"`
+	Imports []string `json:"imports,omitempty"`
+	Snippet string   `json:"snippet"`
+	Score   float32  `json:"score"`
 }
 
 type sindex struct {
@@ -192,7 +196,11 @@ func (s *sindex) build(emb pkgmodule.Embedder, model string) []sChunk {
 		}
 		rel, _ := filepath.Rel(s.root, path)
 		rel = filepath.ToSlash(rel)
-		for _, ch := range chunkLines(string(b), rel) {
+		chs := astChunks(rel, b) // AST symbol-level chunks (tree-sitter build)
+		if chs == nil {
+			chs = chunkLines(string(b), rel) // fallback : line windows
+		}
+		for _, ch := range chs {
 			pending = append(pending, ch)
 			texts = append(texts, ch.text)
 			if len(texts) >= sindexBatch {
@@ -231,7 +239,7 @@ func (s *sindex) search(ctx context.Context, emb pkgmodule.Embedder, model, quer
 		if score <= 0 {
 			continue
 		}
-		hits = append(hits, sHit{Path: chunks[i].path, Line: chunks[i].line, Snippet: snippet(chunks[i].text), Score: score})
+		hits = append(hits, sHit{Path: chunks[i].path, Line: chunks[i].line, Symbol: chunks[i].sym, Snippet: snippet(chunks[i].text), Score: score})
 	}
 	sort.Slice(hits, func(i, j int) bool { return hits[i].Score > hits[j].Score })
 	if topK > 0 && len(hits) > topK {

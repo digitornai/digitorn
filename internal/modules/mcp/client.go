@@ -51,7 +51,8 @@ func buildTransport(spec connectSpec) (mcpsdk.Transport, error) {
 		if spec.Command == "" {
 			return nil, transportErr("stdio transport requires a command")
 		}
-		cmd := exec.Command(spec.Command, spec.Args...)
+		command, args := wrapPython(spec.Command, spec.Args)
+		cmd := exec.Command(command, args...)
 		cmd.Env = buildSafeEnv(spec.Env)
 		return &mcpsdk.CommandTransport{Command: cmd}, nil
 	case "streamable_http":

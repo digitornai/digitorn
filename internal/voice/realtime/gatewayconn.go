@@ -31,10 +31,13 @@ func DialGateway(ctx context.Context, baseURL, token, model string) (Conn, error
 	return c, nil
 }
 
-// realtimeURL turns the gateway base URL into its /v1/realtime WS endpoint.
+// realtimeURL turns the gateway base URL into its /v1/realtime WS endpoint. The
+// daemon's configured gateway base may already carry the /v1 prefix (the LLM worker
+// uses http://host/v1) ; trim it so we never produce /v1/v1/realtime.
 func realtimeURL(baseURL, model string) string {
 	base := strings.Replace(strings.Replace(baseURL, "https://", "wss://", 1), "http://", "ws://", 1)
 	base = strings.TrimRight(base, "/")
+	base = strings.TrimSuffix(base, "/v1")
 	u := base + "/v1/realtime"
 	if model != "" {
 		u += "?model=" + neturl.QueryEscape(model)

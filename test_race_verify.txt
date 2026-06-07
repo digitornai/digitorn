@@ -1,0 +1,40 @@
+CRITICAL ANALYSIS:
+
+The claim alleges a TOCTOU race in TakeValid() at lines 66 (First) and 73 (Delete):
+
+```go
+var row models.OAuthState
+err := s.db.WithContext(ctx).Where("state = ?", state).First(&row).Error  // Line 66
+...
+if derr := s.db.WithContext(ctx).Where("state = ?", state).Delete(...).Error // Line 73
+```
+
+KEY FACTS:
+1. Each s.db.WithContext(ctx) is a SEPARATE GORM query, not a transaction
+2. SQLite in autocommit mode (default) auto-commits after each statement
+3. No explicit BEGIN TRANSACTION wraps these two queries
+4. Two concurrent callers could both execute First() before either executes Delete()
+
+HOWEVER - Critical mitigating factors:
+1. OAuth code is single-use at the provider level:
+   - Only ONE Exchange at the provider succeeds
+   - The second code exchange fails with "invalid_grant" or similar
+   - Provider prevents credential leakage
+   
+2. The race does NOT lead to credential leakage because:
+   - Both TakeValid calls may return the same state
+   - Both then call Exchange() with the SAME code
+   - Provider rejects the second Exchange (code already used)
+   - Second caller gets an error, not a valid token
+
+3. The code IS checking row.ExpiresAt after the Delete (line 76-77)
+   - But this is AFTER deletion, so it doesn't prevent the race
+
+VERDICT on the claim:
+- The race condition IS REAL (both goroutines can read same state)
+- It IS a violation of the "single-use" contract
+- But it's MITIGATED by OAuth provider-side protections
+- No credentials leak, but the contract is violated
+- This should be fixed with an explicit transaction for correctness
+
+The claim is TECHNICALLY ACCURATE: there IS a TOCTOU race.

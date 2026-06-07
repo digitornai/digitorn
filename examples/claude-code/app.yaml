@@ -11,6 +11,46 @@ app:
 dev:
   allow_user_skills: true
 
+# Per-turn context injection — rendered FRESH every turn (never cached, so one
+# user's data never leaks into another's prompt). This is the live "environment
+# block" the agent gets each turn, the way Claude Code is handed its cwd / OS /
+# date / git snapshot. Sections compose by priority. Builtins (datetime, user,
+# session, environment, identity) are ready-made; `template` fills {{paths}} from
+# the data bag (user.* = JWT claims, env.*, session.*, app.*, agent.*, date/time).
+context:
+  sections:
+    - id: workspace
+      title: Workspace
+      template: |
+        Working directory: {{session.workdir}}
+        Platform: {{env.platform}} · architecture {{env.arch}}.
+        Every file path is relative to the working directory; you can only read and write inside it.
+      when: session.workdir
+      priority: 10
+    - id: now
+      builtin: datetime
+      priority: 11
+    - id: user
+      title: User
+      builtin: user
+      priority: 20
+    - id: locale
+      template: "Write to the user in their language ({{user.locale}}) unless they switch."
+      when: user.locale
+      priority: 21
+    - id: session
+      title: Session
+      builtin: session
+      priority: 30
+    - id: dev_rules
+      title: Working in this repository
+      text: |
+        - Confirm code with grep/read before you describe it, edit it, or claim an API exists — guessing about the code is a defect.
+        - Fan broad search out to the explore sub-agent; keep your own context for the focused edit.
+        - On multi-step work, create tasks up front and keep their status honest.
+        - Verify before you report. Show real output; never present an optimistic guess as fact.
+      priority: 40
+
 runtime:
   mode: conversation
   entry_agent: main

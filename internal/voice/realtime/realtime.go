@@ -47,16 +47,22 @@ type Tools interface {
 // Engine opens realtime sessions. dial connects the gateway realtime proxy for one
 // call; tools is the gated executor; model/voice configure the provider.
 type Engine struct {
-	dial  func(ctx context.Context, opts voice.SessionOpts) (Conn, error)
-	tools Tools
-	model string
-	voice string
+	dial        func(ctx context.Context, opts voice.SessionOpts) (Conn, error)
+	tools       Tools
+	model       string
+	voice       string
+	transcripts func(role, text string) // optional persistence sink (role: user|assistant)
 }
 
 // New builds a realtime engine.
 func New(dial func(ctx context.Context, opts voice.SessionOpts) (Conn, error), tools Tools, model, ttsVoice string) *Engine {
 	return &Engine{dial: dial, tools: tools, model: model, voice: ttsVoice}
 }
+
+// SetTranscriptSink registers a callback invoked with each finalized user/assistant
+// transcript so the daemon can persist the realtime conversation to session history.
+// The adapter only REPORTS transcripts ; persistence is the daemon's concern.
+func (e *Engine) SetTranscriptSink(fn func(role, text string)) { e.transcripts = fn }
 
 // Session opens one call's realtime conversation.
 func (e *Engine) Session(ctx context.Context, opts voice.SessionOpts) (voice.Session, error) {
@@ -66,13 +72,14 @@ func (e *Engine) Session(ctx context.Context, opts voice.SessionOpts) (voice.Ses
 	}
 	sctx, cancel := context.WithCancel(ctx)
 	s := &session{
-		conn:   conn,
-		tools:  e.tools,
-		ctx:    sctx,
-		cancel: cancel,
-		out:    make(chan voice.Frame, 256),
-		events: make(chan voice.Event, 64),
-		rate:   opts.SampleRate,
+		conn:        conn,
+		tools:       e.tools,
+		ctx:         sctx,
+		cancel:      cancel,
+		out:         make(chan voice.Frame, 256),
+		events:      make(chan voice.Event, 64),
+		rate:        opts.SampleRate,
+		transcripts: e.transcripts,
 	}
 	if err := s.configure(e.model, e.voice, opts.Context); err != nil {
 		cancel()
@@ -87,11 +94,12 @@ type session struct {
 	conn  Conn
 	tools Tools
 
-	ctx    context.Context
-	cancel context.CancelFunc
-	out    chan voice.Frame
-	events chan voice.Event
-	rate   int
+	ctx         context.Context
+	cancel      context.CancelFunc
+	out         chan voice.Frame
+	events      chan voice.Event
+	rate        int
+	transcripts func(role, text string)
 
 	mu       sync.Mutex
 	speaking bool
@@ -102,24 +110,37 @@ type session struct {
 // configure sends session.update: turn_detection OFF (our VAD drives turns), PCM16
 // both ways, the spoken-style instructions, and the gated toolset.
 func (s *session) configure(model, voice, instructions string) error {
-	sess := map[string]any{
-		"modalities":                []string{"audio", "text"},
-		"instructions":              instructions,
-		"voice":                     voice,
-		"input_audio_format":        "pcm16",
-		"output_audio_format":       "pcm16",
-		"turn_detection":            nil,
-		"input_audio_transcription": map[string]any{"model": "whisper-1"},
+	rate := s.rate
+	if rate <= 0 {
+		rate = 24000
 	}
-	// model is fixed at connection time via the gateway URL (?model=…) ; the OpenAI
-	// realtime protocol rejects a "model" field inside session.update, so we never
-	// resend it here. _ = model keeps the signature stable for callers/tests.
+	// GA realtime session shape : the audio config is nested under audio.input /
+	// audio.output (the beta flat input_audio_format/voice/modalities fields are
+	// rejected), and the discriminator session.type="realtime" is required. We drive
+	// turns ourselves, so server turn_detection is disabled (our VAD calls Commit).
+	sess := map[string]any{
+		"type":              "realtime",
+		"output_modalities": []string{"audio"},
+		"instructions":      instructions,
+		"audio": map[string]any{
+			"input": map[string]any{
+				"format":         map[string]any{"type": "audio/pcm", "rate": rate},
+				"turn_detection": nil,
+				"transcription":  map[string]any{"model": "whisper-1"},
+			},
+			"output": map[string]any{
+				"format": map[string]any{"type": "audio/pcm", "rate": rate},
+				"voice":  voice,
+			},
+		},
+	}
+	// model is fixed at connection time via the gateway URL (?model=…).
 	_ = model
 	specs := s.tools.Specs()
 	if len(specs) > 0 {
 		sess["tools"] = toolDefs(specs)
 	}
-	slog.Info("realtime: session.update", "voice", voice, "tools", len(specs), "instructions_len", len(instructions))
+	slog.Info("realtime: session.update", "voice", voice, "tools", len(specs), "rate", rate, "instructions_len", len(instructions))
 	return s.conn.Send(map[string]any{"type": "session.update", "session": sess})
 }
 
@@ -195,17 +216,26 @@ func (s *session) loop() {
 func (s *session) handle(ev map[string]any) {
 	et := str(ev, "type")
 	switch et {
-	case "response.audio.delta":
+	// Audio out : the GA realtime API (gpt-realtime) emits response.output_audio.delta ;
+	// the beta API used response.audio.delta. Accept both so we ride either upstream.
+	case "response.output_audio.delta", "response.audio.delta":
 		if b, err := base64.StdEncoding.DecodeString(str(ev, "delta")); err == nil && len(b) > 0 {
 			s.setSpeaking(true)
 			s.emitFrame(voice.Frame{Samples: bytesToPCM16(b), Rate: s.rate})
 		}
-	case "response.audio.done", "response.cancelled":
+	case "response.output_audio.done", "response.audio.done", "response.cancelled":
 		s.setSpeaking(false)
 	case "conversation.item.input_audio_transcription.completed":
 		if t := str(ev, "transcript"); t != "" {
 			slog.Info("realtime: user transcript", "text", t)
+			s.reportTranscript("user", t)
 			s.emit(voice.Event{Kind: voice.EvFinal, Text: t})
+		}
+	case "response.output_audio_transcript.done", "response.audio_transcript.done":
+		// The model's spoken reply, as text — persisted as the assistant message so
+		// /history reflects the realtime conversation.
+		if t := str(ev, "transcript"); t != "" {
+			s.reportTranscript("assistant", t)
 		}
 	case "response.function_call_arguments.done":
 		slog.Info("realtime: function call", "name", str(ev, "name"), "call_id", str(ev, "call_id"))
@@ -217,10 +247,10 @@ func (s *session) handle(ev map[string]any) {
 		slog.Warn("realtime: provider error event", "type", et, "event", ev)
 		s.emit(voice.Event{Kind: voice.EvError})
 	default:
-		// Diagnostic : surface the provider's control events (session.created,
-		// session.updated, response.created, input_audio_buffer.committed, …) so the
-		// flow is observable while Voie B is being brought up live.
-		slog.Info("realtime: event", "type", et)
+		// The provider's control events (session.created, response.created,
+		// input_audio_buffer.committed, …) are observable at debug level only — the
+		// meaningful transitions (transcript, function call, errors) log at info.
+		slog.Debug("realtime: event", "type", et)
 	}
 }
 
@@ -249,6 +279,15 @@ func (s *session) emit(e voice.Event) {
 	select {
 	case s.events <- e:
 	case <-s.ctx.Done():
+	}
+}
+
+// reportTranscript hands a finalized transcript to the daemon's persistence sink, if
+// one is wired. AppendDurable is write-behind (non-blocking), so calling it inline on
+// the event loop keeps the user→assistant ordering without stalling audio.
+func (s *session) reportTranscript(role, text string) {
+	if s.transcripts != nil && text != "" {
+		s.transcripts(role, text)
 	}
 }
 
@@ -307,4 +346,29 @@ func toolDefs(specs []ToolSpec) []map[string]any {
 	return out
 }
 
-// jsonString quotes s 
+// jsonString quotes s as a JSON string literal (for the function_call_output error).
+func jsonString(s string) string {
+	b := make([]byte, 0, len(s)+2)
+	b = append(b, '"')
+	for _, r := range s {
+		switch r {
+		case '"', '\\':
+			b = append(b, '\\', byte(r))
+		case '\n':
+			b = append(b, '\\', 'n')
+		case '\t':
+			b = append(b, '\\', 't')
+		case '\r':
+			b = append(b, '\\', 'r')
+		default:
+			if r < 0x20 {
+				continue
+			}
+			b = append(b, string(r)...)
+		}
+	}
+	b = append(b, '"')
+	return string(b)
+}
+
+var _ voice.Engine = (*Engine)(nil)

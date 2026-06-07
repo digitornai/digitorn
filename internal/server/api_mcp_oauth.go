@@ -183,7 +183,7 @@ func (d *Daemon) mcpOAuthTokenRevoke(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "server is not oauth2-authenticated")
 		return
 	}
-	if err := d.mcpOAuth.Revoke(r.Context(), userID, mcpoauth.ProviderOf(cfg)); err != nil {
+	if err := d.mcpOAuth.Revoke(r.Context(), cfg, userID); err != nil {
 		writeError(w, http.StatusInternalServerError, "revoke_failed", err.Error())
 		return
 	}

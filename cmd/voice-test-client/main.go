@@ -39,6 +39,7 @@ func main() {
 	ttsModel := flag.String("tts-model", "tts-1", "gateway TTS model")
 	engine := flag.String("engine", "", "daemon voice engine: \"\" (Voie A pipeline) or \"realtime\" (Voie B)")
 	realtimeModel := flag.String("realtime-model", "gpt-4o-realtime-preview", "gateway realtime model (engine=realtime)")
+	idle := flag.Int("idle", 3, "seconds of silence before the reply is considered complete (raise for tool-call turns)")
 	token := flag.String("token", "", "bearer token (default: credentials.json)")
 	flag.Parse()
 
@@ -68,7 +69,7 @@ func main() {
 		fmt.Printf("engine: realtime (Voie B) · model %q\n", *realtimeModel)
 	}
 	fmt.Println("connecting voice WS + streaming...")
-	reply := c.voiceExchange(appID, sid, question, *rate, *sttModel, *ttsModel, *voice, *engine, *realtimeModel)
+	reply := c.voiceExchange(appID, sid, question, *rate, *sttModel, *ttsModel, *voice, *engine, *realtimeModel, *idle)
 	fmt.Printf("reply audio: %d samples (%.1fs)\n", len(reply), float64(len(reply))/float64(*rate))
 	if len(reply) == 0 {
 		die("no audio reply received — the agent did not speak back")
@@ -166,7 +167,7 @@ func (c *client) stt(pcm []int16, rate int, model string) string {
 
 // voiceExchange streams the question PCM + trailing silence into the daemon voice WS
 // and collects the reply PCM frames.
-func (c *client) voiceExchange(appID, sid string, question []int16, rate int, sttModel, ttsModel, voice, engine, realtimeModel string) []int16 {
+func (c *client) voiceExchange(appID, sid string, question []int16, rate int, sttModel, ttsModel, voice, engine, realtimeModel string, idleSec int) []int16 {
 	q := neturl.Values{}
 	q.Set("rate", fmt.Sprint(rate))
 	q.Set("stt_model", sttModel)
@@ -185,10 +186,16 @@ func (c *client) voiceExchange(appID, sid string, question []int16, rate int, st
 	defer conn.Close()
 
 	// Reader: collect reply PCM until the socket is idle for a while after audio.
+	if idleSec <= 0 {
+		idleSec = 3
+	}
+	idle := time.Duration(idleSec) * time.Second
 	replyCh := make(chan []int16, 1)
 	go func() {
 		var reply []int16
-		_ = conn.SetReadDeadline(time.Now().Add(20 * time.Second))
+		// Generous initial window: the question itself streams in real-time, and a
+		// tool-call turn adds a gated round-trip before the model resumes speaking.
+		_ = conn.SetReadDeadline(time.Now().Add(40 * time.Second))
 		for {
 			mt, data, err := conn.ReadMessage()
 			if err != nil {
@@ -197,8 +204,10 @@ func (c *client) voiceExchange(appID, sid string, question []int16, rate int, st
 			}
 			if mt == websocket.BinaryMessage {
 				reply = append(reply, bytesToPCM(data)...)
-				// extend the deadline while audio flows; stop ~1.5s after it ends.
-				_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+				// Extend while audio flows; stop `idle` seconds after it ends. A
+				// tool-call turn goes silent during the gated execution, so raise
+				// -idle to bridge that gap and capture the post-tool answer.
+				_ = conn.SetReadDeadline(time.Now().Add(idle))
 			}
 		}
 	}()

@@ -40,7 +40,11 @@ func (s *Service) ResolveAuth(ctx context.Context, userID, appID, moduleID, tool
 	if tok != nil && tok.AccessToken != "" {
 		fresh, rerr := s.flow.refreshIfNeeded(ctx, ra, tok)
 		if rerr == nil && fresh != nil {
-			if fresh.AccessToken != tok.AccessToken {
+			// Persist whenever a refresh actually happened (refreshIfNeeded returns
+			// the SAME pointer when still valid, a NEW one when refreshed) — even if
+			// the access_token is unchanged but the expiry moved. Best-effort: a
+			// failed write self-heals on the next call's refresh.
+			if fresh != tok {
 				_ = s.tokens.Set(ctx, userID, provider, fresh)
 			}
 			return &service.AuthContext{

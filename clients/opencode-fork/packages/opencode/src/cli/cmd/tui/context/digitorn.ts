@@ -2251,7 +2251,17 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
           cfg,
           `/api/apps/${app}/sessions/${encodeURIComponent(sid)}/history?limit=2000`,
         )
-        return jsonRes(toOcMessages(sid, r.messages ?? [], dir))
+        const msgs = r.messages ?? []
+        // Replay any events emitted AFTER this history snapshot. Covers the
+        // create-on-home → send → open-chat race : the first turn can stream (and
+        // even finish) before we joined the room, so its events would be lost and
+        // the message would sit with no reply. Replay since the history's last seq
+        // fills exactly that gap without re-feeding the whole session.
+        const maxSeq = msgs.reduce((mx, m) => Math.max(mx, Number(m?.seq ?? 0)), lastSeqOf.get(sid) ?? 0)
+        lastSeqOf.set(sid, maxSeq)
+        socket?.emit("replay", { session_id: sid, since: maxSeq })
+        dlog(`open-replay ${sid.slice(0, 8)} since=${maxSeq}`)
+        return jsonRes(toOcMessages(sid, msgs, dir))
       } catch {
         return jsonRes([])
       }

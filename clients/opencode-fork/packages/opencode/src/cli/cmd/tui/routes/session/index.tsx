@@ -1136,7 +1136,14 @@ export function Session() {
       >
         <box flexDirection="row" flexGrow={1} minHeight={0}>
           <box flexGrow={1} minHeight={0} paddingBottom={1} paddingLeft={2} paddingRight={2} gap={1}>
-            <Show when={session()}>
+            <Show
+              when={session()}
+              fallback={
+                <box flexGrow={1} minHeight={0} justifyContent="center" alignItems="center">
+                  <Spinner color={theme.textMuted}>Loading session…</Spinner>
+                </box>
+              }
+            >
               <scrollbox
                 ref={(r) => (scroll = r)}
                 viewportOptions={{

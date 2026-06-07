@@ -87,9 +87,15 @@ func (s *Service) SetManual(ctx context.Context, userID, provider string, tok *T
 	return s.tokens.Set(ctx, userID, provider, tok)
 }
 
-// Revoke removes the (user, provider) token. Scoped — never touches other users.
-func (s *Service) Revoke(ctx context.Context, userID, provider string) error {
-	return s.tokens.Delete(ctx, userID, provider)
+// Revoke best-effort revokes the token at the provider (RFC 7009), then deletes
+// it locally. Scoped to (user, provider) — never touches other users. The local
+// delete always runs even if the provider revoke fails.
+func (s *Service) Revoke(ctx context.Context, cfg *schema.MCPAuthConfig, userID string) error {
+	ra := resolveAuth(cfg)
+	if tok, err := s.tokens.Get(ctx, userID, ra.Provider); err == nil && tok != nil && tok.AccessToken != "" {
+		_ = s.flow.revoke(ctx, ra, tok.AccessToken)
+	}
+	return s.tokens.Delete(ctx, userID, ra.Provider)
 }
 
 // HasValidToken reports whether (user, provider) holds a present, non-expired

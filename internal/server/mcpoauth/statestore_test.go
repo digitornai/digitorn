@@ -3,6 +3,8 @@ package mcpoauth
 import (
 	"context"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,6 +20,9 @@ func newTestStateStore(t *testing.T) (*StateStore, *gorm.DB) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
+	if sqlDB, derr := gdb.DB(); derr == nil {
+		sqlDB.SetMaxOpenConns(1)
+	}
 	if err := gdb.AutoMigrate(&models.OAuthState{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
@@ -26,6 +31,30 @@ func newTestStateStore(t *testing.T) (*StateStore, *gorm.DB) {
 		t.Fatalf("sealer: %v", err)
 	}
 	return NewStateStore(gdb, sealer), gdb
+}
+
+func TestStateStore_ConcurrentTakeIsSingleUse(t *testing.T) {
+	s, _ := newTestStateStore(t)
+	ctx := context.Background()
+	if err := s.Put(ctx, PendingState{State: "race", UserID: "u", Provider: "google", ServerID: "srv", Verifier: "v"}); err != nil {
+		t.Fatal(err)
+	}
+	const n = 16
+	var wins int64
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if got, err := s.TakeValid(ctx, "race"); err == nil && got != nil {
+				atomic.AddInt64(&wins, 1)
+			}
+		}()
+	}
+	wg.Wait()
+	if wins != 1 {
+		t.Fatalf("single-use violated: %d goroutines consumed the same state", wins)
+	}
 }
 
 func TestStateStore_PutTakeSingleUse(t *testing.T) {
