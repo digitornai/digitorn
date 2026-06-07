@@ -26,6 +26,26 @@ go.work.sum
 # env file
 .env
 
+# --- bin/ build outputs ---------------------------------------------------
+# Keep ONLY the runnable binaries needed to launch without a rebuild ; ignore
+# every backup / variant (.bak / .old / .cache / .fix / preVoiceB / voiceB …),
+# all logs, and scratch dirs. NOTE : already-committed junk must ALSO be
+# untracked once (it stays ignored after) :  git rm -r --cached <those files>.
+bin/*.exe
+!bin/digitornd.exe
+!bin/digitorn.exe
+!bin/digitorn-cli.exe
+!bin/digitorn-background.exe
+!bin/digitorn-worker.exe
+!bin/digitorn-worker-llm.exe
+!bin/digitorn-worker-embeddings.exe
+!bin/digitorn-worker-tokenizer.exe
+bin/*.bak*
+bin/*.old*
+bin/*.preVoiceB
+bin/.vite/
+bin/_deleted-configs-bak/
+
 # Editor/IDE
 # .idea/
 # .vscode/
