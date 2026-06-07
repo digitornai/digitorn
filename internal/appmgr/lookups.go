@@ -107,6 +107,10 @@ func (m *gormManager) GetManifest(ctx context.Context, appID string) (*schema.Ap
 // logged and skipped — the daemon never panics on a single broken
 // app. Returns nil even if some apps failed (use the logs to surface).
 func (m *gormManager) Bootstrap(ctx context.Context) error {
+	// Install any bundled built-in app the DB doesn't know yet, so a fresh database
+	// comes up with working apps. Runs before the load below picks up its DB row.
+	m.seedBuiltins(ctx)
+
 	var rows []models.App
 	if err := m.cfg.DB.WithContext(ctx).Where("enabled = ?", true).Find(&rows).Error; err != nil {
 		return fmt.Errorf("appmgr: bootstrap query: %w", err)
