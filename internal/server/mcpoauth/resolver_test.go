@@ -2,6 +2,8 @@ package mcpoauth
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"testing"
 
@@ -87,6 +89,31 @@ func TestResolveAuth_TokenPresentReturnsAuthContext(t *testing.T) {
 	}
 	if ac == nil || ac.Token != "AT" || ac.EnvTokenVar != "GH_TOK" {
 		t.Fatalf("bad auth context: %+v", ac)
+	}
+}
+
+func TestResolveAuth_PersistsRefreshedExpiry(t *testing.T) {
+	s := newTestService(t)
+	ctx := context.Background()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token":"SAME","token_type":"Bearer","expires_in":3600}`))
+	}))
+	defer srv.Close()
+
+	if err := s.tokens.Set(ctx, "u", "custom", &Token{AccessToken: "SAME", RefreshToken: "rt", ExpiresAt: 1}); err != nil {
+		t.Fatal(err)
+	}
+	s.SetServerAuthLookup(func(string, string) *schema.MCPAuthConfig {
+		return &schema.MCPAuthConfig{Type: "oauth2", Provider: "custom", ClientID: "c", TokenURL: srv.URL}
+	})
+	ac, ch, err := s.ResolveAuth(ctx, "u", "app", "mcp", "mcp_srv__do")
+	if err != nil || ch != nil || ac == nil {
+		t.Fatalf("resolve: ac=%v ch=%v err=%v", ac, ch, err)
+	}
+	stored, _ := s.tokens.Get(ctx, "u", "custom")
+	if stored == nil || stored.ExpiresAt <= 1 {
+		t.Fatalf("refreshed expiry not persisted: %+v", stored)
 	}
 }
 

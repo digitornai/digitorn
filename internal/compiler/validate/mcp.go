@@ -26,10 +26,10 @@ func CheckMCPConfig(file string, def *schema.AppDefinition, bag *diagnostic.Bag)
 	}
 	for k := range block.Config {
 		switch k {
-		case "workspace", "servers", "cache", "middleware":
+		case "workspace", "servers", "cache", "middleware", "auto_install":
 		default:
 			bag.Add(diagnostic.Errorf(diagnostic.CodeUnknownField, posUnknown,
-				"tools.modules.mcp.config.%s: unknown field (allowed: workspace, servers, cache, middleware)", k))
+				"tools.modules.mcp.config.%s: unknown field (allowed: workspace, servers, cache, middleware, auto_install)", k))
 		}
 	}
 	servers, bad := schema.NormalizeServers(block.Config["servers"])

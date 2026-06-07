@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -721,89 +722,79 @@ func isoNano(ns int64) string {
 // fine for V1 development workloads. V2 will add an index.
 func (d *Daemon) walkSessionMeta(appID, userID string) ([]sessionSummary, error) {
 	root := d.sessionPaths.Root
-	var out []sessionSummary
+	// Phase 1 — collect candidate meta.json paths. Sub-agent transcript dirs
+	// (<sid>::agent::<run>, percent-escaped on disk) are internal delegation logs,
+	// never user conversations : skip them by DIR NAME so we never even read their
+	// meta. With heavy delegation there are hundreds of these, and reading every one
+	// just to drop it was pure waste.
+	var paths []string
 	err := filepath.WalkDir(root, func(path string, e fs.DirEntry, err error) error {
-		if err != nil {
+		if err != nil || e.IsDir() || e.Name() != "meta.json" {
 			return nil
 		}
-		if e.IsDir() {
+		dirName := filepath.Base(filepath.Dir(path))
+		if _, _, isSub := sessionstore.SubAgentSession(sessionstore.DecodeSessionDir(dirName)); isSub {
 			return nil
 		}
-		if e.Name() != "meta.json" {
-			return nil
+		paths = append(paths, path)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	// Phase 2 — read + parse in parallel. The cost is per-file I/O (meta read, plus
+	// a one-time events scan for un-previewed sessions), so a bounded fan-out cuts
+	// wall-time on a large store from many seconds to ~1.
+	summaries := make([]*sessionSummary, len(paths))
+	sem := make(chan struct{}, 16)
+	var wg sync.WaitGroup
+	for i := range paths {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			summaries[i] = d.readSessionSummary(paths[i], appID, userID)
+		}(i)
+	}
+	wg.Wait()
+	out := make([]sessionSummary, 0, len(paths))
+	for _, s := range summaries {
+		if s != nil {
+			out = append(out, *s)
 		}
-		dir := filepath.Dir(path)
-		meta, err := sessionstore.ReadMeta(path)
-		if err != nil || meta == nil {
-			return nil
-		}
-		if appID != "" && meta.AppID != "" && meta.AppID != appID {
-			return nil
-		}
-		if userID != "" && meta.UserID != "" && meta.UserID != userID {
-			return nil
-		}
-		// The session ID is the authoritative value from meta.json, NOT the
-		// directory name : a sub-agent session ID contains ':' which is
-		// percent-escaped on disk (Windows can't have ':' in a path
-		// component). Fall back to decoding the dir name for any legacy
-		// session whose meta predates the SessionID field.
-		sid := meta.SessionID
-		if sid == "" {
-			sid = sessionstore.DecodeSessionDir(filepath.Base(dir))
-		}
-		// Never list a sub-agent's isolated session ("<root>::agent::<run>") : it's
-		// an internal delegation transcript, not a user conversation, and it shares
-		// the parent's app_id + user_id so it would otherwise pollute the picker.
-		// (The stale-event_count filter used to hide these by accident ; counting
-		// from the events file correctly now surfaces them, so exclude explicitly.)
-		if _, _, isSub := sessionstore.SubAgentSession(sid); isSub {
-			return nil
-		}
-		// Fast path : a cached preview means the session is indexed (it has a user
-		// message, and its count/seq/updated_at were synced by the bus on eviction
-		// or by the loader on cold-load). List it straight from meta.json without
-		// touching its events file — this is what keeps listing cheap at thousands
-		// of sessions.
-		if meta.Preview != "" {
-			out = append(out, sessionSummary{
-				SessionID:  sid,
-				AppID:      meta.AppID,
-				UserID:     meta.UserID,
-				Title:      meta.Title,
-				LastSeq:    meta.LastSeq,
-				EventCount: meta.EventCount,
-				StartedAt:  isoNano(meta.StartedAtNano),
-				UpdatedAt:  isoNano(meta.UpdatedAtNano),
-				Workspace:  meta.Workspace,
-				Workdir:    meta.Workdir,
-				Preview:    meta.Preview,
-			})
-			return nil
-		}
-		// Heal path : no cached preview. Either a genuinely empty shell (just
-		// session_started) or a session whose meta predates preview-caching / was
-		// never synced (event_count frozen at 1). Read the events file ONCE to
-		// disambiguate, then write the derived preview + accurate counters back so
-		// every future list takes the fast path above. The expensive scan happens
-		// at most once per session (plus a cheap 1-line re-read of empty shells).
-		scan := scanSessionStats(d.sessionPaths.EventsFile(sid))
-		if !scan.hasUser && scan.events <= 1 && meta.EventCount <= 1 {
-			return nil // empty shell : no conversation to show
-		}
-		if meta.EventCount < scan.events {
-			meta.EventCount = scan.events
-		}
-		if meta.LastSeq < scan.lastSeq {
-			meta.LastSeq = scan.lastSeq
-		}
-		if scan.lastTsNano > 0 {
-			meta.UpdatedAtNano = scan.lastTsNano
-		}
-		meta.Preview = scan.preview
-		// Best-effort self-heal : a failed write just means the next list re-scans.
-		_ = sessionstore.WriteMetaAtomic(dir, meta, false)
-		out = append(out, sessionSummary{
+	}
+	return out, nil
+}
+
+// readSessionSummary turns one session's meta.json into a summary, or nil to skip
+// (wrong app/user, empty shell, unreadable). Fast path : a cached preview lists
+// straight from meta. Heal path : no preview → scan the events file once and write
+// the derived preview + counters back so the next list is cheap. Safe to call from
+// many goroutines : each touches a distinct session directory.
+func (d *Daemon) readSessionSummary(path, appID, userID string) *sessionSummary {
+	dir := filepath.Dir(path)
+	meta, err := sessionstore.ReadMeta(path)
+	if err != nil || meta == nil {
+		return nil
+	}
+	if appID != "" && meta.AppID != "" && meta.AppID != appID {
+		return nil
+	}
+	if userID != "" && meta.UserID != "" && meta.UserID != userID {
+		return nil
+	}
+	// The session ID is the authoritative value from meta.json ; fall back to the
+	// decoded dir name for any legacy session whose meta predates the field.
+	sid := meta.SessionID
+	if sid == "" {
+		sid = sessionstore.DecodeSessionDir(filepath.Base(dir))
+	}
+	if _, _, isSub := sessionstore.SubAgentSession(sid); isSub {
+		return nil
+	}
+	if meta.Preview != "" {
+		return &sessionSummary{
 			SessionID:  sid,
 			AppID:      meta.AppID,
 			UserID:     meta.UserID,
@@ -815,13 +806,37 @@ func (d *Daemon) walkSessionMeta(appID, userID string) ([]sessionSummary, error)
 			Workspace:  meta.Workspace,
 			Workdir:    meta.Workdir,
 			Preview:    meta.Preview,
-		})
-		return nil
-	})
-	if err != nil {
-		return nil, err
+		}
 	}
-	return out, nil
+	scan := scanSessionStats(d.sessionPaths.EventsFile(sid))
+	if !scan.hasUser && scan.events <= 1 && meta.EventCount <= 1 {
+		return nil // empty shell : no conversation to show
+	}
+	if meta.EventCount < scan.events {
+		meta.EventCount = scan.events
+	}
+	if meta.LastSeq < scan.lastSeq {
+		meta.LastSeq = scan.lastSeq
+	}
+	if scan.lastTsNano > 0 {
+		meta.UpdatedAtNano = scan.lastTsNano
+	}
+	meta.Preview = scan.preview
+	// Best-effort self-heal : a failed write just means the next list re-scans.
+	_ = sessionstore.WriteMetaAtomic(dir, meta, false)
+	return &sessionSummary{
+		SessionID:  sid,
+		AppID:      meta.AppID,
+		UserID:     meta.UserID,
+		Title:      meta.Title,
+		LastSeq:    meta.LastSeq,
+		EventCount: meta.EventCount,
+		StartedAt:  isoNano(meta.StartedAtNano),
+		UpdatedAt:  isoNano(meta.UpdatedAtNano),
+		Workspace:  meta.Workspace,
+		Workdir:    meta.Workdir,
+		Preview:    meta.Preview,
+	}
 }
 
 // sessionScan is the per-session view the list endpoint derives from the events

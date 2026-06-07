@@ -70,8 +70,15 @@ func (s *StateStore) TakeValid(ctx context.Context, state string) (*PendingState
 	if err != nil {
 		return nil, err
 	}
-	if derr := s.db.WithContext(ctx).Where("state = ?", state).Delete(&models.OAuthState{}).Error; derr != nil {
-		return nil, derr
+	// The delete is the atomic single-use claim: concurrent callers may all read
+	// the row, but only the one whose delete actually removes it (RowsAffected==1)
+	// proceeds; the losers see 0 rows and back off.
+	del := s.db.WithContext(ctx).Where("state = ?", state).Delete(&models.OAuthState{})
+	if del.Error != nil {
+		return nil, del.Error
+	}
+	if del.RowsAffected == 0 {
+		return nil, nil
 	}
 	if row.ExpiresAt.Before(now) {
 		return nil, nil

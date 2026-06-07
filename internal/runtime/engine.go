@@ -935,6 +935,17 @@ func (e *Engine) runPhases(
 		}
 	}
 
+	// App-declared context sections (YAML `context:` blocks) — user / session /
+	// date / custom data, rendered fresh each turn. Per-turn for the same isolation
+	// reason as the workdir + channel context above (never in the cached prompt).
+	if cs := e.contextSectionsText(in, agent, app, snap); cs != "" {
+		if systemPrompt != "" {
+			systemPrompt += "\n\n" + cs
+		} else {
+			systemPrompt = cs
+		}
+	}
+
 	// BYOK routing decided once per turn (doesn't change across rounds).
 	var (
 		apiKey  string

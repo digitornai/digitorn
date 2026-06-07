@@ -1,0 +1,86 @@
+#!/usr/bin/env python3
+"""MCP server wrapper that fixes the FastMCP pre_parse_json bug, then runs the
+real server. Standalone: `python sdk_fix_wrapper.py <command> [args...]`."""
+
+from __future__ import annotations
+
+import json
+import sys
+import typing
+from typing import Annotated, Any, Union
+
+
+def _annotation_accepts_str(annotation: Any) -> bool:
+    if annotation is str:
+        return True
+    origin = typing.get_origin(annotation)
+    if origin is Annotated:
+        args = typing.get_args(annotation)
+        return _annotation_accepts_str(args[0]) if args else False
+    if origin is Union or origin is type(str | None):  # type: ignore[comparison-overlap]
+        return any(_annotation_accepts_str(a) for a in typing.get_args(annotation))
+    return False
+
+
+def _patched_pre_parse_json(self: Any, data: dict[str, Any]) -> dict[str, Any]:
+    new_data = data.copy()
+    key_to_field_info: dict[str, Any] = {}
+    for field_name, field_info in self.arg_model.model_fields.items():
+        key_to_field_info[field_name] = field_info
+        if field_info.alias:
+            key_to_field_info[field_info.alias] = field_info
+    for data_key, data_value in data.items():
+        if data_key not in key_to_field_info:
+            continue
+        field_info = key_to_field_info[data_key]
+        if _annotation_accepts_str(field_info.annotation):
+            continue
+        if isinstance(data_value, str) and field_info.annotation is not str:
+            try:
+                pre_parsed = json.loads(data_value)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(pre_parsed, str | int | float):
+                continue
+            new_data[data_key] = pre_parsed
+    assert new_data.keys() == data.keys()
+    return new_data
+
+
+def _apply_patch() -> None:
+    try:
+        from mcp.server.fastmcp.utilities.func_metadata import FuncMetadata
+    except Exception:
+        return
+    FuncMetadata.pre_parse_json = _patched_pre_parse_json
+
+
+def main() -> None:
+    if len(sys.argv) < 2:
+        print("Usage: python sdk_fix_wrapper.py <command> [args...]", file=sys.stderr)
+        sys.exit(1)
+
+    _apply_patch()
+
+    import os
+    import runpy
+    import shutil
+
+    command = sys.argv[1]
+    sys.argv = sys.argv[1:]
+
+    if os.path.isabs(command) or os.sep in command:
+        script_path = command if os.path.isfile(command) else None
+    else:
+        script_path = shutil.which(command)
+
+    if not script_path:
+        print(f"Command not found: {command}", file=sys.stderr)
+        sys.exit(1)
+
+    sys.argv[0] = script_path
+    runpy.run_path(script_path, run_name="__main__")
+
+
+if __name__ == "__main__":
+    main()

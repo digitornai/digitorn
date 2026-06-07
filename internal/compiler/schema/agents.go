@@ -25,6 +25,9 @@ type Agent struct {
 	Pool         *AgentPoolConfig   `yaml:"pool,omitempty"`
 	Coordination *CoordinationBlock `yaml:"coordination,omitempty"`
 	Instructions *InstructionsBlock `yaml:"instructions,omitempty"`
+	// Context : per-agent context sections, layered ON TOP of the app-level
+	// context (a section sharing an id overrides the app's).
+	Context      *ContextBlock      `yaml:"context,omitempty"`
 	Hooks        []Hook             `yaml:"hooks,omitempty"`
 }
 

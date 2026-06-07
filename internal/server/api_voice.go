@@ -3,9 +3,11 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -130,6 +132,7 @@ func (d *Daemon) voiceRealtime(w http.ResponseWriter, r *http.Request, appID, si
 		writeError(w, http.StatusInternalServerError, "voice_context", err.Error())
 		return
 	}
+	slog.Info("voice realtime: starting", "app", appID, "session", sid, "model", model, "tools", len(tools), "gateway", gatewayBase)
 
 	rtTools := realtime.ToolsFunc{
 		SpecsFn: func() []realtime.ToolSpec { return toRealtimeSpecs(tools) },
@@ -152,9 +155,35 @@ func (d *Daemon) voiceRealtime(w http.ResponseWriter, r *http.Request, appID, si
 	}
 
 	dial := func(ctx context.Context, _ voice.SessionOpts) (realtime.Conn, error) {
-		return realtime.DialGateway(ctx, gatewayBase, jwt, model)
+		conn, derr := realtime.DialGateway(ctx, gatewayBase, jwt, model)
+		if derr != nil {
+			slog.Warn("voice realtime: dial gateway failed", "err", derr.Error(), "gateway", gatewayBase, "model", model)
+		} else {
+			slog.Info("voice realtime: dialed gateway ok", "model", model)
+		}
+		return conn, derr
 	}
-	orch := voice.NewOrchestrator(realtime.New(dial, rtTools, model, ttsVoice))
+	rtEngine := realtime.New(dial, rtTools, model, ttsVoice)
+	// Persist the realtime conversation : in Voie B no daemon turn runs, so the user +
+	// assistant transcripts are durably appended here so /history mirrors the call.
+	rtEngine.SetTranscriptSink(func(role, text string) {
+		evType, msgRole := sessionstore.EventAssistantMessage, "assistant"
+		if role == "user" {
+			evType, msgRole = sessionstore.EventUserMessage, "user"
+		}
+		pctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, perr := d.sessionStore.AppendDurable(pctx, sessionstore.Event{
+			Type:      evType,
+			SessionID: sid,
+			AppID:     appID,
+			UserID:    uid,
+			Message:   &sessionstore.MessagePayload{Role: msgRole, Content: text},
+		}); perr != nil {
+			slog.Warn("voice realtime: persist transcript failed", "role", role, "err", perr.Error())
+		}
+	})
+	orch := voice.NewOrchestrator(rtEngine)
 
 	instructions := sysPrompt
 	if instructions == "" {

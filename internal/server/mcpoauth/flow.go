@@ -216,10 +216,41 @@ func (f *Flow) refreshIfNeeded(ctx context.Context, ra resolvedAuth, tok *Token)
 	if err != nil {
 		return nil, err
 	}
+	if refreshed.AccessToken == "" {
+		return nil, fmt.Errorf("mcpoauth: refresh returned no access_token")
+	}
 	if refreshed.RefreshToken == "" {
 		refreshed.RefreshToken = tok.RefreshToken
 	}
 	return refreshed, nil
+}
+
+// revoke best-effort calls the provider's revoke endpoint (RFC 7009). Many
+// providers don't advertise one (RevokeURL empty) — then it is a no-op.
+func (f *Flow) revoke(ctx context.Context, ra resolvedAuth, token string) error {
+	if ra.RevokeURL == "" || token == "" {
+		return nil
+	}
+	form := url.Values{}
+	form.Set("token", token)
+	if ra.TokenAuthMethod != "basic" {
+		form.Set("client_id", ra.ClientID)
+		form.Set("client_secret", ra.ClientSecret)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ra.RevokeURL, strings.NewReader(form.Encode()))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+	if ra.TokenAuthMethod == "basic" {
+		req.SetBasicAuth(ra.ClientID, ra.ClientSecret)
+	}
+	resp, err := f.client.Do(req)
+	if err != nil {
+		return err
+	}
+	return resp.Body.Close()
 }
 
 // postToken sends a token-endpoint request. basic providers carry client creds

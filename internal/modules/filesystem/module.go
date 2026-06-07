@@ -15,9 +15,11 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	domainmodule "github.com/mbathepaul/digitorn/internal/domain/module"
 	"github.com/mbathepaul/digitorn/internal/domain/tool"
+	"github.com/mbathepaul/digitorn/internal/runtime/context/repomap"
 	"github.com/mbathepaul/digitorn/internal/runtime/workdir"
 	"github.com/mbathepaul/digitorn/pkg/module"
 )
@@ -567,6 +569,7 @@ func (m *Module) write(ctx context.Context, raw json.RawMessage) (tool.Result, e
 	}
 	tindexes.markDirty(abs) // keep this file fresh against any trigram index
 	sindexes.markDirty(abs) // and against the ephemeral semantic index
+	repomap.MarkDirty(abs)  // and the ranked codebase map
 	notifyFileChange(ctx)   // live workspace push (non-blocking, best-effort)
 	action := "created"
 	if existed {
@@ -1176,6 +1179,24 @@ func (m *Module) grep(ctx context.Context, raw json.RawMessage) (tool.Result, er
 			return relInside(base, real)
 		},
 	}
+	// Code-intelligence enrichment is kicked IN PARALLEL with the exact scan
+	// so it overlaps and never delays grep. Best-effort + recover-guarded +
+	// bounded at the join : a missing / building / broken index just yields
+	// exact-only. Off entirely unless the app enabled auto_index_workdir, so
+	// the base grep path keeps its benchmark speed.
+	var relCh chan []sHit
+	if mode == grepContent && strings.ToLower(p.Semantic) != "off" {
+		if model, on := codeIndexConfig(ctx); on {
+			if emb := module.EmbedderFrom(ctx); emb != nil {
+				relCh = make(chan []sHit, 1)
+				go func() {
+					defer func() { _ = recover() }()
+					relCh <- m.codeEnrich(ctx, root, emb, model, p.Pattern)
+				}()
+			}
+		}
+	}
+
 	// Trigram fast path : ask the per-root index for the handful of files that
 	// could match, then confirm only those. Falls back to a full parallel scan
 	// when no index is ready yet or the pattern yields no trigram narrowing.
@@ -1198,21 +1219,42 @@ func (m *Module) grep(ctx context.Context, raw json.RawMessage) (tool.Result, er
 	default:
 		data["matches"] = res.Matches
 	}
-	// Native code intelligence : when the app enables auto_index_workdir,
-	// fuse the semantically-nearest code chunks (ephemeral per-workdir
-	// index, built off-loop, LRU+TTL bounded) alongside the exact matches.
-	if mode == grepContent && strings.ToLower(p.Semantic) != "off" {
-		if model, on := codeIndexConfig(ctx); on {
-			if emb := module.EmbedderFrom(ctx); emb != nil {
-				si := sindexes.get(root, m.cfg.MaxFileBytes)
-				si.maybeBuild(emb, model)
-				if rel := si.search(ctx, emb, model, p.Pattern, 8); len(rel) > 0 {
-					data["related"] = rel
-				}
+	// Join the parallel enrichment with a hard budget — the exact result is
+	// already computed, so this never slows grep beyond the budget (and the
+	// work overlapped the scan). Timeout / cancel → exact-only.
+	if relCh != nil {
+		select {
+		case rel := <-relCh:
+			if len(rel) > 0 {
+				data["related"] = rel
 			}
+		case <-time.After(codeEnrichBudget):
+		case <-ctx.Done():
 		}
 	}
 	return tool.Result{Success: true, Data: data}, nil
+}
+
+// codeEnrichBudget caps how long grep waits for the parallel code-semantic
+// enrichment after the exact scan. Bounded so grep never slows materially.
+const codeEnrichBudget = 200 * time.Millisecond
+
+// codeEnrich runs the semantic code search + graph context for a pattern.
+// recover-guarded : any failure returns nil (grep stays exact-only).
+func (m *Module) codeEnrich(ctx context.Context, root string, emb module.Embedder, model, pattern string) (hits []sHit) {
+	defer func() { _ = recover() }()
+	si := sindexes.get(root, m.cfg.MaxFileBytes)
+	si.maybeBuild(emb, model)
+	hits = si.search(ctx, emb, model, pattern, 8)
+	for i := range hits {
+		sc := codeContextFor(root, m.cfg.MaxFileBytes, hits[i].Path, hits[i].Line)
+		if hits[i].Symbol == "" {
+			hits[i].Symbol = sc.Symbol
+		}
+		hits[i].Callers = sc.Callers
+		hits[i].Imports = sc.Imports
+	}
+	return hits
 }
 
 // codeIndexConfig reads the app's per-module config : whether the
