@@ -303,6 +303,23 @@ func (m *Module) run(ctx context.Context, raw json.RawMessage) (tool.Result, err
 	if msg := backgroundAmpHint(command); msg != "" {
 		return errResult(errors.New(msg)), nil
 	}
+	// A server/watcher in the FOREGROUND pins the turn until the timeout (the loop
+	// must never be blocked). Background dispatches are exempt — that IS the right
+	// channel for a long-living process.
+	if !tool.IsBackground(ctx) {
+		if msg := foregroundServerHint(command); msg != "" {
+			return errResult(errors.New(msg)), nil
+		}
+	}
+	// Windows shell-dialect confusion: on a bash/sh shell (incl. the pure-Go
+	// goshell) the model sometimes types cmd.exe syntax (`dir /B /S`, `copy`,
+	// `del`). Reject with the bash equivalent instead of a cryptic exit-127.
+	// A PowerShell target is exempt — it aliases these and has bashismHint.
+	if m.useGoShell || m.kind != "powershell" {
+		if msg := dosHint(command); msg != "" {
+			return errResult(errors.New(msg)), nil
+		}
+	}
 
 	// No real bash on this host → run the agent's bash in the built-in pure-Go
 	// interpreter (never PowerShell). Self-contained and identical on every OS.
@@ -321,6 +338,7 @@ func (m *Module) run(ctx context.Context, raw json.RawMessage) (tool.Result, err
 		started := time.Now()
 		res := runGoShell(ctx, command, root, buildEnv(m.cfg.EnvAllow), m.cfg.MaxOutput, p.Input, timeout)
 		m.enrich(&res, root, started)
+		workdir.NotifyFileChange(ctx) // a command may mutate the tree; shadow-repo git status is the arbiter
 		return m.result(command, res, nil, timeout), nil
 	}
 
@@ -386,6 +404,7 @@ func (m *Module) run(ctx context.Context, raw json.RawMessage) (tool.Result, err
 		res.Cwd = root
 	}
 	m.enrich(&res, root, started)
+	workdir.NotifyFileChange(ctx) // a command may mutate the tree; shadow-repo git status is the arbiter
 	return m.result(command, res, err, timeout), nil
 }
 

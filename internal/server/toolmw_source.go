@@ -30,6 +30,27 @@ type appGetter interface {
 	Get(ctx context.Context, appID string) (*appmgr.RuntimeApp, error)
 }
 
+// appModuleConfigSource resolves an app's per-module config block
+// (tools.modules.<id>.config) so the dispatcher delivers it to the
+// module at call time — the only correct path for a shared (in-proc or
+// worker) module instance. Satisfies dispatch.ModuleConfigSource.
+type appModuleConfigSource struct{ apps appGetter }
+
+func (s appModuleConfigSource) ModuleConfig(appID, moduleID string) map[string]any {
+	if s.apps == nil || appID == "" {
+		return nil
+	}
+	ra, err := s.apps.Get(context.Background(), appID)
+	if err != nil || ra == nil || ra.Definition == nil || ra.Definition.Tools == nil {
+		return nil
+	}
+	mb, ok := ra.Definition.Tools.Modules[moduleID]
+	if !ok {
+		return nil
+	}
+	return mb.Config
+}
+
 type toolPipelineSource struct {
 	apps   appGetter
 	deps   toolmw.Deps

@@ -154,9 +154,11 @@ func TestReliability_LLMReturnsNilNotPanic(t *testing.T) {
 	}
 }
 
-// stubLLMTransientError simulates a worker that errors once then
-// succeeds. V1 engine does NOT retry — surface the error to the
-// caller. This test documents the contract.
+// stubLLMTransientError simulates a worker that errors once with a retryable
+// network fault, then succeeds. The engine AUTO-RETRIES transient failures that
+// hit before any token streamed (errclass.Retry + empty partial), so the turn
+// recovers on the second attempt and a durable turn_retry event is emitted for
+// the client. This test documents that contract.
 type stubLLMTransientError struct {
 	calls atomic.Int32
 }
@@ -169,7 +171,7 @@ func (s *stubLLMTransientError) Chat(_ context.Context, _ *llm.ChatRequest) (*ll
 	return &llm.ChatResponse{Content: "ok after retry"}, nil
 }
 
-func TestReliability_LLMTransientErrorSurfaces(t *testing.T) {
+func TestReliability_LLMTransientErrorRetriesAndRecovers(t *testing.T) {
 	app := realDispatchApp()
 	apps := &stubApps{app: app}
 	sess := newProjectingSessions("sess-1")
@@ -179,11 +181,19 @@ func TestReliability_LLMTransientErrorSurfaces(t *testing.T) {
 	_, err := e.Run(context.Background(), dgruntime.TurnInput{
 		AppID: "rt3-app", SessionID: "sess-1", UserID: "u",
 	})
-	if err == nil {
-		t.Fatal("transient error must surface (no retry in V1)")
+	if err != nil {
+		t.Fatalf("transient error must be retried and recover, got: %v", err)
 	}
-	if lc.calls.Load() != 1 {
-		t.Errorf("LLM called %d times, want 1 (no retry)", lc.calls.Load())
+	if lc.calls.Load() != 2 {
+		t.Errorf("LLM called %d times, want 2 (one auto-retry)", lc.calls.Load())
+	}
+	if ev := sess.find(sessionstore.EventTurnRetry); ev == nil {
+		t.Error("expected a turn_retry event emitted for the client")
+	} else if ev.Retry == nil || ev.Retry.Attempt != 2 {
+		t.Errorf("turn_retry must announce attempt #2, got %+v", ev.Retry)
+	}
+	if ev := sess.find(sessionstore.EventTurnEnded); ev == nil || ev.Turn == nil || ev.Turn.Status != "done" {
+		t.Errorf("turn must end as done after recovery, got %+v", ev)
 	}
 }
 

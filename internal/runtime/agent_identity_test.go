@@ -42,6 +42,30 @@ func TestResolveAgent_FallbackToFirst(t *testing.T) {
 	}
 }
 
+func TestApplyEntryAgent(t *testing.T) {
+	def := defWith("coordinator", "worker", "coordinator", "specialist")
+	base := resolveAgent(def, "") // coordinator (YAML entry)
+
+	// Session entry agent overrides the default when no explicit agent is pinned.
+	if a := applyEntryAgent(def, base, "", "specialist"); a == nil || a.ID != "specialist" {
+		t.Fatalf("session entry agent must override, got %v", a)
+	}
+	// An explicit (sub-agent) id wins over the session entry agent.
+	expl := resolveAgent(def, "worker")
+	if a := applyEntryAgent(def, expl, "worker", "specialist"); a == nil || a.ID != "worker" {
+		t.Fatalf("explicit agent must win, got %v", a)
+	}
+	// A non-existent session entry agent is ignored (default stands) — a bad
+	// value can never break the session.
+	if a := applyEntryAgent(def, base, "", "ghost"); a == nil || a.ID != "coordinator" {
+		t.Fatalf("bad entry agent must be ignored, got %v", a)
+	}
+	// Empty session entry agent is a no-op.
+	if a := applyEntryAgent(def, base, "", ""); a == nil || a.ID != "coordinator" {
+		t.Fatalf("empty entry agent must be a no-op, got %v", a)
+	}
+}
+
 func TestAgentRunID_RunWinsElseLogical(t *testing.T) {
 	if got := agentRunID("coding#a1b2c3", "coding"); got != "coding#a1b2c3" {
 		t.Errorf("run id must win, got %q", got)

@@ -28,15 +28,15 @@ const (
 	// message history : the agent still receives the single combined barrier
 	// result, unchanged. Generic by construction (emitted from the fan-in, not
 	// per tool), so every tool — current and future — is covered.
-	EventToolProgress     EventType = "tool_progress"
-	EventApprovalRequest  EventType = "approval_request"
-	EventApprovalGranted  EventType = "approval_granted"
-	EventApprovalDenied   EventType = "approval_denied"
-	EventMemoryRemember   EventType = "memory_remember"
-	EventMemoryFactAdded  EventType = "memory_fact_added"
-	EventWorkspaceWrite   EventType = "workspace_write"
-	EventWorkspaceEdit    EventType = "workspace_edit"
-	EventWorkspaceDelete  EventType = "workspace_delete"
+	EventToolProgress    EventType = "tool_progress"
+	EventApprovalRequest EventType = "approval_request"
+	EventApprovalGranted EventType = "approval_granted"
+	EventApprovalDenied  EventType = "approval_denied"
+	EventMemoryRemember  EventType = "memory_remember"
+	EventMemoryFactAdded EventType = "memory_fact_added"
+	EventWorkspaceWrite  EventType = "workspace_write"
+	EventWorkspaceEdit   EventType = "workspace_edit"
+	EventWorkspaceDelete EventType = "workspace_delete"
 	// EventWorkspaceChanges is a TRANSIENT, client-only signal carrying the
 	// agent's current pending file changes (git status against the shadow
 	// baseline), pushed live to the session room after a coalesced burst of
@@ -59,7 +59,15 @@ const (
 	EventSessionStarted   EventType = "session_started"
 	EventSessionEnded     EventType = "session_ended"
 	EventSessionInterrupt EventType = "session_interrupted"
-	EventCompactDone      EventType = "compact_done"
+	// EventSessionRenamed updates the session title after creation (the title is
+	// otherwise only set on EventSessionStarted). Durable + projected so the rename
+	// survives replay/cold-load. Carries the new title in MetaPayload.Title.
+	EventSessionRenamed EventType = "session_renamed"
+	// EventModelChanged sets the per-session model override (MetaPayload.Model).
+	// Durable + projected so the choice survives replay/cold-load. Empty Model
+	// clears the override (revert to the Brain default).
+	EventModelChanged EventType = "model_changed"
+	EventCompactDone  EventType = "compact_done"
 	EventQuarantine       EventType = "quarantine"
 	EventError            EventType = "error"
 
@@ -98,6 +106,18 @@ const (
 	EventTurnStarted      EventType = "turn_started"
 	EventTurnPhaseChanged EventType = "turn_phase_changed"
 	EventTurnEnded        EventType = "turn_ended"
+
+	// EventTurnRetry is emitted when the engine AUTO-RETRIES a transient LLM
+	// failure (network drop, rate limit, provider 5xx) — and ONLY before any
+	// token of the failed attempt streamed, so a restart can never duplicate
+	// output. It is DURABLE on purpose : it rides the same per-session seq log
+	// as everything else, so a client that was disconnected while the daemon
+	// was retrying REPLAYS it on reconnect and learns a retry was in flight.
+	// That is what makes the two cut-points (client↔daemon, daemon↔provider)
+	// synchronise through one ordered stream. The client maps it to opencode's
+	// native "retry" status (attempt #, countdown). RetryPayload carries the
+	// classified cause + the backoff before the next attempt.
+	EventTurnRetry EventType = "turn_retry"
 
 	// EventAssistantDelta (R-4) is the per-token streaming event.
 	// Emitted by Engine.RunStreaming for every ChatChunk the LLM
@@ -179,11 +199,28 @@ type Event struct {
 	Meta       *MetaPayload             `json:"meta,omitempty"`
 	Error      *ErrorPayload            `json:"error,omitempty"`
 	Turn       *TurnPayload             `json:"turn,omitempty"`
+	Retry      *RetryPayload            `json:"retry,omitempty"`
 	Security   *SecurityDecisionPayload `json:"security,omitempty"`
 	Background *BackgroundTaskPayload   `json:"background,omitempty"`
 	// WorkspaceChanges carries the live pending-changes list for the workspace
 	// preview push. Set only on EventWorkspaceChanges (transient).
 	WorkspaceChanges *WorkspaceChangesPayload `json:"workspace_changes,omitempty"`
+}
+
+// RetryPayload describes one auto-retry of a transient LLM failure, carried on
+// EventTurnRetry. Attempt is the 1-based number of the attempt ABOUT TO run
+// (the original try is 1, so the first retry reports 2) and Max is the total
+// attempt budget — together they render "attempt #2/4". RetryInMs is the
+// backoff the engine waits before that attempt, so the client can show a live
+// countdown (next = now + retry_in_ms). Message/Code/Category come from the
+// errclass classification of the cause.
+type RetryPayload struct {
+	Attempt   int    `json:"attempt"`
+	Max       int    `json:"max"`
+	Message   string `json:"message"`
+	Code      string `json:"code,omitempty"`
+	Category  string `json:"category,omitempty"`
+	RetryInMs int    `json:"retry_in_ms"`
 }
 
 // WorkspaceChangesPayload is the live pending-changes snapshot pushed to the
@@ -465,9 +502,12 @@ type TodoPayload struct {
 }
 
 type CostPayload struct {
-	TokensIn  int64   `json:"tokens_in,omitempty"`
-	TokensOut int64   `json:"tokens_out,omitempty"`
-	UsdTotal  float64 `json:"usd_total,omitempty"`
+	TokensIn  int64 `json:"tokens_in,omitempty"`
+	TokensOut int64 `json:"tokens_out,omitempty"`
+	// ReasoningTokens is the provider-exact subset of TokensOut spent on hidden
+	// reasoning (already included in TokensOut — a breakdown, never additive).
+	ReasoningTokens int64   `json:"reasoning_tokens,omitempty"`
+	UsdTotal        float64 `json:"usd_total,omitempty"`
 	// Prompt-cache accounting : how many of TokensIn were served from the
 	// provider's cached prefix (read) vs written to the cache this turn. A high
 	// CacheReadTokens on later turns is the proof the stable-prefix cache works —
@@ -533,6 +573,17 @@ type MetaPayload struct {
 	Workspace   string `json:"workspace,omitempty"`
 	Workdir     string `json:"workdir,omitempty"`
 	Interrupted bool   `json:"interrupted,omitempty"`
+	// Model + AgentID carry a per-session, per-agent model override on
+	// EventModelChanged : set AgentID's model to Model (empty Model clears it →
+	// revert that agent to its Brain default).
+	Model   string `json:"model,omitempty"`
+	AgentID string `json:"agent_id,omitempty"`
+	// EntryAgent pins which agent handles this session (overrides the app's YAML
+	// entry agent) and ContextExtra is extra system-prompt text for the session.
+	// Both are set at creation by non-human launchers (e.g. a background channel
+	// trigger) and are empty for ordinary sessions.
+	EntryAgent   string `json:"entry_agent,omitempty"`
+	ContextExtra string `json:"context,omitempty"`
 }
 
 type ErrorPayload struct {

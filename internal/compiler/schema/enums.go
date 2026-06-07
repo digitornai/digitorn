@@ -411,12 +411,13 @@ var AllURLBarModes = []URLBarMode{URLBarAuto, URLBarAlways, URLBarNever}
 type MCPTransport string
 
 const (
-	MCPTransportStdio MCPTransport = "stdio"
-	MCPTransportHTTP  MCPTransport = "http"
-	MCPTransportWS    MCPTransport = "ws"
+	MCPTransportStdio          MCPTransport = "stdio"
+	MCPTransportSSE            MCPTransport = "sse"
+	MCPTransportStreamableHTTP MCPTransport = "streamable_http"
+	MCPTransportHTTP           MCPTransport = "http"
 )
 
-var AllMCPTransports = []MCPTransport{MCPTransportStdio, MCPTransportHTTP, MCPTransportWS}
+var AllMCPTransports = []MCPTransport{MCPTransportStdio, MCPTransportSSE, MCPTransportStreamableHTTP, MCPTransportHTTP}
 
 type IntentPhrasesSource string
 

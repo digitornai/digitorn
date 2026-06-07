@@ -179,6 +179,108 @@ func (c *Client) ChatStream(ctx context.Context, req *ChatRequest) (<-chan *Chat
 	return out, nil
 }
 
+// Speak streams synthesized audio for req.Text. The returned channel receives raw
+// AudioFrame messages (FrameAudio … FrameDone) as they arrive and is closed at end
+// of stream. The caller MUST drain it; cancelling ctx aborts early (barge-in). The
+// audio travels via the raw "digitorn.audio" codec — no base64 on the hot path.
+func (c *Client) Speak(ctx context.Context, req *SpeechRequest) (<-chan *AudioFrame, error) {
+	if req == nil {
+		return nil, errors.New("llm: nil request")
+	}
+	conn, err := c.mgr.Pick(ctx, c.kind)
+	if err != nil {
+		return nil, err
+	}
+	desc := &grpc.StreamDesc{StreamName: MethodSpeak, ServerStreams: true}
+	stream, err := conn.GRPC().NewStream(ctx, desc,
+		"/"+ServiceName+"/"+MethodSpeak,
+		grpc.CallContentSubtype(AudioCodecName),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("llm: speak open: %w", err)
+	}
+	if err := stream.SendMsg(req); err != nil {
+		return nil, fmt.Errorf("llm: speak send: %w", err)
+	}
+	if err := stream.CloseSend(); err != nil {
+		return nil, fmt.Errorf("llm: speak close-send: %w", err)
+	}
+	out := make(chan *AudioFrame, 64)
+	go func() {
+		defer close(out)
+		for {
+			f := new(AudioFrame)
+			err := stream.RecvMsg(f)
+			if err == io.EOF {
+				return
+			}
+			if err != nil {
+				select {
+				case out <- ErrorFrame(err.Error()):
+				case <-ctx.Done():
+				}
+				return
+			}
+			select {
+			case out <- f:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return out, nil
+}
+
+// Transcribe streams transcript frames (FrameText interim … FrameFinal … FrameDone)
+// for the utterance audio in req.Audio. Drain-safe; cancelling ctx aborts early.
+func (c *Client) Transcribe(ctx context.Context, req *TranscribeRequest) (<-chan *AudioFrame, error) {
+	if req == nil {
+		return nil, errors.New("llm: nil request")
+	}
+	conn, err := c.mgr.Pick(ctx, c.kind)
+	if err != nil {
+		return nil, err
+	}
+	desc := &grpc.StreamDesc{StreamName: MethodTranscribe, ServerStreams: true}
+	stream, err := conn.GRPC().NewStream(ctx, desc,
+		"/"+ServiceName+"/"+MethodTranscribe,
+		grpc.CallContentSubtype(AudioCodecName),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("llm: transcribe open: %w", err)
+	}
+	if err := stream.SendMsg(req); err != nil {
+		return nil, fmt.Errorf("llm: transcribe send: %w", err)
+	}
+	if err := stream.CloseSend(); err != nil {
+		return nil, fmt.Errorf("llm: transcribe close-send: %w", err)
+	}
+	out := make(chan *AudioFrame, 16)
+	go func() {
+		defer close(out)
+		for {
+			f := new(AudioFrame)
+			err := stream.RecvMsg(f)
+			if err == io.EOF {
+				return
+			}
+			if err != nil {
+				select {
+				case out <- ErrorFrame(err.Error()):
+				case <-ctx.Done():
+				}
+				return
+			}
+			select {
+			case out <- f:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return out, nil
+}
+
 // Embed computes embeddings for the input texts.
 func (c *Client) Embed(ctx context.Context, req *EmbedRequest) (*EmbedResponse, error) {
 	if req == nil {

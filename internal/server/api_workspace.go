@@ -10,10 +10,15 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/mbathepaul/digitorn/internal/domain/tool"
+	"github.com/mbathepaul/digitorn/internal/modules/filesystem"
 	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
 	"github.com/mbathepaul/digitorn/internal/runtime/workdir"
 )
@@ -42,7 +47,16 @@ func (d *Daemon) sessionWorkdir(ctx context.Context, sid string) (string, error)
 // in-proc module otherwise — every git op (REST changes/diff/commit, the
 // baseline at session creation, the brique-4 live push) goes off the daemon when
 // a pool is configured, with no per-call-site change.
+// workspaceCallTimeout is a generous backstop on a single workspace (git) call.
+// The pool is count:1 and shared across every session, so one pathological op
+// must never hang a request forever or starve the worker for everyone — it fails
+// after this and frees the daemon goroutine. Sized so a legitimate large commit
+// still completes; it only catches genuine hangs.
+const workspaceCallTimeout = 120 * time.Second
+
 func (d *Daemon) invokeWorkspace(ctx context.Context, action, workdir string, extra map[string]any) (any, error) {
+	ctx, cancel := context.WithTimeout(ctx, workspaceCallTimeout)
+	defer cancel()
 	params := map[string]any{"workdir": workdir}
 	for k, v := range extra {
 		params[k] = v
@@ -153,8 +167,189 @@ func (d *Daemon) postWorkspaceCommit(w http.ResponseWriter, r *http.Request) {
 	}
 	data, err := d.invokeWorkspace(r.Context(), "commit", wd, map[string]any{"message": body.Message, "paths": body.Paths})
 	if err != nil {
+		if strings.Contains(err.Error(), "nothing approved") {
+			writeError(w, http.StatusBadRequest, "nothing_to_commit", "approve at least one change before committing")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "workspace_error", err.Error())
 		return
+	}
+	// Committed files leave the pending set — refresh the Changes panel + badges.
+	if d.workspaceLive != nil {
+		d.workspaceLive.FileChanged(sid, wd)
+	}
+	writeJSON(w, http.StatusOK, data)
+}
+
+// workspaceFileAction backs the approve + reject routes. Both take {path} (one)
+// or {paths} (many), CONFINE every path to the session workdir (escape / shadow
+// / secret rejected — reject restores files on disk, so this is load-bearing),
+// dispatch the matching workspace action, then fire the live poke so the Changes
+// panel + gutter badges (approved=green / pending=orange) refresh.
+func (d *Daemon) workspaceFileAction(w http.ResponseWriter, r *http.Request, action string) {
+	sid := chi.URLParam(r, "session_id")
+	wd, err := d.sessionWorkdir(r.Context(), sid)
+	if err != nil {
+		writeError(w, errStatus(err), errCode(err), err.Error())
+		return
+	}
+	if wd == "" {
+		writeError(w, http.StatusBadRequest, "no_workdir", "session has no workdir")
+		return
+	}
+	var body struct {
+		Path    string   `json:"path"`
+		Paths   []string `json:"paths"`
+		Message string   `json:"message"`
+	}
+	if err := readJSONLenient(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	paths := append([]string{}, body.Paths...)
+	if strings.TrimSpace(body.Path) != "" {
+		paths = append(paths, body.Path)
+	}
+	if len(paths) == 0 {
+		writeError(w, http.StatusBadRequest, "missing_path", "provide `path` or `paths`")
+		return
+	}
+	pp := workdir.NewPolicy(workdir.Options{Root: wd})
+	clean := make([]string, 0, len(paths))
+	for _, p := range paths {
+		if isShadowRel(p) {
+			writeError(w, http.StatusForbidden, "forbidden_path", "path is daemon-internal")
+			return
+		}
+		if _, perr := pp.Enforce(p); perr != nil {
+			writeError(w, http.StatusForbidden, "forbidden_path", perr.Error())
+			return
+		}
+		clean = append(clean, filepath.ToSlash(p))
+	}
+	data, err := d.invokeWorkspace(r.Context(), action, wd, map[string]any{"paths": clean, "message": body.Message})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "workspace_error", err.Error())
+		return
+	}
+	if d.workspaceLive != nil {
+		d.workspaceLive.FileChanged(sid, wd)
+	}
+	writeJSON(w, http.StatusOK, data)
+}
+
+// POST …/workspace/files/approve {path|paths,message} — approve (commit) the changes.
+func (d *Daemon) postWorkspaceApprove(w http.ResponseWriter, r *http.Request) {
+	d.workspaceFileAction(w, r, "approve")
+}
+
+// POST …/workspace/files/reject {path|paths} — revert the changes to baseline.
+func (d *Daemon) postWorkspaceReject(w http.ResponseWriter, r *http.Request) {
+	d.workspaceFileAction(w, r, "reject")
+}
+
+// POST …/workspace/files/approve-hunks {path,hunks[,message]} — commit only the
+// selected hunks of one file.
+func (d *Daemon) postWorkspaceApproveHunks(w http.ResponseWriter, r *http.Request) {
+	d.workspaceHunkAction(w, r, "approve_hunks")
+}
+
+// POST …/workspace/files/reject-hunks {path,hunks} — revert only the selected
+// hunks of one file.
+func (d *Daemon) postWorkspaceRejectHunks(w http.ResponseWriter, r *http.Request) {
+	d.workspaceHunkAction(w, r, "reject_hunks")
+}
+
+// workspaceHunkAction is the shared handler for the per-hunk approve/reject
+// routes. Body: {path, hunks:[hash...], message?}. It confines the single path
+// to the workdir, dispatches the workspace action, then fires the live poke so
+// the Changes panel + diff refresh.
+func (d *Daemon) workspaceHunkAction(w http.ResponseWriter, r *http.Request, action string) {
+	sid := chi.URLParam(r, "session_id")
+	wd, err := d.sessionWorkdir(r.Context(), sid)
+	if err != nil {
+		writeError(w, errStatus(err), errCode(err), err.Error())
+		return
+	}
+	if wd == "" {
+		writeError(w, http.StatusBadRequest, "no_workdir", "session has no workdir")
+		return
+	}
+	var body struct {
+		Path    string   `json:"path"`
+		Hunks   []string `json:"hunks"`
+		Message string   `json:"message"`
+	}
+	if err := readJSONLenient(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	if strings.TrimSpace(body.Path) == "" {
+		writeError(w, http.StatusBadRequest, "missing_path", "provide `path`")
+		return
+	}
+	if len(body.Hunks) == 0 {
+		writeError(w, http.StatusBadRequest, "missing_hunks", "provide `hunks`")
+		return
+	}
+	if isShadowRel(body.Path) {
+		writeError(w, http.StatusForbidden, "forbidden_path", "path is daemon-internal")
+		return
+	}
+	pp := workdir.NewPolicy(workdir.Options{Root: wd})
+	if _, perr := pp.Enforce(body.Path); perr != nil {
+		writeError(w, http.StatusForbidden, "forbidden_path", perr.Error())
+		return
+	}
+	data, err := d.invokeWorkspace(r.Context(), action, wd, map[string]any{
+		"path":    filepath.ToSlash(body.Path),
+		"hunks":   body.Hunks,
+		"message": body.Message,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "workspace_error", err.Error())
+		return
+	}
+	if d.workspaceLive != nil {
+		d.workspaceLive.FileChanged(sid, wd)
+	}
+	writeJSON(w, http.StatusOK, data)
+}
+
+// POST …/workspace/files/approve-all — approve EVERY pending change ("l'ensemble").
+// Backed by the shadow repo's StageAll, which reads the live working-tree status,
+// so it stages whatever is pending at click time — correct even if a file
+// appeared since the client last fetched /changes (no stale path list, no TOCTOU).
+// The .digitorn metadata and any user .git stay excluded, as at baseline.
+func (d *Daemon) postWorkspaceApproveAll(w http.ResponseWriter, r *http.Request) {
+	sid := chi.URLParam(r, "session_id")
+	wd, err := d.sessionWorkdir(r.Context(), sid)
+	if err != nil {
+		writeError(w, errStatus(err), errCode(err), err.Error())
+		return
+	}
+	if wd == "" {
+		writeError(w, http.StatusBadRequest, "no_workdir", "session has no workdir")
+		return
+	}
+	var body struct {
+		Message string `json:"message"`
+	}
+	if r.ContentLength > 0 {
+		if err := readJSONLenient(r, &body); err != nil {
+			writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+			return
+		}
+	}
+	// Empty paths is the module's "approve all" signal → stage every pending
+	// change, then commit them as one revision labelled by the message.
+	data, err := d.invokeWorkspace(r.Context(), "approve", wd, map[string]any{"paths": []string{}, "message": body.Message})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "workspace_error", err.Error())
+		return
+	}
+	if d.workspaceLive != nil {
+		d.workspaceLive.FileChanged(sid, wd)
 	}
 	writeJSON(w, http.StatusOK, data)
 }
@@ -254,13 +449,227 @@ func (d *Daemon) getWorkspaceFile(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-// GET …/workspace/tree — the session workdir's file list (paths relative to the
-// workdir), so the Monaco explorer can render the folder structure including
-// files the agent did NOT change (an existing project). ISOLATION: dispatched
-// through `filesystem.glob` with the session PathPolicy on the context, so the
-// walk is confined to the workdir (symlink escapes dropped) and VCS/build noise
-// + .gitignore are pruned — the exact confinement the agent's own glob uses.
-func (d *Daemon) getWorkspaceTree(w http.ResponseWriter, r *http.Request) {
+// workspaceSearchMaxHits caps the hits returned for one search so a broad query
+// on a huge tree can never produce an unbounded payload.
+const workspaceSearchMaxHits = 2000
+
+// GET …/workspace/search?q=&case=&word=&regex= — search across every file in the
+// session workdir (not just open buffers). Backed by the filesystem module's
+// trigram grep, confined to the workdir by the session PathPolicy; gitignored
+// noise (node_modules, …) is skipped by grep. The match column/length are
+// computed server-side from the authoritative Go regexp.
+func (d *Daemon) getWorkspaceSearch(w http.ResponseWriter, r *http.Request) {
+	sid := chi.URLParam(r, "session_id")
+	q := r.URL.Query().Get("q")
+	if strings.TrimSpace(q) == "" {
+		writeJSON(w, http.StatusOK, map[string]any{"hits": []any{}, "truncated": false})
+		return
+	}
+	flag := func(name string) bool {
+		switch r.URL.Query().Get(name) {
+		case "1", "true", "yes":
+			return true
+		}
+		return false
+	}
+	wd, err := d.sessionWorkdir(r.Context(), sid)
+	if err != nil {
+		writeError(w, errStatus(err), errCode(err), err.Error())
+		return
+	}
+	if wd == "" {
+		writeJSON(w, http.StatusOK, map[string]any{"hits": []any{}, "truncated": false})
+		return
+	}
+
+	// Build the pattern from the literal/regex + word + case options.
+	body := q
+	if !flag("regex") {
+		body = regexp.QuoteMeta(q)
+	}
+	if flag("word") {
+		body = `\b` + body + `\b`
+	}
+	if !flag("case") {
+		body = "(?i)" + body
+	}
+	re, cerr := regexp.Compile(body)
+	if cerr != nil {
+		// Invalid regex is a user input error, not a 500 — surface it to the panel.
+		writeJSON(w, http.StatusOK, map[string]any{"hits": []any{}, "truncated": false, "regex_error": cerr.Error()})
+		return
+	}
+
+	pp := workdir.NewPolicy(workdir.Options{Root: wd})
+	ctx := workdir.WithPathPolicy(r.Context(), pp)
+	ctx = tool.WithIdentity(ctx, tool.Identity{
+		SessionID: sid,
+		AppID:     chi.URLParam(r, "app_id"),
+		UserID:    userIDOf(r.Context()),
+	})
+	args, _ := json.Marshal(map[string]any{
+		"pattern": body, "path": ".", "output_mode": "content", "max_results": workspaceSearchMaxHits,
+	})
+	res, err := d.bus.Call(ctx, "filesystem", "grep", args)
+	if err != nil || !res.Success {
+		msg := "search failed"
+		if err != nil {
+			msg = err.Error()
+		} else if res.Error != "" {
+			msg = res.Error
+		}
+		writeError(w, http.StatusInternalServerError, "workspace_error", msg)
+		return
+	}
+
+	// Parse grep's matches robustly (JSON round-trip works in-proc and worker-side).
+	rawData, _ := json.Marshal(res.Data)
+	var gd struct {
+		Matches []struct {
+			File string `json:"file"`
+			Line int    `json:"line"`
+			Text string `json:"text"`
+		} `json:"matches"`
+		Truncated bool `json:"truncated"`
+	}
+	_ = json.Unmarshal(rawData, &gd)
+
+	type hit struct {
+		Path        string `json:"path"`
+		Filename    string `json:"filename"`
+		Line        int    `json:"line"`
+		Column      int    `json:"column"`       // 1-based, in characters
+		MatchLength int    `json:"match_length"` // in characters
+		LineContent string `json:"line_content"`
+	}
+	hits := make([]hit, 0, len(gd.Matches))
+	truncated := gd.Truncated
+	for _, m := range gd.Matches {
+		fname := filepath.ToSlash(m.File)
+		if i := strings.LastIndex(fname, "/"); i >= 0 {
+			fname = fname[i+1:]
+		}
+		for _, loc := range re.FindAllStringIndex(m.Text, -1) {
+			if loc[1] == loc[0] {
+				continue // zero-length match (e.g. a* ) — skip
+			}
+			hits = append(hits, hit{
+				Path:        filepath.ToSlash(m.File),
+				Filename:    fname,
+				Line:        m.Line,
+				Column:      utf8.RuneCountInString(m.Text[:loc[0]]) + 1,
+				MatchLength: utf8.RuneCountInString(m.Text[loc[0]:loc[1]]),
+				LineContent: m.Text,
+			})
+			if len(hits) >= workspaceSearchMaxHits {
+				truncated = true
+				break
+			}
+		}
+		if len(hits) >= workspaceSearchMaxHits {
+			break
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"hits": hits, "truncated": truncated})
+}
+
+// GET …/workspace/files/{path}/history — the file's committed revisions (the
+// "Approval history" tab). The path arrives as ONE percent-encoded segment
+// (encodeURIComponent). Confined to the session workdir by the same PathPolicy
+// as the read route; a deleted file still has history (Enforce checks the path,
+// not existence).
+func (d *Daemon) getWorkspaceFileHistory(w http.ResponseWriter, r *http.Request) {
+	sid := chi.URLParam(r, "session_id")
+	rel := chi.URLParam(r, "filepath")
+	if dec, derr := url.PathUnescape(rel); derr == nil {
+		rel = dec
+	}
+	if strings.TrimSpace(rel) == "" {
+		writeError(w, http.StatusBadRequest, "missing_path", "file path is required")
+		return
+	}
+	wd, err := d.sessionWorkdir(r.Context(), sid)
+	if err != nil {
+		writeError(w, errStatus(err), errCode(err), err.Error())
+		return
+	}
+	if wd == "" {
+		writeJSON(w, http.StatusOK, map[string]any{"revisions": []any{}})
+		return
+	}
+	if isShadowRel(rel) {
+		writeError(w, http.StatusForbidden, "forbidden_path", "path is daemon-internal")
+		return
+	}
+	pp := workdir.NewPolicy(workdir.Options{Root: wd})
+	if _, perr := pp.Enforce(rel); perr != nil {
+		writeError(w, http.StatusForbidden, "forbidden_path", perr.Error())
+		return
+	}
+	data, err := d.invokeWorkspace(r.Context(), "history", wd, map[string]any{"path": filepath.ToSlash(rel)})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "workspace_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, data)
+}
+
+// POST …/workspace/files/{path}/revert {revision} — restore the file to a past
+// revision as a PENDING change (history untouched; the user reviews then approves
+// or rejects). Confined to the session workdir; the shadow repo is refused.
+func (d *Daemon) postWorkspaceFileRevert(w http.ResponseWriter, r *http.Request) {
+	sid := chi.URLParam(r, "session_id")
+	rel := chi.URLParam(r, "filepath")
+	if dec, derr := url.PathUnescape(rel); derr == nil {
+		rel = dec
+	}
+	if strings.TrimSpace(rel) == "" {
+		writeError(w, http.StatusBadRequest, "missing_path", "file path is required")
+		return
+	}
+	var body struct {
+		Revision int `json:"revision"`
+	}
+	if err := readJSONLenient(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	if body.Revision < 1 {
+		writeError(w, http.StatusBadRequest, "bad_request", "revision must be >= 1")
+		return
+	}
+	wd, err := d.sessionWorkdir(r.Context(), sid)
+	if err != nil {
+		writeError(w, errStatus(err), errCode(err), err.Error())
+		return
+	}
+	if wd == "" {
+		writeError(w, http.StatusBadRequest, "no_workdir", "session has no workdir")
+		return
+	}
+	if isShadowRel(rel) {
+		writeError(w, http.StatusForbidden, "forbidden_path", "path is daemon-internal")
+		return
+	}
+	pp := workdir.NewPolicy(workdir.Options{Root: wd})
+	if _, perr := pp.Enforce(rel); perr != nil {
+		writeError(w, http.StatusForbidden, "forbidden_path", perr.Error())
+		return
+	}
+	data, err := d.invokeWorkspace(r.Context(), "revert", wd, map[string]any{"path": filepath.ToSlash(rel), "revision": body.Revision})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "workspace_error", err.Error())
+		return
+	}
+	if d.workspaceLive != nil {
+		d.workspaceLive.FileChanged(sid, wd)
+	}
+	writeJSON(w, http.StatusOK, data)
+}
+
+// GET …/workspace/history — the whole workspace history (every approval), newest
+// first, each commit carrying the files it changed.
+func (d *Daemon) getWorkspaceHistory(w http.ResponseWriter, r *http.Request) {
 	sid := chi.URLParam(r, "session_id")
 	wd, err := d.sessionWorkdir(r.Context(), sid)
 	if err != nil {
@@ -268,37 +677,239 @@ func (d *Daemon) getWorkspaceTree(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if wd == "" {
-		writeJSON(w, http.StatusOK, map[string]any{"files": []any{}, "count": 0, "truncated": false})
+		writeJSON(w, http.StatusOK, map[string]any{"commits": []any{}})
+		return
+	}
+	data, err := d.invokeWorkspace(r.Context(), "log", wd, nil)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "workspace_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, data)
+}
+
+// POST …/workspace/revert {sha, paths?} — restore files to their content at a
+// past commit (all the commit's files, or the chosen subset) as a PENDING change
+// the user reviews. Every path is confined to the session workdir.
+func (d *Daemon) postWorkspaceRevert(w http.ResponseWriter, r *http.Request) {
+	sid := chi.URLParam(r, "session_id")
+	wd, err := d.sessionWorkdir(r.Context(), sid)
+	if err != nil {
+		writeError(w, errStatus(err), errCode(err), err.Error())
+		return
+	}
+	if wd == "" {
+		writeError(w, http.StatusBadRequest, "no_workdir", "session has no workdir")
+		return
+	}
+	var body struct {
+		Sha   string   `json:"sha"`
+		Paths []string `json:"paths"`
+	}
+	if err := readJSONLenient(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	if strings.TrimSpace(body.Sha) == "" {
+		writeError(w, http.StatusBadRequest, "bad_request", "sha is required")
 		return
 	}
 	pp := workdir.NewPolicy(workdir.Options{Root: wd})
+	clean := make([]string, 0, len(body.Paths))
+	for _, p := range body.Paths {
+		if isShadowRel(p) {
+			writeError(w, http.StatusForbidden, "forbidden_path", "path is daemon-internal")
+			return
+		}
+		if _, perr := pp.Enforce(p); perr != nil {
+			writeError(w, http.StatusForbidden, "forbidden_path", perr.Error())
+			return
+		}
+		clean = append(clean, filepath.ToSlash(p))
+	}
+	data, err := d.invokeWorkspace(r.Context(), "revert_commit", wd, map[string]any{"sha": body.Sha, "paths": clean})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "workspace_error", err.Error())
+		return
+	}
+	if d.workspaceLive != nil {
+		d.workspaceLive.FileChanged(sid, wd)
+	}
+	writeJSON(w, http.StatusOK, data)
+}
+
+// PUT …/workspace/files/{path} {content} — save a file edited in the Monaco
+// editor. Routed through `filesystem.write` with the session PathPolicy +
+// identity + change-notifier on the context, so it is byte-for-byte the agent's
+// own write path: ATOMIC (temp+rename, crash-safe), CONFINED (escape/secret
+// rejected), the trigram index refreshed, and the live `workspace_changes` poke
+// fired so the Changes panel + gutter badges update. The shadow repo (.digitorn)
+// is refused.
+func (d *Daemon) putWorkspaceFile(w http.ResponseWriter, r *http.Request) {
+	sid := chi.URLParam(r, "session_id")
+	rel := chi.URLParam(r, "*")
+	if dec, derr := url.PathUnescape(rel); derr == nil {
+		rel = dec
+	}
+	if strings.TrimSpace(rel) == "" {
+		writeError(w, http.StatusBadRequest, "missing_path", "file path is required")
+		return
+	}
+	if isShadowRel(rel) {
+		writeError(w, http.StatusForbidden, "forbidden_path", "path is daemon-internal")
+		return
+	}
+	wd, err := d.sessionWorkdir(r.Context(), sid)
+	if err != nil {
+		writeError(w, errStatus(err), errCode(err), err.Error())
+		return
+	}
+	if wd == "" {
+		writeError(w, http.StatusBadRequest, "no_workdir", "session has no workdir")
+		return
+	}
+	var body struct {
+		Content string `json:"content"`
+	}
+	if err := readJSONLenient(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+
+	pp := workdir.NewPolicy(workdir.Options{Root: wd})
+	if _, perr := pp.Enforce(rel); perr != nil {
+		writeError(w, http.StatusForbidden, "forbidden_path", perr.Error())
+		return
+	}
+	// Same context the agent's write runs under → same confinement + atomic
+	// write + index refresh + live poke. The notifier folds sub-agent sessions to
+	// the root room; we only have the user session here, which is exactly right.
 	ctx := workdir.WithPathPolicy(r.Context(), pp)
-	args, _ := json.Marshal(map[string]any{"pattern": "**", "type": "file", "max_results": 10000})
-	res, err := d.bus.Call(ctx, "filesystem", "glob", args)
+	ctx = tool.WithIdentity(ctx, tool.Identity{
+		SessionID: sid,
+		AppID:     chi.URLParam(r, "app_id"),
+		UserID:    userIDOf(r.Context()),
+	})
+	if d.workspaceLive != nil {
+		ctx = tool.WithFileChangeNotifier(ctx, d.workspaceLive)
+	}
+	args, _ := json.Marshal(map[string]any{"path": filepath.ToSlash(rel), "content": body.Content})
+	res, err := d.bus.Call(ctx, "filesystem", "write", args)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "workspace_error", err.Error())
 		return
 	}
 	if !res.Success {
-		writeError(w, http.StatusInternalServerError, "workspace_error", res.Error)
+		writeError(w, http.StatusBadRequest, "write_failed", res.Error)
 		return
 	}
-	var parsed struct {
-		Files     []string `json:"files"`
-		Truncated bool     `json:"truncated"`
+	writeJSON(w, http.StatusOK, map[string]any{"path": filepath.ToSlash(rel), "bytes": len(body.Content)})
+}
+
+// workspaceTreeMaxPerLevel caps how many entries a single directory level
+// returns — the floor that keeps a pathological directory (a flat folder with
+// 100k files) from producing one giant payload. The client lazy-loads each
+// level, so this is per-directory, not per-repo.
+const workspaceTreeMaxPerLevel = 5000
+
+// GET …/workspace/tree?path=<dir> — ONE level of the session workdir's file
+// tree (the immediate children of <dir>, root by default). The Monaco explorer
+// loads the root level on open and fetches deeper levels only as the user
+// expands folders, so a 100k-file repo never ships in one shot — this is the
+// load-bearing piece for cloud scale. ISOLATION: <dir> is confined to the
+// workdir by the same PathPolicy the agent runs under (escape / shadow / secret
+// rejected); VCS/build/dependency noise (skipDirs, incl. .digitorn) is dropped.
+func (d *Daemon) getWorkspaceTree(w http.ResponseWriter, r *http.Request) {
+	sid := chi.URLParam(r, "session_id")
+	rel := strings.TrimSpace(r.URL.Query().Get("path"))
+	wd, err := d.sessionWorkdir(r.Context(), sid)
+	if err != nil {
+		writeError(w, errStatus(err), errCode(err), err.Error())
+		return
 	}
-	rawData, _ := json.Marshal(res.Data)
-	_ = json.Unmarshal(rawData, &parsed)
-	// Drop the daemon's per-workdir shadow repo (<workdir>/.digitorn/...): it
-	// tracks the agent's changes and is invisible to the user's file tree.
-	files := make([]string, 0, len(parsed.Files))
-	for _, f := range parsed.Files {
-		if isShadowRel(f) {
+	if wd == "" {
+		writeJSON(w, http.StatusOK, map[string]any{"path": "", "entries": []any{}, "truncated": false})
+		return
+	}
+
+	// Resolve the directory to list. Empty / "." = the workdir root.
+	abs := wd
+	relSlash := ""
+	if rel != "" && rel != "." {
+		if isShadowRel(rel) {
+			writeError(w, http.StatusForbidden, "forbidden_path", "path is daemon-internal")
+			return
+		}
+		pp := workdir.NewPolicy(workdir.Options{Root: wd})
+		resolved, perr := pp.Enforce(rel)
+		if perr != nil {
+			writeError(w, http.StatusForbidden, "forbidden_path", perr.Error())
+			return
+		}
+		abs = resolved
+		relSlash = filepath.ToSlash(rel)
+	}
+
+	fi, err := os.Stat(abs)
+	if err != nil {
+		if os.IsNotExist(err) {
+			writeError(w, http.StatusNotFound, "not_found", "no such directory under the workspace")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "workspace_error", err.Error())
+		return
+	}
+	if !fi.IsDir() {
+		writeError(w, http.StatusBadRequest, "not_dir", "path is not a directory")
+		return
+	}
+
+	ents, err := os.ReadDir(abs)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "workspace_error", err.Error())
+		return
+	}
+
+	type treeEntry struct {
+		Name string `json:"name"`
+		Path string `json:"path"`
+		Type string `json:"type"` // "file" | "dir"
+	}
+	entries := make([]treeEntry, 0, len(ents))
+	truncated := false
+	for _, e := range ents {
+		name := e.Name()
+		isDir := e.IsDir()
+		// VCS/build/dependency noise (and the shadow repo) is pruned at the
+		// directory level — never descended into, never surfaced.
+		if isDir && filesystem.IsNoiseDir(name) {
 			continue
 		}
-		files = append(files, filepath.ToSlash(f))
+		childRel := name
+		if relSlash != "" {
+			childRel = relSlash + "/" + name
+		}
+		typ := "file"
+		if isDir {
+			typ = "dir"
+		}
+		entries = append(entries, treeEntry{Name: name, Path: childRel, Type: typ})
+		if len(entries) >= workspaceTreeMaxPerLevel {
+			truncated = true
+			break
+		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"files": files, "count": len(files), "truncated": parsed.Truncated})
+	// Directories first, then files; case-insensitive alpha within each — the
+	// order an explorer expects, so the client renders without re-sorting.
+	sort.Slice(entries, func(i, j int) bool {
+		di, dj := entries[i].Type == "dir", entries[j].Type == "dir"
+		if di != dj {
+			return di
+		}
+		return strings.ToLower(entries[i].Name) < strings.ToLower(entries[j].Name)
+	})
+
+	writeJSON(w, http.StatusOK, map[string]any{"path": relSlash, "entries": entries, "truncated": truncated})
 }
 
 // readFileCapped reads up to cap bytes; truncated reports the file was larger.

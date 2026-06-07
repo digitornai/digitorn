@@ -153,6 +153,7 @@ func (c *Compiler) compileBundle(b *bundle.Bundle) (*Result, error) {
 	validate.CheckMiddleware(b.Entry, def, cat, bag)
 	validate.CheckAppMiddleware(b.Entry, def, bag)
 	validate.CheckMCPRefs(b.Entry, def, bag)
+	validate.CheckMCPConfig(b.Entry, def, bag)
 	validate.CheckHooks(b.Entry, def, cat, bag)
 	validate.CheckExpressions(b.Entry, def, bag)
 	validate.CheckWidgets(b.Entry, def, cat, bag)

@@ -127,7 +127,7 @@ func repairToolPairing(msgs []llm.ChatMessage, opts Options) []llm.ChatMessage {
 				out = append(out, llm.ChatMessage{
 					Role:       "tool",
 					ToolCallID: tc.ID,
-					Content:    "[interrupted: no result — the turn was stopped before this tool finished]",
+					Content:    "[Tool interrupted: it was stopped before returning — NO result was produced and nothing was applied. Re-run this tool if its output is still needed.]",
 				})
 			}
 		}

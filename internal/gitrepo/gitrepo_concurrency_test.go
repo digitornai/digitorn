@@ -77,9 +77,7 @@ func TestConcurrent_ParallelReadsSameRepo(t *testing.T) {
 	if err := wf(dir, "x.txt", "a\nb\nc\n"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.Commit("base", nil); err != nil {
-		t.Fatal(err)
-	}
+	commitAll(t, r, "base")
 	if err := wf(dir, "x.txt", "a\nB\nc\n"); err != nil {
 		t.Fatal(err)
 	}

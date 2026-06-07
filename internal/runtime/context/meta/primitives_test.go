@@ -314,6 +314,112 @@ func TestAskUser_FormParsedAndEditTracked(t *testing.T) {
 	}
 }
 
+func TestAskUser_AllowCustomDefaultsTrue(t *testing.T) {
+	br := &fakeAskUser{reply: "x"}
+	d := &meta.MetaDispatcher{AskUser: br}
+	// No allow_custom arg with choices → the escape hatch is ON by default.
+	d.Dispatch(context.Background(), runtime.ToolInvocation{
+		Name: "context_builder.ask_user",
+		Args: map[string]any{"question": "Pick", "choices": []any{"A", "B"}},
+	})
+	if !br.last.AllowCustom {
+		t.Errorf("allow_custom should default to true on a proposal")
+	}
+	// Explicit false is respected (strict enum).
+	d.Dispatch(context.Background(), runtime.ToolInvocation{
+		Name: "context_builder.ask_user",
+		Args: map[string]any{"question": "Pick", "choices": []any{"A"}, "allow_custom": false},
+	})
+	if br.last.AllowCustom {
+		t.Errorf("allow_custom:false must be respected")
+	}
+}
+
+func TestAskUser_RichFieldsReachBridge(t *testing.T) {
+	br := &fakeAskUser{reply: "x"}
+	d := &meta.MetaDispatcher{AskUser: br}
+	d.Dispatch(context.Background(), runtime.ToolInvocation{
+		Name: "context_builder.ask_user",
+		Args: map[string]any{
+			"question": "Name?", "default": "my-app", "placeholder": "type here",
+			"multiline": true, "choices": []any{"A", "B"}, "allow_multiple": true,
+			"min_select": float64(1), "max_select": float64(2),
+		},
+	})
+	if br.last.Default != "my-app" || br.last.Placeholder != "type here" || !br.last.Multiline {
+		t.Errorf("text-shape fields lost : %+v", br.last)
+	}
+	if br.last.MinSelect != 1 || br.last.MaxSelect != 2 {
+		t.Errorf("min/max select lost : %+v", br.last)
+	}
+}
+
+func TestAskUser_FormReplyTypeCoerced(t *testing.T) {
+	// The user's client sent strings ; the daemon coerces to the declared types.
+	br := &fakeAskUser{reply: `{"count":"5","enabled":"true","name":"x"}`}
+	d := &meta.MetaDispatcher{AskUser: br}
+	out := d.Dispatch(context.Background(), runtime.ToolInvocation{
+		Name: "context_builder.ask_user",
+		Args: map[string]any{
+			"question": "Configure",
+			"form": []any{
+				map[string]any{"name": "count", "type": "integer"},
+				map[string]any{"name": "enabled", "type": "boolean"},
+				map[string]any{"name": "name", "type": "text"},
+			},
+		},
+	})
+	body := decodeJSONOutcome(t, out)
+	raw, _ := body["raw_response"].(string)
+	var got map[string]any
+	if err := json.Unmarshal([]byte(raw), &got); err != nil {
+		t.Fatalf("raw_response not JSON : %q", raw)
+	}
+	if n, _ := got["count"].(float64); n != 5 {
+		t.Errorf("count not coerced to number : %v (%T)", got["count"], got["count"])
+	}
+	if b, _ := got["enabled"].(bool); !b {
+		t.Errorf("enabled not coerced to bool : %v (%T)", got["enabled"], got["enabled"])
+	}
+	if got["name"] != "x" {
+		t.Errorf("text field altered : %v", got["name"])
+	}
+}
+
+func TestAskUser_FormNormalizedForWeakModels(t *testing.T) {
+	br := &fakeAskUser{reply: "{}"}
+	d := &meta.MetaDispatcher{AskUser: br}
+	// A weak model writes a sloppy form : a field with no name, alias types
+	// (int / dropdown / toggle), and options without a type. It must still work.
+	d.Dispatch(context.Background(), runtime.ToolInvocation{
+		Name: "context_builder.ask_user",
+		Args: map[string]any{
+			"question": "Configure",
+			"form": []any{
+				map[string]any{"label": "Worker Count", "type": "int"},
+				map[string]any{"name": "db", "type": "dropdown", "options": []any{"pg", "mysql"}},
+				map[string]any{"name": "feats", "options": []any{"a", "b"}},
+				map[string]any{"name": "on", "type": "toggle"},
+			},
+		},
+	})
+	if len(br.last.Form) != 4 {
+		t.Fatalf("form lost : %+v", br.last.Form)
+	}
+	if br.last.Form[0]["name"] != "worker_count" || br.last.Form[0]["type"] != "integer" {
+		t.Errorf("nameless/int field not normalized : %+v", br.last.Form[0])
+	}
+	if br.last.Form[1]["type"] != "select" {
+		t.Errorf("dropdown→select failed : %+v", br.last.Form[1])
+	}
+	if br.last.Form[2]["type"] != "select" {
+		t.Errorf("options-without-type→select failed : %+v", br.last.Form[2])
+	}
+	if br.last.Form[3]["type"] != "boolean" {
+		t.Errorf("toggle→boolean failed : %+v", br.last.Form[3])
+	}
+}
+
 func TestAskUser_BridgeErrorSurfaced(t *testing.T) {
 	br := &fakeAskUser{err: errors.New("timeout")}
 	d := &meta.MetaDispatcher{AskUser: br}
@@ -487,11 +593,13 @@ type fakeSkillLoader struct {
 	entry       meta.SkillEntry
 	err         error
 	lastApp     string
+	lastUser    string
 	lastCommand string
 }
 
-func (f *fakeSkillLoader) Load(_ context.Context, appID, command string) (meta.SkillEntry, error) {
+func (f *fakeSkillLoader) Load(_ context.Context, appID, userID, command string) (meta.SkillEntry, error) {
 	f.lastApp = appID
+	f.lastUser = userID
 	f.lastCommand = command
 	return f.entry, f.err
 }

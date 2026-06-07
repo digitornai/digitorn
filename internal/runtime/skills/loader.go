@@ -51,8 +51,9 @@ func New(apps appmgr.Manager) *BundleLoader {
 }
 
 // Load implements meta.SkillLoader. Returns the matching
-// SkillEntry whose Content is the skill markdown body.
-func (l *BundleLoader) Load(ctx context.Context, appID, command string) (meta.SkillEntry, error) {
+// SkillEntry whose Content is the skill markdown body. The userID is
+// ignored : app-bundled skills are not user-scoped.
+func (l *BundleLoader) Load(ctx context.Context, appID, _ /*userID*/, command string) (meta.SkillEntry, error) {
 	cmd := normalizeCommand(command)
 	if cmd == "" {
 		return meta.SkillEntry{}, errors.New("skills: command required")

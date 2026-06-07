@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/mbathepaul/digitorn/internal/embeddings"
-	"github.com/mbathepaul/digitorn/internal/embeddings/backend"
 )
 
 // =====================================================================
@@ -15,7 +14,8 @@ import (
 // =====================================================================
 
 func newSrv() *embeddings.Server {
-	return embeddings.NewServer(backend.NewDeterministic(embeddings.EmbeddingDim))
+	mgr := embeddings.NewManager("", embeddings.ModeDeterministic, false, nil)
+	return embeddings.NewServer(mgr)
 }
 
 // 1. Info returns model + dim

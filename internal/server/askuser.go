@@ -52,9 +52,30 @@ func (b *askUserBridge) Ask(ctx context.Context, req meta.AskUserRequest) (strin
 	if len(req.Choices) > 0 {
 		payload["choices"] = req.Choices
 		payload["allow_multiple"] = req.AllowMultiple
+		if req.MinSelect > 0 {
+			payload["min_select"] = req.MinSelect
+		}
+		if req.MaxSelect > 0 {
+			payload["max_select"] = req.MaxSelect
+		}
 	}
 	if len(req.Form) > 0 {
 		payload["form"] = req.Form
+	}
+	// The custom-answer escape hatch is carried whenever the agent makes proposals
+	// (choices or a form) so the client always offers a "type your own" field —
+	// unless the agent set allow_custom:false for a strict enum.
+	if len(req.Choices) > 0 || len(req.Form) > 0 {
+		payload["allow_custom"] = req.AllowCustom
+	}
+	if req.Default != "" {
+		payload["default"] = req.Default
+	}
+	if req.Placeholder != "" {
+		payload["placeholder"] = req.Placeholder
+	}
+	if req.Multiline {
+		payload["multiline"] = true
 	}
 	if len(payload) == 0 {
 		payload = nil

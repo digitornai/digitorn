@@ -240,6 +240,30 @@ export function useLeaderActive(): Accessor<boolean> {
   return useKeymapSelector((keymap: OpenTuiKeymap) => keymap.getPendingSequence()[0]?.tokenName === LEADER_TOKEN)
 }
 
+// digitorn: slash commands tied to opencode-only features (git-worktree
+// workspaces, provider/org management, MCP, skills) — hidden from the "/"
+// autocomplete and /help; they have no digitorn equivalent. /diff IS wired
+// (the daemon's shadow-git change tracking → session.diff / vcs.diff).
+const DIGITORN_HIDDEN_SLASH = new Set([
+  "workspace.list",
+  "workspace.set",
+  "variant.list",
+  "mcp.list",
+  "provider.connect",
+  "console.org.switch",
+  "prompt.skills",
+  // Session sharing is an opencode-HOSTED cloud feature (publishes the transcript
+  // to opencode.ai for a public URL). The digitorn daemon has no share backend →
+  // the command would no-op/fail, so hide it rather than expose a broken /share.
+  "session.share",
+  "session.unshare",
+  // /undo + /redo need a daemon session-revert backend (POST /revert, /unrevert
+  // are 501 stubs). The client call no-ops → misleading. Hidden until the daemon
+  // revert feature lands; un-hide them then.
+  "session.undo",
+  "session.redo",
+])
+
 export function useCommandSlashes(): Accessor<readonly CommandSlashEntry[]> {
   const keymap = useOpencodeKeymap()
   const entries = useKeymapSelector((keymap: OpenTuiKeymap) =>
@@ -252,6 +276,7 @@ export function useCommandSlashes(): Accessor<readonly CommandSlashEntry[]> {
 
   return createMemo<CommandSlashEntry[]>(() =>
     entries().flatMap((entry) => {
+      if (DIGITORN_HIDDEN_SLASH.has(entry.command.name)) return []
       const slashName = entry.command.slashName
       if (typeof slashName !== "string" || !slashName) return []
       const slashAliases = entry.command.slashAliases

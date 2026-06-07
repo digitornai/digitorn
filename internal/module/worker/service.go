@@ -11,6 +11,7 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"sort"
 	"sync/atomic"
 	"time"
@@ -19,6 +20,7 @@ import (
 	domainmodule "github.com/mbathepaul/digitorn/internal/domain/module"
 	"github.com/mbathepaul/digitorn/internal/domain/tool"
 	"github.com/mbathepaul/digitorn/internal/module/service"
+	pkgmodule "github.com/mbathepaul/digitorn/pkg/module"
 )
 
 // moduleService implements service.Service by dispatching through a
@@ -28,6 +30,12 @@ type moduleService struct {
 	bus      *servicebus.Bus
 	workerID string
 
+	// embedder/reranker, when non-nil, are injected into every Invoke
+	// context so worker-hosted modules reach those daemon services via
+	// the gateway.
+	embedder pkgmodule.Embedder
+	reranker pkgmodule.Reranker
+
 	// invocations is a monotonic counter exposed for diagnostics.
 	// Atomic so the running worker can read it lock-free from a
 	// future /metrics endpoint without locking the hot path.
@@ -35,9 +43,10 @@ type moduleService struct {
 }
 
 // newModuleService binds a service.Service implementation to an
-// already-running bus. The caller owns the bus lifecycle.
-func newModuleService(bus *servicebus.Bus, workerID string) *moduleService {
-	return &moduleService{bus: bus, workerID: workerID}
+// already-running bus. The caller owns the bus lifecycle. embedder /
+// reranker may be nil (no daemon services available to this worker pool).
+func newModuleService(bus *servicebus.Bus, workerID string, embedder pkgmodule.Embedder, reranker pkgmodule.Reranker) *moduleService {
+	return &moduleService{bus: bus, workerID: workerID, embedder: embedder, reranker: reranker}
 }
 
 // Invoke dispatches one tool call through the in-process bus and
@@ -55,6 +64,32 @@ func (s *moduleService) Invoke(ctx context.Context, req *service.InvokeRequest) 
 		AppID: req.AppID, SessionID: req.SessionID, UserID: req.UserID, AgentID: req.AgentID,
 		ModuleID: req.ModuleID, ToolName: req.ToolName,
 	})
+	// Bridge the daemon embeddings service into the call so worker-hosted
+	// modules (RAG) can embed without a local worker.Manager.
+	if s.embedder != nil {
+		ctx = pkgmodule.WithEmbedder(ctx, s.embedder)
+	}
+	if s.reranker != nil {
+		ctx = pkgmodule.WithReranker(ctx, s.reranker)
+	}
+	// Re-inject the app's per-module config so the worker-hosted module
+	// reads its app-specific configuration on this call.
+	if len(req.Config) > 0 {
+		var cfg map[string]any
+		if json.Unmarshal(req.Config, &cfg) == nil && len(cfg) > 0 {
+			ctx = pkgmodule.WithModuleConfig(ctx, cfg)
+		}
+	}
+	// Re-inject the daemon-resolved per-user credential (MCP OAuth). Per-call,
+	// never cached; the module applies it as an http header or stdio env.
+	if req.AuthContext != nil {
+		ctx = pkgmodule.WithAuthContext(ctx, pkgmodule.AuthContext{
+			Token:       req.AuthContext.Token,
+			TokenType:   req.AuthContext.TokenType,
+			EnvTokenVar: req.AuthContext.EnvTokenVar,
+			ExpiresAt:   req.AuthContext.ExpiresAt,
+		})
+	}
 
 	res, callErr := s.bus.Call(ctx, req.ModuleID, req.ToolName, []byte(req.Params))
 
@@ -89,6 +124,31 @@ func (s *moduleService) Manifests(ctx context.Context, _ *service.ManifestsReque
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return &service.ManifestsResponse{Modules: out, WorkerID: s.workerID}, nil
+}
+
+// Tools reports a module's runtime tools, injecting identity + config into ctx
+// as Invoke does. Non-LiveTooler modules fall back to their static manifest.
+func (s *moduleService) Tools(ctx context.Context, req *service.ToolsRequest) (*service.ToolsResponse, error) {
+	ctx = tool.WithIdentity(ctx, tool.Identity{
+		AppID: req.AppID, UserID: req.UserID, AgentID: req.AgentID, ModuleID: req.ModuleID,
+	})
+	if len(req.Config) > 0 {
+		var cfg map[string]any
+		if json.Unmarshal(req.Config, &cfg) == nil && len(cfg) > 0 {
+			ctx = pkgmodule.WithModuleConfig(ctx, cfg)
+		}
+	}
+	mod, ok := s.bus.Get(req.ModuleID)
+	if !ok {
+		return &service.ToolsResponse{ModuleID: req.ModuleID, WorkerID: s.workerID}, nil
+	}
+	var specs []tool.Spec
+	if lt, ok := mod.(domainmodule.LiveTooler); ok {
+		specs = lt.LiveTools(ctx)
+	} else {
+		specs = mod.Manifest().Tools
+	}
+	return &service.ToolsResponse{ModuleID: req.ModuleID, Tools: specs, WorkerID: s.workerID}, nil
 }
 
 // Invocations returns the running count of Invoke calls for tests

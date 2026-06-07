@@ -1,0 +1,40 @@
+app:
+  app_id: rag-qdrant
+  name: RAG Qdrant
+runtime:
+  mode: conversation
+agents:
+  - id: main
+    brain:
+      provider: deepseek
+      backend: openai_compat
+      model: deepseek-chat
+      config:
+        api_key: '{{env.DEEPSEEK_API_KEY}}'
+        base_url: https://api.deepseek.com/v1
+      temperature: 0.1
+    system_prompt: |
+      Tu es un assistant RAG. Indexe les documents fournis avec rag.ingest,
+      puis réponds aux questions en cherchant d'abord avec rag.query et en
+      citant les sources. Si l'info n'est pas dans la base, dis-le.
+    modules:
+      rag: [create_knowledge_base, list_knowledge_bases, knowledge_base_stats, delete_knowledge_base, ingest, query]
+tools:
+  modules:
+    rag:
+      config:
+        embedding_model: minilm-l12
+        backend:
+          type: qdrant
+          url: localhost:6334
+        chunking:
+          strategy: recursive
+          size: 500
+          overlap: 50
+        pipeline:
+          final_top_k: 5
+        citations:
+          enabled: true
+          format: inline
+ui:
+  greeting: "Assistant RAG (Qdrant). Donne-moi des documents à indexer puis pose tes questions."

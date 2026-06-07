@@ -143,6 +143,8 @@ func newAPIHarness(t *testing.T) *apiHarness {
 			r.Route("/{session_id}", func(r chi.Router) {
 				r.Get("/", d.getSession)
 				r.Delete("/", d.deleteSession)
+				r.Get("/model", d.getSessionModel)
+				r.Put("/model", d.putSessionModel)
 				r.Get("/history", d.getHistory)
 				r.Get("/events", d.getEvents)
 				r.Get("/state", d.getState)

@@ -14,12 +14,23 @@ type Service interface {
 	Embed(ctx context.Context, req *EmbedRequest) (*EmbedResponse, error)
 	CountTokens(ctx context.Context, req *CountTokensRequest) (*CountTokensResponse, error)
 	ListProviders(ctx context.Context, req *ListProvidersRequest) (*ListProvidersResponse, error)
+	// Speak synthesizes req.Text to streamed audio frames (TTS) through the gateway.
+	Speak(ctx context.Context, req *SpeechRequest, sink AudioSink) error
+	// Transcribe turns an utterance's audio into streamed transcript frames (STT)
+	// through the gateway.
+	Transcribe(ctx context.Context, req *TranscribeRequest, sink AudioSink) error
 }
 
 // ChatStreamSink lets the worker push chunks back to the client. The
 // underlying transport is a gRPC server-side stream.
 type ChatStreamSink interface {
 	Send(*ChatChunk) error
+}
+
+// AudioSink streams audio frames back to the client (Speak / Transcribe). The frames
+// travel raw via the "digitorn.audio" codec — no base64, the latency-critical path.
+type AudioSink interface {
+	Send(*AudioFrame) error
 }
 
 // CountTokensRequest / CountTokensResponse — separate types so the wire
@@ -51,6 +62,8 @@ const (
 	MethodEmbed         = "Embed"
 	MethodCountTokens   = "CountTokens"
 	MethodListProviders = "ListProviders"
+	MethodSpeak         = "Speak"
+	MethodTranscribe    = "Transcribe"
 )
 
 // ----- Server-side wiring : grpc.ServiceDesc manuelle -----
@@ -72,6 +85,8 @@ var serviceDesc = grpc.ServiceDesc{
 	},
 	Streams: []grpc.StreamDesc{
 		{StreamName: MethodChatStream, Handler: chatStreamHandler, ServerStreams: true},
+		{StreamName: MethodSpeak, Handler: speakHandler, ServerStreams: true},
+		{StreamName: MethodTranscribe, Handler: transcribeHandler, ServerStreams: true},
 	},
 	Metadata: "internal/llm/service.go",
 }
@@ -143,3 +158,23 @@ func chatStreamHandler(srv any, stream grpc.ServerStream) error {
 type serverStreamSink struct{ stream grpc.ServerStream }
 
 func (s *serverStreamSink) Send(c *ChatChunk) error { return s.stream.SendMsg(c) }
+
+func speakHandler(srv any, stream grpc.ServerStream) error {
+	in := new(SpeechRequest)
+	if err := stream.RecvMsg(in); err != nil {
+		return err
+	}
+	return srv.(Service).Speak(stream.Context(), in, &serverAudioSink{stream: stream})
+}
+
+func transcribeHandler(srv any, stream grpc.ServerStream) error {
+	in := new(TranscribeRequest)
+	if err := stream.RecvMsg(in); err != nil {
+		return err
+	}
+	return srv.(Service).Transcribe(stream.Context(), in, &serverAudioSink{stream: stream})
+}
+
+type serverAudioSink struct{ stream grpc.ServerStream }
+
+func (s *serverAudioSink) Send(f *AudioFrame) error { return s.stream.SendMsg(f) }

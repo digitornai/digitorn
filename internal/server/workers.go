@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +20,7 @@ import (
 	"github.com/mbathepaul/digitorn/internal/config"
 	"github.com/mbathepaul/digitorn/internal/embeddings"
 	"github.com/mbathepaul/digitorn/internal/llm"
+	"github.com/mbathepaul/digitorn/internal/module/gateway"
 	"github.com/mbathepaul/digitorn/internal/module/proxy"
 	"github.com/mbathepaul/digitorn/internal/runtime/contextcompact"
 	"github.com/mbathepaul/digitorn/internal/runtime/contextsvc"
@@ -55,6 +58,75 @@ func (d *Daemon) startWorkers(ctx context.Context) {
 				slog.String("err", err.Error()))
 		}
 	}
+	// Service gateway : the worker→daemon bridge. Started after the
+	// embeddings client is wired (synchronously above) so worker-hosted
+	// modules (RAG) can embed. No-op when embeddings is disabled.
+	d.startServiceGateway()
+}
+
+// startServiceGateway brings up the worker→daemon service bridge and
+// records its address + dedicated secret so worker pools can reach it.
+// Bridges the embeddings service today (Manager-routed via the client).
+// Best-effort : a failure just leaves worker-hosted modules without
+// daemon services, it never blocks startup.
+func (d *Daemon) startServiceGateway() {
+	if d.embeddingsClient == nil {
+		return // nothing to bridge yet
+	}
+	secret, err := randomSecret()
+	if err != nil {
+		d.logger.Error("daemon: service gateway secret gen failed", slog.String("err", err.Error()))
+		return
+	}
+	srv, err := gateway.Start(secret, d.embeddingsClient.EmbedRaw, d.embeddingsClient.RerankRaw)
+	if err != nil {
+		d.logger.Error("daemon: service gateway start failed; worker-hosted modules lose embeddings",
+			slog.String("err", err.Error()))
+		return
+	}
+	d.serviceGateway = srv
+	d.gatewayAddr = srv.Addr()
+	d.gatewaySecret = secret
+	d.logger.Info("daemon: service gateway up", slog.String("addr", d.gatewayAddr))
+}
+
+// daemonEmbedder / daemonReranker bridge the daemon embeddings client to
+// pkgmodule.Embedder / pkgmodule.Reranker for in-proc modules. Both read
+// d.embeddingsClient lazily (it is wired in startWorkers, after the
+// BusAdapter is built) and degrade gracefully when it is nil.
+type daemonEmbedder struct{ d *Daemon }
+
+func (e daemonEmbedder) EmbedModel(ctx context.Context, model, role string, texts []string) ([][]float32, int, error) {
+	if e.d.embeddingsClient == nil {
+		return nil, 0, fmt.Errorf("embeddings unavailable")
+	}
+	vecs, dim, err := e.d.embeddingsClient.EmbedModel(ctx, model, role, texts)
+	if err != nil {
+		return nil, 0, err
+	}
+	out := make([][]float32, len(vecs))
+	for i, v := range vecs {
+		out[i] = []float32(v)
+	}
+	return out, dim, nil
+}
+
+type daemonReranker struct{ d *Daemon }
+
+func (r daemonReranker) Rerank(ctx context.Context, model, query string, docs []string) ([]float32, error) {
+	if r.d.embeddingsClient == nil {
+		return nil, fmt.Errorf("reranker unavailable")
+	}
+	return r.d.embeddingsClient.Rerank(ctx, model, query, docs)
+}
+
+// randomSecret returns a 256-bit hex secret for the gateway handshake.
+func randomSecret() (string, error) {
+	var b [32]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b[:]), nil
 }
 
 // spawnPoolAsync launches a worker pool in a background goroutine so a slow or
@@ -479,6 +551,13 @@ func (d *Daemon) startOneWorkerPool(ctx context.Context, p config.WorkerPool) er
 	for k, v := range p.Env {
 		env[k] = v
 	}
+	// Service gateway : let this pool's modules reach daemon services
+	// (embeddings) through the worker→daemon bridge. Set after the
+	// operator's Env so the daemon-owned address/secret are authoritative.
+	if d.gatewayAddr != "" {
+		env[gateway.EnvGatewayAddr] = d.gatewayAddr
+		env[gateway.EnvGatewaySecret] = d.gatewaySecret
+	}
 
 	count := p.Count
 	if count <= 0 {
@@ -509,13 +588,19 @@ func (d *Daemon) startOneWorkerPool(ctx context.Context, p config.WorkerPool) er
 	// hosts.
 	invokeTO := p.InvokeTimeout
 	for _, modID := range p.Modules {
-		px, err := proxy.New(ctx, proxy.Options{
+		opts := proxy.Options{
 			ModuleID:      modID,
 			Kind:          worker.Kind(p.ID),
 			Picker:        d.workerMgr,
 			InvokeTimeout: invokeTO,
 			Logger:        d.logger,
-		})
+		}
+		// The mcp proxy resolves per-user OAuth credentials daemon-side. Set the
+		// resolver only when oauth is available (avoids a typed-nil interface).
+		if modID == "mcp" && d.mcpOAuth != nil {
+			opts.AuthResolver = d.mcpOAuth
+		}
+		px, err := proxy.New(ctx, opts)
 		if err != nil {
 			d.logger.Error("daemon: proxy create failed",
 				slog.String("pool_id", p.ID),

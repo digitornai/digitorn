@@ -1,15 +1,75 @@
 package server
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
 )
+
+// renameSession updates a session's title after creation. The title is otherwise
+// only set at creation (EventSessionStarted), so we append a durable
+// EventSessionRenamed that the projection applies — surviving replay/cold-load —
+// and sync the meta so the session list reflects it immediately.
+func (d *Daemon) renameSession(w http.ResponseWriter, r *http.Request) {
+	sid := chi.URLParam(r, "session_id")
+	appID := chi.URLParam(r, "app_id")
+	userID := userIDOf(r.Context())
+
+	state, err := d.requireOwnedSession(r.Context(), sid)
+	if err != nil {
+		writeError(w, errStatus(err), errCode(err), err.Error())
+		return
+	}
+
+	var req struct {
+		Title string `json:"title"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	title := strings.TrimSpace(req.Title)
+	if title == "" {
+		writeError(w, http.StatusBadRequest, "bad_request", "title is required")
+		return
+	}
+
+	ctxApp, cancel := appendCtx(r.Context())
+	defer cancel()
+	if _, err := d.sessionStore.AppendDurable(ctxApp, sessionstore.Event{
+		Type:      sessionstore.EventSessionRenamed,
+		SessionID: sid,
+		AppID:     appID,
+		UserID:    userID,
+		Meta:      &sessionstore.MetaPayload{Title: title},
+	}); err != nil {
+		writeError(w, appendErrStatus(err), "append_failed", err.Error())
+		return
+	}
+	if err := d.sessionStore.SyncMetaToDisk(sid); err != nil {
+		d.logger.Warn("renameSession: sync meta failed", "sid", sid, "err", err.Error())
+	}
+
+	state.RLock()
+	wd := state.Workdir
+	startedNano := state.StartedAtNano
+	state.RUnlock()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"session_id": sid,
+		"title":      title,
+		"workdir":    wd,
+		"started_at": time.Unix(0, startedNano).UTC().Format(time.RFC3339Nano),
+		"updated_at": time.Now().UTC().Format(time.RFC3339Nano),
+	})
+}
 
 // forkSession clones a session's conversation into a fresh session. In an
 // event-sourced store a fork is just "replay the durable log under a new id" :
@@ -39,6 +99,16 @@ func (d *Daemon) forkSession(w http.ResponseWriter, r *http.Request) {
 	workdir := src.Workdir
 	src.RUnlock()
 
+	// Optional point-fork : clone only events strictly BEFORE this source seq, so
+	// the new session rewinds to just before that message (the client then re-fills
+	// the composer with it). Absent / 0 → clone the full conversation (unchanged).
+	var beforeSeq uint64
+	if v := r.URL.Query().Get("before_seq"); v != "" {
+		if n, err := strconv.ParseUint(v, 10, 64); err == nil {
+			beforeSeq = n
+		}
+	}
+
 	jres, err := sessionstore.ReadJSONL(d.sessionPaths.EventsFile(srcSid), sessionstore.JSONLBestEffort, "")
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "read_failed", err.Error())
@@ -65,6 +135,9 @@ func (d *Daemon) forkSession(w http.ResponseWriter, r *http.Request) {
 		e := jres.Events[i]
 		if e.Type == sessionstore.EventSessionStarted {
 			continue // a fresh one is injected above
+		}
+		if beforeSeq > 0 && e.Seq >= beforeSeq {
+			continue // point-fork cutoff : drop the fork message and everything after it
 		}
 		e.Seq = 0 // bus re-assigns
 		e.SessionID = newSid

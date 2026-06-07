@@ -1,0 +1,33 @@
+2026/06/07 10:59:31 maxprocs: Leaving GOMAXPROCS=16: CPU quota undefined
+[2m2026-06-07T10:59:31+02:00[0m [92mINF[0m daemon: starting [2maddr=[0m127.0.0.1:8000 [2mdb_driver=[0msqlite [2msessions_root=[0mC:/Users/ASUS/AppData/Local/Temp/digitorn-live-chat/sessions
+[2m2026-06-07T10:59:32+02:00[0m [92mINF[0m jwks: refreshed [2mkeys=[0m1 [2murl=[0mhttps://auth.digitorn.ai/.well-known/jwks.json
+[2m2026-06-07T10:59:32+02:00[0m [92mINF[0m daemon: service gateway up [2maddr=[0m127.0.0.1:51692
+[2m2026-06-07T10:59:32+02:00[0m [92mINF[0m daemon: runtime engine ready [2mturn_pool_global=[0m4096 [2mturn_pool_per_app=[0m256 [2mturn_pool_per_user=[0m32 [2mdispatcher_wired=[0mtrue [2mhooks_wired=[0mtrue
+[2m2026-06-07T10:59:32+02:00[0m [92mINF[0m worker: instance ready [2mid=[0mtokenizer#0 [2mkind=[0mtokenizer [2maddr=[0m127.0.0.1:51693
+[2m2026-06-07T10:59:32+02:00[0m [92mINF[0m daemon: tokenizer worker pool ready [2mcount=[0m1 [2mbinary=[0mC:\Users\ASUS\Documents\digitorn_go\bin\digitorn-worker-tokenizer.exe
+[2m2026-06-07T10:59:32+02:00[0m [92mINF[0m worker: instance ready [2mid=[0mllm#0 [2mkind=[0mllm [2maddr=[0m127.0.0.1:51694
+[2m2026-06-07T10:59:32+02:00[0m [92mINF[0m appmgr: bootstrap done [2menabled_in_db=[0m12 [2mdiscovered_on_disk=[0m0 [2mloaded=[0m12
+[2m2026-06-07T10:59:33+02:00[0m [92mINF[0m worker: instance ready [2mid=[0mllm#1 [2mkind=[0mllm [2maddr=[0m127.0.0.1:51695
+[2m2026-06-07T10:59:33+02:00[0m [92mINF[0m worker: instance ready [2mid=[0mllm#2 [2mkind=[0mllm [2maddr=[0m127.0.0.1:51696
+[2m2026-06-07T10:59:33+02:00[0m [92mINF[0m daemon: LLM worker pool ready [2mcount=[0m3 [2mbinary=[0mC:\Users\ASUS\Documents\digitorn_go\bin\digitorn-worker-llm.exe [2mgateway_url=[0mhttp://127.0.0.1:8002/v1
+[2m2026-06-07T10:59:33+02:00[0m [93mWRN[0m worker: instance exited, will restart [2mid=[0mrag#0 [2merr=[0m"exit status 1" [2mbackoff_ms=[0m500
+[2m2026-06-07T10:59:33+02:00[0m [92mINF[0m worker: instance ready [2mid=[0mworkspace#0 [2mkind=[0mworkspace [2maddr=[0m127.0.0.1:51697
+[2m2026-06-07T10:59:33+02:00[0m [92mINF[0m daemon: worker-hosted module ready [2mpool_id=[0mworkspace [2mmodule_id=[0mworkspace [2mworkers=[0m1
+[2m2026-06-07T10:59:33+02:00[0m [92mINF[0m http: listening [2maddr=[0m127.0.0.1:8000
+[2m2026-06-07T10:59:33+02:00[0m [93mWRN[0m worker: instance exited, will restart [2mid=[0mrag#0 [2merr=[0m"exit status 1" [2mbackoff_ms=[0m1000
+[2m2026-06-07T10:59:34+02:00[0m [93mWRN[0m worker: instance exited, will restart [2mid=[0mrag#0 [2merr=[0m"exit status 1" [2mbackoff_ms=[0m2000
+[2m2026-06-07T10:59:37+02:00[0m [93mWRN[0m worker: instance exited, will restart [2mid=[0mrag#0 [2merr=[0m"exit status 1" [2mbackoff_ms=[0m4000
+[2m2026-06-07T10:59:40+02:00[0m [92mINF[0m worker: instance ready [2mid=[0membeddings#0 [2mkind=[0membeddings [2maddr=[0m127.0.0.1:51699
+[2m2026-06-07T10:59:40+02:00[0m [92mINF[0m daemon: embeddings worker pool ready [2mcount=[0m1 [2mbinary=[0mC:\Users\ASUS\Documents\digitorn_go\bin\digitorn-worker-embeddings.exe [2mbackend=[0monnx
+[2m2026-06-07T10:59:41+02:00[0m [93mWRN[0m worker: instance exited, will restart [2mid=[0mrag#0 [2merr=[0m"exit status 1" [2mbackoff_ms=[0m8000
+[2m2026-06-07T10:59:47+02:00[0m [91mERR[0m worker: startup timeout [2mid=[0mrag#0 [2mstdout=[0m"" [2mstderr=[0m"2026/06/07 10:59:32 maxprocs: Leaving GOMAXPROCS=16: CPU quota undefined\n2026/06/07 10:59:33 INFO worker starting kind=rag modules=1 module_ids=rag\ndigitorn-worker: worker: start modules: module \"rag\" not in registry (forgot import _ \"internal/modules/rag\" in cmd/digitorn-worker ?)\n2026/06/07 10:59:33 maxprocs: Leaving GOMAXPROCS=16: CPU quota undefined\n2026/06/07 10:59:33 INFO worker starting kind=rag modules=1 module_ids=rag\ndigitorn-worker: worker: start modules: module \"rag\" not in registry (forgot import _ \"internal/modules/rag\" in cmd/digitorn-worker ?)\n2026/06/07 10:59:34 maxprocs: Leaving GOMAXPROCS=16: CPU quota undefined\n2026/06/07 10:59:34 INFO worker starting kind=rag modules=1 module_ids=rag\ndigitorn-worker: worker: start modules: module \"rag\" not in registry (forgot import _ \"internal/modules/rag\" in cmd/digitorn-worker ?)\n2026/06/07 10:59:36 maxprocs: Leaving GOMAXPROCS=16: CPU quota undefined\n2026/06/07 10:59:37 INFO worker starting kind=rag modules=1 module_ids=rag\ndigitorn-worker: worker: start modules: module \"rag\" not in registry (forgot import _ \"internal/modules/rag\" in cmd/digitorn-worker ?)\n2026/06/07 10:59:41 maxprocs: Leaving GOMAXPROCS=16: CPU quota undefined\n2026/06/07 10:59:41 INFO worker starting kind=rag modules=1 module_ids=rag\ndigitorn-worker: worker: start modules: module \"rag\" not in registry (forgot import _ \"internal/modules/rag\" in cmd/digitorn-worker ?)"
+[2m2026-06-07T10:59:47+02:00[0m [91mERR[0m daemon: worker pool failed in background; its modules stay unavailable until it recovers [2mpool_id=[0mrag [2mmodules=[0m[rag] [2merr=[0m"worker pool \"rag\" : spawn: rag#0: worker: startup timeout"
+[2m2026-06-07T10:59:49+02:00[0m [93mWRN[0m worker: instance exited, will restart [2mid=[0mrag#0 [2merr=[0m"exit status 1" [2mbackoff_ms=[0m16000
+[2m2026-06-07T11:00:05+02:00[0m [93mWRN[0m worker: instance exited, will restart [2mid=[0mrag#0 [2merr=[0m"exit status 1" [2mbackoff_ms=[0m30000
+[2m2026-06-07T11:00:35+02:00[0m [93mWRN[0m worker: instance exited, will restart [2mid=[0mrag#0 [2merr=[0m"exit status 1" [2mbackoff_ms=[0m500
+[2m2026-06-07T11:00:36+02:00[0m [93mWRN[0m worker: instance exited, will restart [2mid=[0mrag#0 [2merr=[0m"exit status 1" [2mbackoff_ms=[0m1000
+[2m2026-06-07T11:00:37+02:00[0m [93mWRN[0m worker: instance exited, will restart [2mid=[0mrag#0 [2merr=[0m"exit status 1" [2mbackoff_ms=[0m2000
+[2m2026-06-07T11:00:39+02:00[0m [93mWRN[0m worker: instance exited, will restart [2mid=[0mrag#0 [2merr=[0m"exit status 1" [2mbackoff_ms=[0m4000
+[2m2026-06-07T11:00:43+02:00[0m [93mWRN[0m worker: instance exited, will restart [2mid=[0mrag#0 [2merr=[0m"exit status 1" [2mbackoff_ms=[0m8000
+[2m2026-06-07T11:00:51+02:00[0m [93mWRN[0m worker: instance exited, will restart [2mid=[0mrag#0 [2merr=[0m"exit status 1" [2mbackoff_ms=[0m16000
+[2m2026-06-07T11:01:07+02:00[0m [93mWRN[0m worker: instance exited, will restart [2mid=[0mrag#0 [2merr=[0m"exit status 1" [2mbackoff_ms=[0m30000

@@ -18,6 +18,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 
 	domainmodule "github.com/mbathepaul/digitorn/internal/domain/module"
@@ -63,6 +64,47 @@ type InvokeRequest struct {
 	SessionID string `json:"session_id,omitempty"`
 	UserID    string `json:"user_id,omitempty"`
 	AgentID   string `json:"agent_id,omitempty"`
+
+	// Config carries the calling app's resolved per-module config block
+	// (tools.modules.<id>) as JSON, so a worker-hosted module reads its
+	// app-specific configuration per call (a shared worker instance can't
+	// take it at Init). Empty for modules/apps with no config block.
+	Config json.RawMessage `json:"config,omitempty"`
+
+	// AuthContext is a per-call, per-user resolved credential the daemon
+	// injects for MCP tools (never cached in Config — Config is user-agnostic).
+	// nil for non-MCP or unauthenticated calls. The worker re-injects it into
+	// the call context; the module applies it as an http header or stdio env.
+	AuthContext *AuthContext `json:"auth,omitempty"`
+}
+
+// AuthContext is a resolved credential bound to one (user, server) call. Token
+// is already decrypted; the daemon resolves+refreshes it. EnvTokenVar names the
+// stdio env var to inject under (empty for http, which uses an Authorization
+// header). It rides the wire per-call and must never be logged verbatim.
+type AuthContext struct {
+	Token       string `json:"token,omitempty"`
+	TokenType   string `json:"token_type,omitempty"`
+	EnvTokenVar string `json:"env_token_var,omitempty"`
+	ExpiresAt   int64  `json:"expires_at,omitempty"`
+}
+
+// AuthChallenge describes a missing/expired credential. The daemon turns it into
+// a blocking needs-auth result so the client can drive the OAuth flow. It carries
+// no secrets.
+type AuthChallenge struct {
+	Provider string `json:"provider"`
+	ServerID string `json:"server_id"`
+	AuthURL  string `json:"auth_url"`
+	State    string `json:"state"`
+}
+
+// AuthResolver resolves a per-call credential for an MCP tool. Implemented by the
+// daemon's mcpoauth service. A nil *AuthContext with a nil *AuthChallenge means
+// "no auth needed" (non-OAuth server); a non-nil *AuthChallenge means the call
+// must be blocked pending authorization.
+type AuthResolver interface {
+	ResolveAuth(ctx context.Context, userID, appID, moduleID, toolName string) (*AuthContext, *AuthChallenge, error)
 }
 
 // InvokeResponse is what the worker returns. Result is always set ;
@@ -98,4 +140,22 @@ type ManifestsResponse struct {
 	// knows it from worker.Manager.Pool() so this is just a
 	// belt-and-braces sanity check on the wire.
 	WorkerID string `json:"worker_id,omitempty"`
+}
+
+// ToolsRequest asks a worker for a module's runtime tool set. Identity + Config
+// ride along so a shared worker materializes the caller app's tools.
+type ToolsRequest struct {
+	ModuleID string          `json:"module_id"`
+	AppID    string          `json:"app_id,omitempty"`
+	AgentID  string          `json:"agent_id,omitempty"`
+	UserID   string          `json:"user_id,omitempty"`
+	Config   json.RawMessage `json:"config,omitempty"`
+}
+
+// ToolsResponse is the module's current tool specs (static manifest fallback for
+// non-discovery modules).
+type ToolsResponse struct {
+	ModuleID string      `json:"module_id"`
+	Tools    []tool.Spec `json:"tools"`
+	WorkerID string      `json:"worker_id,omitempty"`
 }

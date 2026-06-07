@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -322,6 +323,20 @@ func TestBridge_JoinSession_RejectsForeignSession(t *testing.T) {
 		if r == "session:sess-A" {
 			t.Fatalf("ATTACK SUCCEEDED : user-B joined session of user-A; rooms=%v", c.Rooms())
 		}
+	}
+	// The refusal must NOT be silent : the client gets an error event so the UI
+	// shows why, instead of a dead session with no spinner / no error.
+	gotErr := false
+	for _, e := range c.recordedEmits() {
+		if e.Event != "event" {
+			continue
+		}
+		if raw, err := json.Marshal(e.Data); err == nil && strings.Contains(string(raw), "join_refused") {
+			gotErr = true
+		}
+	}
+	if !gotErr {
+		t.Errorf("a refused join must emit a join_refused error to the client (silent refusal regression)")
 	}
 }
 

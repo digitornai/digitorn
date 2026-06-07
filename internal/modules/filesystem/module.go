@@ -566,6 +566,7 @@ func (m *Module) write(ctx context.Context, raw json.RawMessage) (tool.Result, e
 		return errResult(err), err
 	}
 	tindexes.markDirty(abs) // keep this file fresh against any trigram index
+	sindexes.markDirty(abs) // and against the ephemeral semantic index
 	notifyFileChange(ctx)   // live workspace push (non-blocking, best-effort)
 	action := "created"
 	if existed {
@@ -1088,6 +1089,7 @@ type grepParams struct {
 	Context    flexInt `json:"context"`     // lines of context around each match (0-20)
 	OutputMode string  `json:"output_mode"` // "content" | "files_with_matches" | "count"
 	Multiline  bool    `json:"multiline"`   // match across line boundaries
+	Semantic   string  `json:"semantic"`    // "auto" (default) | "on" | "off" : fuse code-semantic matches
 }
 
 func (m *Module) grep(ctx context.Context, raw json.RawMessage) (tool.Result, error) {
@@ -1196,7 +1198,39 @@ func (m *Module) grep(ctx context.Context, raw json.RawMessage) (tool.Result, er
 	default:
 		data["matches"] = res.Matches
 	}
+	// Native code intelligence : when the app enables auto_index_workdir,
+	// fuse the semantically-nearest code chunks (ephemeral per-workdir
+	// index, built off-loop, LRU+TTL bounded) alongside the exact matches.
+	if mode == grepContent && strings.ToLower(p.Semantic) != "off" {
+		if model, on := codeIndexConfig(ctx); on {
+			if emb := module.EmbedderFrom(ctx); emb != nil {
+				si := sindexes.get(root, m.cfg.MaxFileBytes)
+				si.maybeBuild(emb, model)
+				if rel := si.search(ctx, emb, model, p.Pattern, 8); len(rel) > 0 {
+					data["related"] = rel
+				}
+			}
+		}
+	}
 	return tool.Result{Success: true, Data: data}, nil
+}
+
+// codeIndexConfig reads the app's per-module config : whether the
+// ephemeral workdir semantic index is enabled and which code embedding
+// model to use (default jina-code).
+func codeIndexConfig(ctx context.Context) (model string, enabled bool) {
+	cfg := module.ModuleConfigFrom(ctx)
+	if cfg == nil {
+		return "", false
+	}
+	if v, ok := cfg["auto_index_workdir"].(bool); ok {
+		enabled = v
+	}
+	model = "code"
+	if s, ok := cfg["code_embed_model"].(string); ok && strings.TrimSpace(s) != "" {
+		model = strings.TrimSpace(s)
+	}
+	return model, enabled
 }
 
 func errResult(err error) tool.Result {
@@ -1210,17 +1244,5 @@ func errResult(err error) tool.Result {
 // ctx (the agent path) — setup / CLI / test calls have none and skip silently.
 // Never returns an error : a failed live push must never affect the write.
 func notifyFileChange(ctx context.Context) {
-	n, ok := tool.FileChangeNotifierFromContext(ctx)
-	if !ok || n == nil {
-		return
-	}
-	id, ok := tool.IdentityFromContext(ctx)
-	if !ok || id.SessionID == "" {
-		return
-	}
-	pp, ok := workdir.PathPolicyFromContext(ctx)
-	if !ok || !pp.HasWorkdir() {
-		return
-	}
-	n.FileChanged(id.SessionID, pp.Root())
+	workdir.NotifyFileChange(ctx)
 }

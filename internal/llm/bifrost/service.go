@@ -240,6 +240,173 @@ func (s *Service) ListProviders(ctx context.Context, _ *llm.ListProvidersRequest
 	return out, nil
 }
 
+// Speak synthesizes text to streamed audio through the gateway (bifrost
+// SpeechStreamRequest). Audio deltas are forwarded as raw frames the instant they
+// arrive — the latency-critical "time to first audio" path — terminated by a Done
+// frame. Routing, admission, and error translation mirror Chat.
+func (s *Service) Speak(ctx context.Context, req *llm.SpeechRequest, sink llm.AudioSink) error {
+	if err := s.admit(ctx); err != nil {
+		return err
+	}
+	defer s.admission.Release(1)
+	bctx, cancel, route := s.buildAudioContext(ctx, audioRoute{
+		BYOK: req.BYOK, APIKey: req.APIKey, UserJWT: req.UserJWT, BaseURL: req.BaseURL,
+		Timeout: req.Timeout, CorrelationID: req.CorrelationID,
+		SessionID: req.SessionID, UserID: req.UserID, AgentID: req.AgentID,
+	})
+	defer cancel()
+	defer releaseRouteInfo(route)
+
+	var voice *schemas.SpeechVoiceInput
+	if req.Voice != "" {
+		v := req.Voice
+		voice = &schemas.SpeechVoiceInput{Voice: &v}
+	}
+	sp := &schemas.BifrostSpeechRequest{
+		Provider: ResolveProvider(&llm.ChatRequest{BYOK: req.BYOK, Provider: req.Provider}),
+		Model:    req.Model,
+		Input:    &schemas.SpeechInput{Input: req.Text},
+		Params: &schemas.SpeechParameters{
+			VoiceConfig:    voice,
+			ResponseFormat: req.Format,
+			Speed:          req.Speed,
+			Instructions:   req.Instructions,
+		},
+	}
+	ec := errCallContext{Provider: req.Provider, Model: req.Model, BYOK: req.BYOK,
+		CorrelationID: req.CorrelationID, SessionID: req.SessionID, UserID: req.UserID, AgentID: req.AgentID}
+
+	// The digitorn gateway's /v1/audio/speech returns the full audio in one
+	// response (non-SSE), so use the unary SpeechRequest and chunk the result into
+	// frames for smooth downstream playback.
+	resp, berr := s.client.SpeechRequest(bctx, sp)
+	if berr != nil {
+		s.logBifrostError(berr, ec, "speak")
+		return translateError(berr, ec)
+	}
+	if resp != nil {
+		audio := resp.Audio
+		const chunk = 9600 // ~200 ms of PCM16 @ 24 kHz
+		for off := 0; off < len(audio); off += chunk {
+			end := off + chunk
+			if end > len(audio) {
+				end = len(audio)
+			}
+			if err := sink.Send(llm.AudioBytesFrame(audio[off:end])); err != nil {
+				return err
+			}
+		}
+	}
+	return sink.Send(llm.DoneFrame())
+}
+
+// Transcribe turns an utterance's audio into streamed transcript frames through the
+// gateway (bifrost TranscriptionStreamRequest). The utterance is VAD-delimited by the
+// caller, so the request carries a bounded audio buffer; delta events are forwarded as
+// TextFrame (interim) and the done event as a FinalFrame.
+func (s *Service) Transcribe(ctx context.Context, req *llm.TranscribeRequest, sink llm.AudioSink) error {
+	if err := s.admit(ctx); err != nil {
+		return err
+	}
+	defer s.admission.Release(1)
+	bctx, cancel, route := s.buildAudioContext(ctx, audioRoute{
+		BYOK: req.BYOK, APIKey: req.APIKey, UserJWT: req.UserJWT, BaseURL: req.BaseURL,
+		Timeout: req.Timeout, CorrelationID: req.CorrelationID,
+		SessionID: req.SessionID, UserID: req.UserID, AgentID: req.AgentID,
+	})
+	defer cancel()
+	defer releaseRouteInfo(route)
+
+	params := &schemas.TranscriptionParameters{}
+	if req.Language != "" {
+		l := req.Language
+		params.Language = &l
+	}
+	if req.Format != "" {
+		f := req.Format
+		params.Format = &f
+	}
+	tr := &schemas.BifrostTranscriptionRequest{
+		Provider: ResolveProvider(&llm.ChatRequest{BYOK: req.BYOK, Provider: req.Provider}),
+		Model:    req.Model,
+		Input:    &schemas.TranscriptionInput{File: req.Audio, Filename: "utterance." + audioExt(req.Format)},
+		Params:   params,
+	}
+	ec := errCallContext{Provider: req.Provider, Model: req.Model, BYOK: req.BYOK,
+		CorrelationID: req.CorrelationID, SessionID: req.SessionID, UserID: req.UserID, AgentID: req.AgentID}
+
+	// The gateway's /v1/audio/transcriptions returns the full transcript in one
+	// (non-SSE) response, so use the unary TranscriptionRequest.
+	resp, berr := s.client.TranscriptionRequest(bctx, tr)
+	if berr != nil {
+		s.logBifrostError(berr, ec, "transcribe")
+		return translateError(berr, ec)
+	}
+	if resp != nil && resp.Text != "" {
+		if err := sink.Send(llm.FinalFrame(resp.Text)); err != nil {
+			return err
+		}
+	}
+	return sink.Send(llm.DoneFrame())
+}
+
+// audioExt maps a wire format name to a filename extension (providers infer the
+// codec from it). Defaults to wav for unknown/empty formats.
+func audioExt(format string) string {
+	switch format {
+	case "", "pcm", "pcm16", "l16", "wav":
+		return "wav"
+	case "mp3", "ogg", "flac", "opus", "webm", "m4a":
+		return format
+	case "mulaw", "ulaw", "g711":
+		return "wav"
+	default:
+		return "wav"
+	}
+}
+
+// audioRoute carries the routing + identity fields common to the audio RPCs.
+type audioRoute struct {
+	BYOK    bool
+	APIKey  string
+	UserJWT string
+	BaseURL string
+	Timeout time.Duration
+
+	CorrelationID string
+	SessionID     string
+	UserID        string
+	AgentID       string
+}
+
+// buildAudioContext mirrors buildContext for the audio RPCs: pooled route info,
+// gateway passthrough when not BYOK, and per-request trace identity.
+func (s *Service) buildAudioContext(parent context.Context, r audioRoute) (*schemas.BifrostContext, context.CancelFunc, *routeInfo) {
+	timeout := r.Timeout
+	if timeout <= 0 {
+		timeout = 60 * time.Second
+	}
+	bc, cancel := schemas.NewBifrostContextWithTimeout(parent, timeout)
+	route := acquireRouteInfo(r.BYOK, r.APIKey, r.UserJWT, r.BaseURL)
+	bc.SetValue(ctxKeyRoute, route)
+	if !r.BYOK {
+		bc.SetValue(schemas.BifrostContextKeyPassthroughExtraParams, true)
+	}
+	if r.CorrelationID != "" {
+		bc.SetTraceAttribute("correlation_id", r.CorrelationID)
+	}
+	if r.SessionID != "" {
+		bc.SetTraceAttribute("session_id", r.SessionID)
+	}
+	if r.UserID != "" {
+		bc.SetTraceAttribute("user_id", r.UserID)
+	}
+	if r.AgentID != "" {
+		bc.SetTraceAttribute("agent_id", r.AgentID)
+	}
+	return bc, cancel, route
+}
+
 // ---- translation helpers ----
 
 func (s *Service) buildContext(parent context.Context, req *llm.ChatRequest) (*schemas.BifrostContext, context.CancelFunc, *routeInfo) {
@@ -426,6 +593,12 @@ func mapChatResponse(r *schemas.BifrostChatResponse) *llm.ChatResponse {
 			out.Usage.CacheReadTokens = d.CachedReadTokens
 			out.Usage.CacheWriteTokens = d.CachedWriteTokens
 		}
+		// Provider-EXACT reasoning tokens (a subset of CompletionTokens). bifrost
+		// normalises every provider into completion_tokens_details.reasoning_tokens,
+		// so this is generic — one struct read, no hot-path cost.
+		if d := r.Usage.CompletionTokensDetails; d != nil {
+			out.Usage.ReasoningTokens = d.ReasoningTokens
+		}
 	}
 	return out
 }
@@ -475,6 +648,9 @@ func mapChatChunk(c *schemas.BifrostStreamChunk) *llm.ChatChunk {
 		if d := cr.Usage.PromptTokensDetails; d != nil {
 			out.Usage.CacheReadTokens = d.CachedReadTokens
 			out.Usage.CacheWriteTokens = d.CachedWriteTokens
+		}
+		if d := cr.Usage.CompletionTokensDetails; d != nil {
+			out.Usage.ReasoningTokens = d.ReasoningTokens
 		}
 	}
 	return out

@@ -113,6 +113,13 @@ type createSessionRequest struct {
 	Message         string `json:"message,omitempty"`
 	ClientMessageID string `json:"client_message_id,omitempty"`
 	Mode            string `json:"mode,omitempty"`
+	Skill           string `json:"skill,omitempty"`
+	// EntryAgent pins which of the app's agents handles this session, and Context
+	// is extra system-prompt text injected for it. Both are optional passthroughs
+	// for non-human launchers (e.g. a background channel trigger); empty for human
+	// clients, which keeps behaviour byte-identical to before.
+	EntryAgent string `json:"entry_agent,omitempty"`
+	Context    string `json:"context,omitempty"`
 }
 
 func (d *Daemon) createSession(w http.ResponseWriter, r *http.Request) {
@@ -152,9 +159,11 @@ func (d *Daemon) createSession(w http.ResponseWriter, r *http.Request) {
 		AppID:     appID,
 		UserID:    userID,
 		Meta: &sessionstore.MetaPayload{
-			Title:     req.Title,
-			Workspace: req.Workspace,
-			Workdir:   resolvedWD,
+			Title:        req.Title,
+			Workspace:    req.Workspace,
+			Workdir:      resolvedWD,
+			EntryAgent:   req.EntryAgent,
+			ContextExtra: req.Context,
 		},
 	}
 	ctxApp, cancelApp := appendCtx(r.Context())
@@ -189,7 +198,7 @@ func (d *Daemon) createSession(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		firstMsgSeq = mseq
-		d.runTurnAsync(r.Context(), sid, appID, userID, extractBearer(r), req.Mode)
+		d.runTurnAsync(r.Context(), sid, appID, userID, extractBearer(r), req.Mode, req.Skill)
 	}
 
 	resp := map[string]any{
@@ -449,6 +458,10 @@ type postMessageRequest struct {
 	// Mode is the composer mode the user picked for this message
 	// (runtime.modes). Empty → the session's sticky mode / app default.
 	Mode string `json:"mode,omitempty"`
+	// Skill is the /use_skill command the user prefixed this message with
+	// (e.g. "/commit"). Non-empty → the engine injects the skill's instructions
+	// as a forced system directive for this turn.
+	Skill string `json:"skill,omitempty"`
 }
 
 func (d *Daemon) postMessage(w http.ResponseWriter, r *http.Request) {
@@ -510,7 +523,7 @@ func (d *Daemon) postMessage(w http.ResponseWriter, r *http.Request) {
 	// messages are write-throughs from upstream callers and must NOT
 	// re-enter the runtime (assistant in particular would loop).
 	if role == "user" && d.engine != nil && appID != "" {
-		d.runTurnAsync(r.Context(), sid, appID, userIDOf(r.Context()), extractBearer(r), req.Mode)
+		d.runTurnAsync(r.Context(), sid, appID, userIDOf(r.Context()), extractBearer(r), req.Mode, req.Skill)
 	}
 
 	writeJSON(w, http.StatusCreated, map[string]any{
@@ -528,7 +541,7 @@ func (d *Daemon) postMessage(w http.ResponseWriter, r *http.Request) {
 // message and a proactive wake can never run two turns on one session at
 // once. The assistant reply reaches the client via the session-store →
 // Socket.IO bridge ; errors are logged inside the runner.
-func (d *Daemon) runTurnAsync(_ context.Context, sid, appID, userID, userJWT, mode string) {
+func (d *Daemon) runTurnAsync(_ context.Context, sid, appID, userID, userJWT, mode, skill string) {
 	if d.sessionRunner == nil {
 		return
 	}
@@ -538,6 +551,7 @@ func (d *Daemon) runTurnAsync(_ context.Context, sid, appID, userID, userJWT, mo
 		UserID:    userID,
 		UserJWT:   userJWT,
 		Mode:      mode,
+		Skill:     skill,
 	})
 }
 

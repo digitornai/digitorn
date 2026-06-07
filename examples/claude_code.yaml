@@ -8,11 +8,39 @@ app:
   author: "you@example.com"
   category: "coding"
 
+dev:
+  allow_user_skills: true
+
 runtime:
   mode: conversation
   entry_agent: main
   workdir_mode: auto
   max_turns: 200
+  # Composer modes, cycled in the CLI with Shift+Tab. The first declared mode
+  # (build) is the default. `plan` is a read-only investigation mode : the main
+  # agent keeps read/search + delegation, but write/edit/shell are blocked, so
+  # it can only propose — it can't change anything until the user switches back.
+  modes:
+    build:
+      label: Build
+      description: "Full access — read, write, edit, run commands, delegate."
+      icon: "⚒"
+    plan:
+      label: Plan
+      description: "Read-only — investigate and propose a plan; no edits or commands."
+      icon: "✎"
+      system_prompt: |
+        You are in PLAN mode. Investigate the codebase (read files, search, and
+        delegate broad search to the explore sub-agent) and produce a concrete,
+        step-by-step plan. Do NOT modify anything: no file writes or edits, no
+        shell commands, and do not delegate write or execute work to other
+        agents. Present the plan and ask the user to switch to Build mode to
+        carry it out.
+      tool_grants:
+        - module: filesystem
+          tools: [read, glob, grep]
+        - module: context_builder
+          tools: [ask_user, search_tools, get_tool, background_run]
 
 security:
   behavior:
@@ -89,6 +117,7 @@ agents:
       memory: [set_goal, remember, task_create, task_update]
       context_builder: [ask_user, search_tools, get_tool, background_run]
       agent_spawn: [agent]
+      lsp: [diagnostics, notify_change]
 
   - id: explore
     role: specialist
@@ -138,6 +167,7 @@ agents:
     modules:
       filesystem: [read, write, edit, glob, grep]
       bash: [run]
+      lsp: [diagnostics, notify_change]
 
 tools:
   modules:

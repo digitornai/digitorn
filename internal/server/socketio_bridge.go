@@ -338,6 +338,9 @@ func (b *SocketIOBridge) handleJoinSession(ctx context.Context, c ports.Realtime
 			slog.String("user_id", st.userID),
 			slog.String("session_id", sessionID),
 			slog.String("err", err.Error()))
+		// A refused join would otherwise be SILENT — the client never gets the room,
+		// so it sees no turn, no error, no spinner. Push the reason straight to it.
+		b.emitJoinError(c, sessionID, appID, err)
 		return err
 	}
 
@@ -405,6 +408,34 @@ func (b *SocketIOBridge) emitContextOnJoin(c ports.RealtimeClient, sessionID, ap
 	}
 	if err := c.Emit("event", b.builder.Build(&ev)); err != nil {
 		b.log.Debug("bridge: context-on-join emit failed", slog.String("err", err.Error()))
+	}
+}
+
+// emitJoinError pushes a client-facing error event STRAIGHT to the joining client
+// when a join is refused. Without it the refusal is silent — the client never gets
+// the room, so it shows no turn, no error, no spinner. Reuses the standard
+// DaemonError shape so the existing client error path renders it.
+func (b *SocketIOBridge) emitJoinError(c ports.RealtimeClient, sessionID, appID string, cause error) {
+	if c == nil || b.builder == nil || cause == nil {
+		return
+	}
+	retry := false
+	ev := sessionstore.Event{
+		Type:      sessionstore.EventError,
+		SessionID: sessionID,
+		AppID:     appID,
+		Error: &sessionstore.ErrorPayload{
+			Error:    "cannot open session",
+			Message:  cause.Error(),
+			Code:     "join_refused",
+			Category: "auth",
+			Detail:   cause.Error(),
+			Retry:    &retry,
+			Source:   "join",
+		},
+	}
+	if err := c.Emit("event", b.builder.Build(&ev)); err != nil {
+		b.log.Debug("bridge: join-error emit failed", slog.String("err", err.Error()))
 	}
 }
 

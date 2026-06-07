@@ -8,6 +8,9 @@ app:
   author: "you@example.com"
   category: "coding"
 
+dev:
+  allow_user_skills: true
+
 runtime:
   mode: conversation
   entry_agent: main

@@ -77,7 +77,7 @@ func TestBundleLoader_ResolvesByCommand(t *testing.T) {
 	apps := &fakeApps{apps: map[string]*appmgr.RuntimeApp{"app1": app}}
 	l := skills.New(apps)
 
-	entry, err := l.Load(context.Background(), "app1", "/commit")
+	entry, err := l.Load(context.Background(), "app1", "","/commit")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestBundleLoader_AcceptsCommandWithoutSlash(t *testing.T) {
 	l := skills.New(apps)
 
 	for _, in := range []string{"commit", "/commit", "  commit  ", "/Commit", "COMMIT"} {
-		entry, err := l.Load(context.Background(), "app1", in)
+		entry, err := l.Load(context.Background(), "app1", "",in)
 		if err != nil {
 			t.Errorf("input %q : %v", in, err)
 		}
@@ -122,14 +122,14 @@ func TestBundleLoader_CommandNotDeclared(t *testing.T) {
 	)
 	apps := &fakeApps{apps: map[string]*appmgr.RuntimeApp{"app1": app}}
 	l := skills.New(apps)
-	if _, err := l.Load(context.Background(), "app1", "/deploy"); err == nil {
+	if _, err := l.Load(context.Background(), "app1", "","/deploy"); err == nil {
 		t.Error("expected not-found")
 	}
 }
 
 func TestBundleLoader_EmptyCommand(t *testing.T) {
 	l := skills.New(&fakeApps{})
-	if _, err := l.Load(context.Background(), "any", ""); err == nil {
+	if _, err := l.Load(context.Background(), "any", "", ""); err == nil {
 		t.Error("empty command should error")
 	}
 }
@@ -141,7 +141,7 @@ func TestBundleLoader_AppWithoutDevBlock(t *testing.T) {
 	}
 	apps := &fakeApps{apps: map[string]*appmgr.RuntimeApp{"app1": app}}
 	l := skills.New(apps)
-	if _, err := l.Load(context.Background(), "app1", "/commit"); err == nil {
+	if _, err := l.Load(context.Background(), "app1", "","/commit"); err == nil {
 		t.Error("app with no dev block should error")
 	}
 }
@@ -168,7 +168,7 @@ func TestBundleLoader_RejectsPathTraversal(t *testing.T) {
 	}
 	apps := &fakeApps{apps: map[string]*appmgr.RuntimeApp{"app1": app}}
 	l := skills.New(apps)
-	if _, err := l.Load(context.Background(), "app1", "/escape"); err == nil {
+	if _, err := l.Load(context.Background(), "app1", "","/escape"); err == nil {
 		t.Error("path traversal must be rejected")
 	}
 }
@@ -185,10 +185,10 @@ func TestBundleLoader_CachesResolvedEntries(t *testing.T) {
 	apps := &fakeApps{apps: map[string]*appmgr.RuntimeApp{"app1": app}}
 	l := skills.New(apps)
 
-	first, _ := l.Load(context.Background(), "app1", "/commit")
+	first, _ := l.Load(context.Background(), "app1", "","/commit")
 	// Mutate the file on disk ; cache should serve the old content.
 	os.WriteFile(filepath.Join(app.BundleDir, "skills", "commit.md"), []byte("v2"), 0o644)
-	second, _ := l.Load(context.Background(), "app1", "/commit")
+	second, _ := l.Load(context.Background(), "app1", "","/commit")
 	if first.Content != "v1" || second.Content != "v1" {
 		t.Errorf("cache miss : %q / %q", first.Content, second.Content)
 	}
@@ -210,8 +210,8 @@ func TestBundleLoader_PerAppIsolation(t *testing.T) {
 	apps := &fakeApps{apps: map[string]*appmgr.RuntimeApp{"A": appA, "B": appB}}
 	l := skills.New(apps)
 
-	a, _ := l.Load(context.Background(), "A", "/commit")
-	b, _ := l.Load(context.Background(), "B", "/commit")
+	a, _ := l.Load(context.Background(), "A", "", "/commit")
+	b, _ := l.Load(context.Background(), "B", "", "/commit")
 	if a.Content != "A" || b.Content != "B" {
 		t.Errorf("isolation broken : %q / %q", a.Content, b.Content)
 	}
@@ -233,7 +233,7 @@ func TestBundleLoader_MissingFileReportsError(t *testing.T) {
 	}
 	apps := &fakeApps{apps: map[string]*appmgr.RuntimeApp{"app1": app}}
 	l := skills.New(apps)
-	if _, err := l.Load(context.Background(), "app1", "/missing"); err == nil {
+	if _, err := l.Load(context.Background(), "app1", "","/missing"); err == nil {
 		t.Error("missing file should error")
 	}
 }

@@ -22,6 +22,7 @@ func newTestLive(rt ports.RealtimeServer, window time.Duration,
 		changes: changes,
 		log:     slog.Default(),
 		window:  window,
+		maxWait: 3 * window,
 		pend:    make(map[string]*wsPend),
 	}
 }

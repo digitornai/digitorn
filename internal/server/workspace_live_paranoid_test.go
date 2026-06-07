@@ -176,4 +176,33 @@ func TestWorkspaceLive_LevelTriggeredNeverLosesFinalState(t *testing.T) {
 	}, "final state (999) is eventually pushed — never lost")
 }
 
+// TestWorkspaceLive_SustainedBurstStreamsUpdates proves a long continuous burst
+// of writes (faster than the debounce window) streams INTERMEDIATE pushes via the
+// max-wait cap — the web sees the latest state WHILE the agent works, not only
+// once the burst ends. A pure trailing debounce would coalesce this to one push.
+func TestWorkspaceLive_SustainedBurstStreamsUpdates(t *testing.T) {
+	rt := newFakeRealtime()
+	window := 20 * time.Millisecond // maxWait = 3*window = 60ms
+	l := newTestLive(rt, window, func(context.Context, string) ([]sessionstore.WorkspaceChangedFile, error) {
+		return nil, nil
+	})
+
+	stop := time.Now().Add(300 * time.Millisecond)
+	for time.Now().Before(stop) {
+		l.FileChanged("root", "/wd") // write every ~10ms, faster than the 20ms window
+		time.Sleep(10 * time.Millisecond)
+	}
+	waitUntil(t, func() bool { return l.pendLen() == 0 }, "burst drained")
+
+	n := 0
+	for _, m := range rt.recordedEmits() {
+		if m.Room == "session:root" {
+			n++
+		}
+	}
+	if n < 3 {
+		t.Fatalf("a ~300ms sustained burst must stream several pushes via max-wait, got %d", n)
+	}
+}
+
 var _ ports.RealtimeServer = erroringRealtime{}

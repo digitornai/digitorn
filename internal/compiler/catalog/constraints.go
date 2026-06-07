@@ -9,6 +9,7 @@ var builtinConstraints = map[string]module.ConstraintType{
 	"blocked_paths":    module.ConstraintStringList,
 	"allowed_actions":  module.ConstraintStringList,
 	"blocked_actions":  module.ConstraintStringList,
+	"allowed_servers":  module.ConstraintStringList,
 	"allowed_domains":  module.ConstraintStringList,
 	"blocked_domains":  module.ConstraintStringList,
 	"allowed_hosts":    module.ConstraintStringList,

@@ -67,17 +67,30 @@ func TestModule_BaselineChangesDiffCommit(t *testing.T) {
 		t.Fatalf("diff unified missing change:\n%s", d["unified"])
 	}
 
-	res, err = m.commit(ctx, mj(map[string]any{"workdir": dir, "message": "ship"}))
+	// Approve COMMITS the file as one revision (approval = a committed revision).
+	// The message becomes the revision label.
+	res, err = m.approve(ctx, mj(map[string]any{"workdir": dir, "paths": []string{"app.js"}, "message": "ship"}))
 	if err != nil || !res.Success {
-		t.Fatalf("commit: err=%v res=%+v", err, res)
+		t.Fatalf("approve: err=%v res=%+v", err, res)
 	}
 	if sha, _ := res.Data.(map[string]any)["sha"].(string); sha == "" {
-		t.Fatal("commit returned no sha")
+		t.Fatal("approve returned no sha")
 	}
 
+	// Once approved (committed) the file stops showing as pending.
 	res, _ = m.changes(ctx, mj(map[string]any{"workdir": dir}))
 	if files := filesOf(t, res.Data); len(files) != 0 {
-		t.Fatalf("should be clean after commit, got %+v", files)
+		t.Fatalf("should be clean after approve, got %+v", files)
+	}
+
+	// The approval is now a revision in the file's history, labelled by its message.
+	res, err = m.history(ctx, mj(map[string]any{"workdir": dir, "path": "app.js"}))
+	if err != nil || !res.Success {
+		t.Fatalf("history: err=%v res=%+v", err, res)
+	}
+	revs, _ := res.Data.(map[string]any)["revisions"].([]gitrepo.Revision)
+	if len(revs) != 1 || revs[0].Message != "ship" {
+		t.Fatalf("history must list the approval revision labelled 'ship': %+v", res.Data)
 	}
 }
 

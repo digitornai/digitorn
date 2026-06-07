@@ -34,7 +34,29 @@ func (d *Daemon) MountAPI() {
 	r.Get("/health", livenessHandler)
 	r.Get("/ready", livenessHandler)
 
+	// ----- Preview static serve (unauthenticated, token-gated) -----
+	// The Preview iframe loads this URL by direct browser navigation, so it can
+	// NOT carry the JWT. Authorization is the per-session `?t=` token minted by
+	// the authenticated /web-preview resolver; the handler confines every path to
+	// the session workdir (PathPolicy) and refuses the shadow repo. It serves the
+	// agent's BUILT output — the daemon never runs a build or a dev server.
+	r.With(d.panicRecoverer).Get(
+		"/api/apps/{app_id}/sessions/{session_id}/preview/serve/*",
+		d.servePreviewFile,
+	)
+	// 404 fallback: serve the active preview's ROOT-absolute assets (/assets/* …)
+	// so a default Vite/CRA build renders in the iframe instead of going blank.
+	// Falls through to a normal 404 when no preview is active.
+	r.NotFound(d.previewRootFallback)
+
+	// ----- MCP OAuth callback (unauthenticated, state-gated) -----
+	// Hit by the provider's browser redirect, which cannot carry the JWT.
+	// Authorization is the single-use state→user binding persisted at authorize
+	// time; the handler exchanges the code and stores the token server-side.
+	r.With(d.panicRecoverer).Get("/api/apps/{app_id}/oauth/callback", d.mcpOAuthCallback)
+
 	r.Group(func(r chi.Router) {
+		r.Use(d.panicRecoverer) // first: no handler panic ever escapes (jamais crash)
 		if d.jwtVerifier != nil {
 			r.Use(jwtAuthMiddleware(d.jwtVerifier, d.cfg.Auth.DevMode))
 		}
@@ -48,7 +70,10 @@ func (d *Daemon) MountAPI() {
 
 			r.Route("/{session_id}", func(r chi.Router) {
 				r.Get("/", d.getSession)
+				r.Patch("/", d.renameSession)
 				r.Delete("/", d.deleteSession)
+				r.Get("/model", d.getSessionModel)
+				r.Put("/model", d.putSessionModel)
 				r.Get("/history", d.getHistory)
 				r.Get("/events", d.getEvents)
 				r.Get("/state", d.getState)
@@ -147,22 +172,33 @@ func (d *Daemon) mountStubs(r chi.Router) {
 		return func(w http.ResponseWriter, r *http.Request) { notImplemented(w, feature) }
 	}
 
+	// Voice — the daemon-side audio endpoint (WebSocket). The digitorn-voice adapter
+	// streams the call's PCM here; STT, the agent turn (gateway LLM + tools + gates),
+	// and TTS all run in the daemon (api_voice.go). The daemon IS the brain.
+	r.Get("/api/apps/{app_id}/sessions/{session_id}/voice/audio", d.voiceAudioWS)
+
 	// Workspace — git-backed change tracking over the session workdir (real,
 	// see api_workspace.go). The rest stay stubs until later bricks.
 	r.Get("/api/apps/{app_id}/sessions/{session_id}/workspace", stub("workspace.list"))
 	r.Get("/api/apps/{app_id}/sessions/{session_id}/workspace/changes", d.getWorkspaceChanges)
 	r.Get("/api/apps/{app_id}/sessions/{session_id}/workspace/diff", d.getWorkspaceDiff)
 	r.Get("/api/apps/{app_id}/sessions/{session_id}/workspace/tree", d.getWorkspaceTree)
+	r.Get("/api/apps/{app_id}/sessions/{session_id}/workspace/search", d.getWorkspaceSearch)
 	r.Get("/api/apps/{app_id}/sessions/{session_id}/workspace/code-snapshot", stub("workspace.code_snapshot"))
 	r.Get("/api/apps/{app_id}/sessions/{session_id}/workspace/preview-snapshot", stub("workspace.preview_snapshot"))
 	r.Get("/api/apps/{app_id}/sessions/{session_id}/workspace/export", stub("workspace.export"))
+	r.Get("/api/apps/{app_id}/sessions/{session_id}/workspace/history", d.getWorkspaceHistory)
+	r.Post("/api/apps/{app_id}/sessions/{session_id}/workspace/revert", d.postWorkspaceRevert)
+	r.Get("/api/apps/{app_id}/sessions/{session_id}/workspace/files/{filepath}/history", d.getWorkspaceFileHistory)
+	r.Post("/api/apps/{app_id}/sessions/{session_id}/workspace/files/{filepath}/revert", d.postWorkspaceFileRevert)
 	r.Get("/api/apps/{app_id}/sessions/{session_id}/workspace/files/*", d.getWorkspaceFile)
-	r.Put("/api/apps/{app_id}/sessions/{session_id}/workspace/files/*", stub("workspace.files_write"))
+	r.Put("/api/apps/{app_id}/sessions/{session_id}/workspace/files/*", d.putWorkspaceFile)
 	r.Delete("/api/apps/{app_id}/sessions/{session_id}/workspace/files/*", stub("workspace.files_delete"))
-	r.Post("/api/apps/{app_id}/sessions/{session_id}/workspace/files/approve", stub("workspace.approve"))
-	r.Post("/api/apps/{app_id}/sessions/{session_id}/workspace/files/approve-hunks", stub("workspace.approve_hunks"))
-	r.Post("/api/apps/{app_id}/sessions/{session_id}/workspace/files/reject", stub("workspace.reject"))
-	r.Post("/api/apps/{app_id}/sessions/{session_id}/workspace/files/reject-hunks", stub("workspace.reject_hunks"))
+	r.Post("/api/apps/{app_id}/sessions/{session_id}/workspace/files/approve", d.postWorkspaceApprove)
+	r.Post("/api/apps/{app_id}/sessions/{session_id}/workspace/files/approve-all", d.postWorkspaceApproveAll)
+	r.Post("/api/apps/{app_id}/sessions/{session_id}/workspace/files/approve-hunks", d.postWorkspaceApproveHunks)
+	r.Post("/api/apps/{app_id}/sessions/{session_id}/workspace/files/reject", d.postWorkspaceReject)
+	r.Post("/api/apps/{app_id}/sessions/{session_id}/workspace/files/reject-hunks", d.postWorkspaceRejectHunks)
 	r.Post("/api/apps/{app_id}/sessions/{session_id}/workspace/commit", d.postWorkspaceCommit)
 	r.Post("/api/apps/{app_id}/sessions/{session_id}/workspace/fork", stub("workspace.fork"))
 	r.Post("/api/apps/{app_id}/sessions/{session_id}/workspace/import", stub("workspace.import"))
@@ -213,14 +249,14 @@ func (d *Daemon) mountStubs(r chi.Router) {
 
 	// Skills / Snippets / Templates / Triggers / Watchers / Preview / LSP / OAuth-MCP.
 	r.Get("/api/apps/{app_id}/templates", stub("templates.list"))
-	r.Get("/api/apps/{app_id}/skills", stub("skills.list"))
-	r.Post("/api/apps/{app_id}/skills", stub("skills.create"))
-	r.Patch("/api/apps/{app_id}/skills/{skill_id}", stub("skills.update"))
-	r.Delete("/api/apps/{app_id}/skills/{skill_id}", stub("skills.delete"))
-	r.Get("/api/apps/{app_id}/snippets", stub("snippets.list"))
-	r.Post("/api/apps/{app_id}/snippets", stub("snippets.create"))
-	r.Patch("/api/apps/{app_id}/snippets/{snippet_id}", stub("snippets.update"))
-	r.Delete("/api/apps/{app_id}/snippets/{snippet_id}", stub("snippets.delete"))
+	r.Get("/api/apps/{app_id}/skills", d.listSkills)
+	r.Post("/api/apps/{app_id}/skills", d.createSkill)
+	r.Patch("/api/apps/{app_id}/skills/{skill_id}", d.updateSkill)
+	r.Delete("/api/apps/{app_id}/skills/{skill_id}", d.deleteSkill)
+	r.Get("/api/apps/{app_id}/snippets", d.listSnippets)
+	r.Post("/api/apps/{app_id}/snippets", d.createSnippet)
+	r.Patch("/api/apps/{app_id}/snippets/{snippet_id}", d.updateSnippet)
+	r.Delete("/api/apps/{app_id}/snippets/{snippet_id}", d.deleteSnippet)
 	r.Get("/api/apps/{app_id}/triggers", stub("triggers.list"))
 	r.Post("/api/apps/{app_id}/triggers/{trigger_id}/fire", stub("triggers.fire"))
 	r.Post("/api/apps/{app_id}/triggers/{trigger_id}/test", stub("triggers.test"))
@@ -231,14 +267,14 @@ func (d *Daemon) mountStubs(r chi.Router) {
 	r.Post("/api/apps/{app_id}/watchers/{watcher_id}/resume", stub("watchers.resume"))
 	r.Delete("/api/apps/{app_id}/watchers/{watcher_id}", stub("watchers.delete"))
 	r.Get("/api/apps/{app_id}/preview-bootstrap", stub("preview.bootstrap"))
-	r.Get("/api/apps/{app_id}/web-preview", stub("preview.web"))
+	r.Get("/api/apps/{app_id}/web-preview", d.getWebPreview)
 	r.Post("/api/apps/{app_id}/sessions/{session_id}/lsp", stub("lsp.rpc"))
 	r.Post("/api/apps/{app_id}/sessions/{session_id}/lsp-cancel", stub("lsp.cancel"))
-	r.Get("/api/apps/{app_id}/oauth/authorize", stub("oauth.authorize"))
-	r.Get("/api/apps/{app_id}/oauth/callback", stub("oauth.callback"))
-	r.Post("/api/apps/{app_id}/mcp/{server_id}/oauth-token", stub("mcp.oauth_token_set"))
-	r.Delete("/api/apps/{app_id}/mcp/{server_id}/oauth-token", stub("mcp.oauth_token_delete"))
-	r.Get("/api/apps/{app_id}/mcp/pending-oauth", stub("mcp.pending_oauth"))
+	// MCP OAuth (real handlers; callback is registered unauthenticated in MountAPI).
+	r.Get("/api/apps/{app_id}/oauth/authorize", d.mcpOAuthAuthorize)
+	r.Post("/api/apps/{app_id}/mcp/{server_id}/oauth-token", d.mcpOAuthTokenSet)
+	r.Delete("/api/apps/{app_id}/mcp/{server_id}/oauth-token", d.mcpOAuthTokenRevoke)
+	r.Get("/api/apps/{app_id}/mcp/pending-oauth", d.mcpPendingOAuth)
 	r.Get("/api/apps/{app_id}/payload-schema", stub("apps.payload_schema"))
 	r.Get("/api/apps/{app_id}/hooks", stub("apps.hooks"))
 	r.Get("/api/apps/{app_id}/channels/health", stub("apps.channels_health"))

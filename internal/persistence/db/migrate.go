@@ -20,8 +20,11 @@ func AutoMigrate(gdb *gorm.DB) error {
 	if err := gdb.AutoMigrate(
 		&models.App{},
 		&models.Credential{},
+		&models.OAuthState{},
 		&models.AuditLog{},
 		&models.ModuleState{},
+		&models.UserSkill{},
+		&models.UserSnippet{},
 	); err != nil {
 		return fmt.Errorf("db: auto-migrate: %w", err)
 	}

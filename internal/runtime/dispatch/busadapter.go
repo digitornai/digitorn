@@ -23,6 +23,7 @@ import (
 	"github.com/mbathepaul/digitorn/internal/ports"
 	"github.com/mbathepaul/digitorn/internal/runtime"
 	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
+	pkgmodule "github.com/mbathepaul/digitorn/pkg/module"
 )
 
 // BlobPutter stores a tool's binary output (an image read, a generated file) in
@@ -72,6 +73,25 @@ type BusAdapter struct {
 	// push. nil = no live push wired (tests / headless). The notifier's
 	// FileChanged is non-blocking by contract.
 	FileChangeNotifier tool.FileChangeNotifier
+
+	// ModuleConfigs resolves the calling app's per-module config block
+	// (tools.modules.<id>) so it reaches the module at call time — the
+	// only correct path for a shared (in-proc or worker) module instance.
+	// nil = no per-app module config delivered (the historic behaviour).
+	ModuleConfigs ModuleConfigSource
+
+	// Embedder / Reranker are injected into every in-process dispatch ctx
+	// so in-proc modules (e.g. filesystem's code-intelligence grep) reach
+	// embeddings/rerank like worker modules do via the gateway. nil =
+	// unavailable (module degrades gracefully).
+	Embedder pkgmodule.Embedder
+	Reranker pkgmodule.Reranker
+}
+
+// ModuleConfigSource resolves the per-app config block for a module.
+// Returning nil/empty means "no config for this (app, module)".
+type ModuleConfigSource interface {
+	ModuleConfig(appID, moduleID string) map[string]any
 }
 
 // ToolPipeline wraps a terminal module call in the per-app onion. params is
@@ -105,6 +125,16 @@ func aliasLegacyToolModule(moduleID, action string) string {
 		return "filesystem"
 	}
 	return moduleID
+}
+
+// aliasMCPTool routes mcp_<server>.<action> to the single mcp module as
+// (mcp, mcp_<server>__<action>); the module re-derives server + tool. Gates
+// already ran upstream with the mcp_<server> id.
+func aliasMCPTool(moduleID, action string) (string, string) {
+	if strings.HasPrefix(moduleID, "mcp_") {
+		return "mcp", moduleID + "__" + action
+	}
+	return moduleID, action
 }
 
 // callBus runs the module call through the per-app onion when one is wired,
@@ -171,6 +201,7 @@ func (a *BusAdapter) Dispatch(ctx context.Context, call runtime.ToolInvocation) 
 	// REST execute endpoint, an app installed before the alias existed). The new
 	// workspace module's git tools are NOT file-ops, so they keep routing here.
 	moduleID = aliasLegacyToolModule(moduleID, actionName)
+	moduleID, actionName = aliasMCPTool(moduleID, actionName)
 
 	raw, err := json.Marshal(call.Args)
 	if err != nil {
@@ -188,6 +219,21 @@ func (a *BusAdapter) Dispatch(ctx context.Context, call runtime.ToolInvocation) 
 		AppID: call.AppID, SessionID: call.SessionID, UserID: call.UserID,
 		AgentID: call.AgentID, ModuleID: moduleID, ToolName: actionName,
 	})
+
+	// Deliver the app's per-module config so the module reads its
+	// app-specific configuration on this call (in-proc reads it from ctx ;
+	// the worker proxy forwards it across the boundary).
+	if a.ModuleConfigs != nil {
+		if cfg := a.ModuleConfigs.ModuleConfig(call.AppID, moduleID); len(cfg) > 0 {
+			ctx = pkgmodule.WithModuleConfig(ctx, cfg)
+		}
+	}
+	if a.Embedder != nil {
+		ctx = pkgmodule.WithEmbedder(ctx, a.Embedder)
+	}
+	if a.Reranker != nil {
+		ctx = pkgmodule.WithReranker(ctx, a.Reranker)
+	}
 
 	// Plumb the live workspace notifier so a mutating module can signal a file
 	// change (filesystem emits directly — see notifyFileChange in the module).

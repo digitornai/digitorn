@@ -12,6 +12,23 @@ type Caller interface {
 	Call(ctx context.Context, module, toolName string, params []byte) (tool.Result, error)
 }
 
+// Embedder is the minimal embeddings contract a module needs. It is
+// injected into the call context so a module — whether in-process or
+// worker-hosted (via the daemon service gateway) — embeds text without
+// importing the embeddings package. role is "" / "query" / "document"
+// (prefix hint for models that need one). The returned dim lets the
+// caller handle multiple embedding dimensions.
+type Embedder interface {
+	EmbedModel(ctx context.Context, model, role string, texts []string) (vectors [][]float32, dim int, err error)
+}
+
+// Reranker is the minimal cross-encoder contract a module reads from ctx
+// (injected via the daemon gateway). It returns one relevance score per
+// document (higher = more relevant), in input order.
+type Reranker interface {
+	Rerank(ctx context.Context, model, query string, docs []string) (scores []float32, err error)
+}
+
 type ctxKey int
 
 const (
@@ -22,6 +39,10 @@ const (
 	keyWorkspace
 	keyCaller
 	keyConstraints
+	keyEmbedder
+	keyModuleConfig
+	keyReranker
+	keyAuthContext
 )
 
 func WithSessionID(ctx context.Context, id string) context.Context {
@@ -85,4 +106,57 @@ func WithConstraints(ctx context.Context, c map[string]any) context.Context {
 func Constraints(ctx context.Context) map[string]any {
 	v, _ := ctx.Value(keyConstraints).(map[string]any)
 	return v
+}
+
+func WithEmbedder(ctx context.Context, e Embedder) context.Context {
+	return context.WithValue(ctx, keyEmbedder, e)
+}
+
+func EmbedderFrom(ctx context.Context) Embedder {
+	v, _ := ctx.Value(keyEmbedder).(Embedder)
+	return v
+}
+
+func WithReranker(ctx context.Context, r Reranker) context.Context {
+	return context.WithValue(ctx, keyReranker, r)
+}
+
+func RerankerFrom(ctx context.Context) Reranker {
+	v, _ := ctx.Value(keyReranker).(Reranker)
+	return v
+}
+
+// WithModuleConfig carries the calling app's resolved per-module config
+// block (tools.modules.<id>.config, plus flat retrocompat keys) into the
+// call so a module reads its app-specific configuration per invocation —
+// the only correct path for a shared (in-proc or worker) module instance.
+func WithModuleConfig(ctx context.Context, cfg map[string]any) context.Context {
+	return context.WithValue(ctx, keyModuleConfig, cfg)
+}
+
+func ModuleConfigFrom(ctx context.Context) map[string]any {
+	v, _ := ctx.Value(keyModuleConfig).(map[string]any)
+	return v
+}
+
+// AuthContext is a resolved per-call credential the daemon injects for an MCP
+// tool. Token is decrypted; EnvTokenVar names the stdio env var to inject under
+// (empty for http, which uses an Authorization header). Never log Token.
+type AuthContext struct {
+	Token       string
+	TokenType   string
+	EnvTokenVar string
+	ExpiresAt   int64
+}
+
+// WithAuthContext carries a resolved credential into the call so a worker-hosted
+// module applies it per invocation (the only correct path for a shared instance).
+func WithAuthContext(ctx context.Context, ac AuthContext) context.Context {
+	return context.WithValue(ctx, keyAuthContext, ac)
+}
+
+// AuthContextFrom returns the resolved credential and whether one was set.
+func AuthContextFrom(ctx context.Context) (AuthContext, bool) {
+	v, ok := ctx.Value(keyAuthContext).(AuthContext)
+	return v, ok
 }

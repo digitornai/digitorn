@@ -1,6 +1,7 @@
 import HomeFooter from "../feature-plugins/home/footer"
 import HomeTips from "../feature-plugins/home/tips"
 import SidebarContext from "../feature-plugins/sidebar/context"
+import PromptContext from "../feature-plugins/prompt/context"
 import SidebarMcp from "../feature-plugins/sidebar/mcp"
 import SidebarLsp from "../feature-plugins/sidebar/lsp"
 import SidebarTodo from "../feature-plugins/sidebar/todo"
@@ -23,10 +24,11 @@ export type InternalTuiPlugin = Omit<TuiPluginModule, "id"> & {
 }
 
 export function internalTuiPlugins(flags: Pick<RuntimeFlags.Info, "experimentalEventSystem">): InternalTuiPlugin[] {
-  return [
+  const all = [
     HomeFooter,
     HomeTips,
     SidebarContext,
+    PromptContext,
     SidebarMcp,
     SidebarLsp,
     SidebarTodo,
@@ -39,4 +41,9 @@ export function internalTuiPlugins(flags: Pick<RuntimeFlags.Info, "experimentalE
     ...(flags.experimentalEventSystem ? [SessionV2Debug] : []),
     ...(Flag.OPENCODE_EXPERIMENTAL_SESSION_SWITCHER ? [SessionSwitcher] : []),
   ]
+  // digitorn: drop the sidebar Context + LSP panels (user choice). Stock opencode
+  // keeps them. The prompt-footer ctx gauge (PromptContext) is separate and stays.
+  if (process.env.DIGITORN_URL)
+    return all.filter((p) => p.id !== "internal:sidebar-context" && p.id !== "internal:sidebar-lsp")
+  return all
 }

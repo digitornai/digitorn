@@ -90,3 +90,10 @@ type PromptContributor interface {
 	// attach guidance no manifest could declare. Empty/nil = nothing.
 	DynamicToolPrompts(scope PromptScope) map[string]string
 }
+
+// LiveTooler is the optional interface a module implements to report tools it
+// discovers at runtime (MCP server tools). The caller's app config + identity
+// ride in ctx for per-app materialization.
+type LiveTooler interface {
+	LiveTools(ctx context.Context) []tool.Spec
+}

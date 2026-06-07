@@ -377,6 +377,25 @@ func applyLocked(s *SessionState, ev *Event) {
 			s.ContextProviderTokens = ctxTok
 		}
 
+	case EventSessionRenamed:
+		if ev.Meta != nil && ev.Meta.Title != "" {
+			s.Title = ev.Meta.Title
+		}
+
+	case EventModelChanged:
+		// Set OR clear the per-agent model override (empty Model = revert that
+		// agent to its Brain default).
+		if ev.Meta != nil {
+			if ev.Meta.Model == "" {
+				delete(s.ModelOverrides, ev.Meta.AgentID)
+			} else {
+				if s.ModelOverrides == nil {
+					s.ModelOverrides = map[string]string{}
+				}
+				s.ModelOverrides[ev.Meta.AgentID] = ev.Meta.Model
+			}
+		}
+
 	case EventSessionStarted:
 		if ev.Meta != nil {
 			if ev.Meta.Title != "" {
@@ -387,6 +406,12 @@ func applyLocked(s *SessionState, ev *Event) {
 			}
 			if ev.Meta.Workdir != "" {
 				s.Workdir = ev.Meta.Workdir
+			}
+			if ev.Meta.EntryAgent != "" {
+				s.EntryAgent = ev.Meta.EntryAgent
+			}
+			if ev.Meta.ContextExtra != "" {
+				s.ContextExtra = ev.Meta.ContextExtra
 			}
 		}
 

@@ -55,10 +55,10 @@ export function useThinkingMode() {
 
   if ((stored() as string) === "minimal") set("hide")
 
-  // Digitorn: thinking is ALWAYS minimized — collapsed one-line headers, click a
-  // block to expand it on demand. Force "hide" regardless of any stored/legacy
-  // value so it never starts expanded.
-  const mode = createMemo<ThinkingMode>(() => "hide")
+  // Digitorn: thinking starts COLLAPSED (the kv default is "hide" → one-line
+  // headers, click a block to expand). The /thinking toggle is live again: it
+  // writes `stored`, and mode follows it, so the user can switch to "show".
+  const mode = createMemo<ThinkingMode>(() => stored())
 
   return {
     mode,
