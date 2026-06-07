@@ -58,7 +58,7 @@ workers:
     # (non-ONNX) digitorn-worker-embeddings.exe no longer blocks startup — it
     # just crash-loops harmlessly in the background and semantic search stays
     # off. Set count: 0 to silence it, or rebuild the worker with -tags onnx.
-    count: 1
+    count: 0
     backend: onnx
     start_timeout: 90s
     client_timeout: 30s
@@ -82,11 +82,10 @@ workers:
     - id: workspace
       modules: [workspace]
       count: 1
-    # RAG runs in its own worker so chunking/ingestion never burns daemon CPU.
-    # It reaches embeddings via the daemon service gateway (auto-wired).
-    - id: rag
-      modules: [rag]
-      count: 1
+    # RAG pool disabled : the `rag` module isn't compiled into digitorn-worker
+    # (needs `import _ internal/modules/rag` + `-tags onnx`), so enabling it just
+    # spams startup-timeout restarts. Re-add { id: rag, modules: [rag], count: 1 }
+    # once the worker binary bundles the module.
 
 logging:
   level: info
