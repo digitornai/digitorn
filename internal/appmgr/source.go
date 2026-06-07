@@ -79,9 +79,3 @@ func (m *gormManager) fetchSource(ctx context.Context, source, userJWT string) (
 	}
 }
 
-// fetchBuiltin is a placeholder for V1 : returns an error until we
-// decide where built-in examples live. The signature is in place so
-// the install path doesn't need refactoring to add the source later.
-func (m *gormManager) fetchBuiltin(name string) (string, error) {
-	return "", fmt.Errorf("%w: builtin sources not yet implemented (name=%q)", ErrBadSource, name)
-}

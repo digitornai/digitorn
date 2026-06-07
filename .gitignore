@@ -27,6 +27,14 @@ go.work.sum
 # env file
 .env
 
+# SQLite databases (daemon state lives in ~/.digitorn, never the repo — but a
+# stray relative-path db must never be committed).
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
 # --- bin/ scratch ---------------------------------------------------------
 # All .exe are ignored globally (above). Also drop the binary backups that don't
 # end in .exe plus build scratch dirs. NOTE : already-committed binaries must be
