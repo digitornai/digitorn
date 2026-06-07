@@ -1,44 +1,53 @@
 import { TextAttributes } from "@opentui/core"
-import { fileURLToPath } from "bun"
+import { createResource, For, Show, type JSX } from "solid-js"
 import { useTheme } from "../context/theme"
 import { useDialog } from "@tui/ui/dialog"
-import { useSync } from "@tui/context/sync"
-import { For, Match, Switch, Show, createMemo } from "solid-js"
+import { useSDK } from "@tui/context/sdk"
+import { useRoute } from "@tui/context/route"
+
+type Status = {
+  app: { id: string; name: string; version: string; color?: string }
+  daemon: { state: string; url: string }
+  context: { tokens: number; window: number; percent: number }
+  model: string
+  modules: string[]
+}
 
 export type DialogStatusProps = {}
 
 export function DialogStatus() {
-  const sync = useSync()
   const { theme } = useTheme()
   const dialog = useDialog()
+  const sdk = useSDK()
+  const route = useRoute()
+  const sid = () => (route.data.type === "session" ? route.data.sessionID : "")
 
-  const enabledFormatters = createMemo(() => sync.data.formatter.filter((f) => f.enabled))
-
-  const plugins = createMemo(() => {
-    const list = sync.data.config.plugin ?? []
-    const result = list.map((item) => {
-      const value = typeof item === "string" ? item : item[0]
-      if (value.startsWith("file://")) {
-        const path = fileURLToPath(value)
-        const parts = path.split("/")
-        const filename = parts.pop() || path
-        if (!filename.includes(".")) return { name: filename }
-        const basename = filename.split(".")[0]
-        if (basename === "index") {
-          const dirname = parts.pop()
-          const name = dirname || basename
-          return { name }
-        }
-        return { name: basename }
-      }
-      const index = value.lastIndexOf("@")
-      if (index <= 0) return { name: value, version: "latest" }
-      const name = value.substring(0, index)
-      const version = value.substring(index + 1)
-      return { name, version }
-    })
-    return result.toSorted((a, b) => a.name.localeCompare(b.name))
+  const [status] = createResource(async () => {
+    try {
+      const res = await sdk.fetch(`${sdk.url}/digitorn/status?session=${encodeURIComponent(sid())}`)
+      return (await res.json()) as Status
+    } catch {
+      return undefined
+    }
   })
+
+  const dotColor = () => {
+    const s = status()?.daemon.state
+    if (s === "connected") return theme.success
+    if (s === "disconnected") return theme.error
+    return theme.warning
+  }
+
+  const Row = (props: { label: string; children: JSX.Element }) => (
+    <box flexDirection="row" gap={1}>
+      <box width={9} flexShrink={0}>
+        <text fg={theme.textMuted}>{props.label}</text>
+      </box>
+      <text fg={theme.text} wrapMode="word">
+        {props.children}
+      </text>
+    </box>
+  )
 
   return (
     <box paddingLeft={2} paddingRight={2} gap={1} paddingBottom={1}>
@@ -50,118 +59,48 @@ export function DialogStatus() {
           esc
         </text>
       </box>
-      <Show when={Object.keys(sync.data.mcp).length > 0} fallback={<text fg={theme.text}>No MCP Servers</text>}>
-        <box>
-          <text fg={theme.text}>{Object.keys(sync.data.mcp).length} MCP Servers</text>
-          <For each={Object.entries(sync.data.mcp)}>
-            {([key, item]) => (
-              <box flexDirection="row" gap={1}>
-                <text
-                  flexShrink={0}
-                  style={{
-                    fg: (
-                      {
-                        connected: theme.success,
-                        failed: theme.error,
-                        disabled: theme.textMuted,
-                        needs_auth: theme.warning,
-                        needs_client_registration: theme.error,
-                      } as Record<string, typeof theme.success>
-                    )[item.status],
-                  }}
-                >
-                  •
-                </text>
-                <text fg={theme.text} wrapMode="word">
-                  <b>{key}</b>{" "}
-                  <span style={{ fg: theme.textMuted }}>
-                    <Switch fallback={item.status}>
-                      <Match when={item.status === "connected"}>Connected</Match>
-                      <Match when={item.status === "failed" && item}>{(val) => val().error}</Match>
-                      <Match when={item.status === "disabled"}>Disabled in configuration</Match>
-                      <Match when={(item.status as string) === "needs_auth"}>
-                        Needs authentication (run: opencode mcp auth {key})
-                      </Match>
-                      <Match when={(item.status as string) === "needs_client_registration" && item}>
-                        {(val) => (val() as { error: string }).error}
-                      </Match>
-                    </Switch>
-                  </span>
-                </text>
+      <Show when={status()} fallback={<text fg={theme.textMuted}>Loading…</text>}>
+        {(s) => (
+          <box gap={1}>
+            <Row label="App">
+              <b>{s().app.name}</b>
+              <Show when={s().app.version}>
+                <span style={{ fg: theme.textMuted }}> v{s().app.version}</span>
+              </Show>
+            </Row>
+            <Row label="Daemon">
+              <span style={{ fg: dotColor() }}>●</span> {s().daemon.state}
+              <span style={{ fg: theme.textMuted }}> {s().daemon.url}</span>
+            </Row>
+            <Row label="Context">
+              {s().context.tokens.toLocaleString()} tokens
+              <span style={{ fg: theme.textMuted }}>
+                {" · "}
+                {s().context.percent}% of {s().context.window.toLocaleString()}
+              </span>
+            </Row>
+            <Show when={s().model}>
+              <Row label="Model">{s().model}</Row>
+            </Show>
+            <Show when={s().modules.length > 0}>
+              <box>
+                <text fg={theme.text}>{s().modules.length} Modules</text>
+                <For each={s().modules}>
+                  {(m) => (
+                    <box flexDirection="row" gap={1}>
+                      <text flexShrink={0} style={{ fg: theme.success }}>
+                        •
+                      </text>
+                      <text fg={theme.text}>
+                        <b>{m}</b>
+                      </text>
+                    </box>
+                  )}
+                </For>
               </box>
-            )}
-          </For>
-        </box>
-      </Show>
-      {sync.data.lsp.length > 0 && (
-        <box>
-          <text fg={theme.text}>{sync.data.lsp.length} LSP Servers</text>
-          <For each={sync.data.lsp}>
-            {(item) => (
-              <box flexDirection="row" gap={1}>
-                <text
-                  flexShrink={0}
-                  style={{
-                    fg: {
-                      connected: theme.success,
-                      error: theme.error,
-                    }[item.status],
-                  }}
-                >
-                  •
-                </text>
-                <text fg={theme.text} wrapMode="word">
-                  <b>{item.id}</b> <span style={{ fg: theme.textMuted }}>{item.root}</span>
-                </text>
-              </box>
-            )}
-          </For>
-        </box>
-      )}
-      <Show when={enabledFormatters().length > 0} fallback={<text fg={theme.text}>No Formatters</text>}>
-        <box>
-          <text fg={theme.text}>{enabledFormatters().length} Formatters</text>
-          <For each={enabledFormatters()}>
-            {(item) => (
-              <box flexDirection="row" gap={1}>
-                <text
-                  flexShrink={0}
-                  style={{
-                    fg: theme.success,
-                  }}
-                >
-                  •
-                </text>
-                <text wrapMode="word" fg={theme.text}>
-                  <b>{item.name}</b>
-                </text>
-              </box>
-            )}
-          </For>
-        </box>
-      </Show>
-      <Show when={plugins().length > 0} fallback={<text fg={theme.text}>No Plugins</text>}>
-        <box>
-          <text fg={theme.text}>{plugins().length} Plugins</text>
-          <For each={plugins()}>
-            {(item) => (
-              <box flexDirection="row" gap={1}>
-                <text
-                  flexShrink={0}
-                  style={{
-                    fg: theme.success,
-                  }}
-                >
-                  •
-                </text>
-                <text wrapMode="word" fg={theme.text}>
-                  <b>{item.name}</b>
-                  {item.version && <span style={{ fg: theme.textMuted }}> @{item.version}</span>}
-                </text>
-              </box>
-            )}
-          </For>
-        </box>
+            </Show>
+          </box>
+        )}
       </Show>
     </box>
   )

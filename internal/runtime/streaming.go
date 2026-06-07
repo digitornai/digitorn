@@ -109,11 +109,16 @@ func (e *Engine) callLLM(
 			return finalResp, ctx.Err()
 		case chunk, ok := <-chunks:
 			if !ok {
-				if seenError != "" {
-					return nil, fmt.Errorf("stream: provider error: %s", seenError)
-				}
 				finalResp.Content = contentBuilder.String()
 				finalResp.ReasoningContent = reasoningBuilder.String()
+				// A non-empty seenError means the generation was cut off by a fault: the
+				// gRPC consumer turns ANY non-EOF RecvMsg error (network drop, worker death,
+				// deadline, upstream 5xx, rate limit) into an error chunk, so every failure
+				// lands here carrying its partial, exactly like a user abort via ctx.Done().
+				// A clean EOF (seenError == "") is a deliberate, complete end.
+				if seenError != "" {
+					return finalResp, fmt.Errorf("stream: provider error: %s", seenError)
+				}
 				return finalResp, nil
 			}
 			if chunk == nil {

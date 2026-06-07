@@ -97,11 +97,20 @@ type SessionState struct {
 	TokensOut int64
 	UsdTotal  float64
 
-	Title       string
-	Workspace   string
-	Workdir     string
-	TurnCount   int
-	Interrupted bool
+	Title        string
+	Workspace    string
+	Workdir      string
+	EntryAgent   string
+	ContextExtra string
+	// ModelOverrides maps an agent's logical id → the per-session model the user
+	// pinned for it (PUT /sessions/{id}/model). It overrides that agent's Brain
+	// default for this session's turns. Held on the PARENT session ; sub-agents
+	// run in ephemeral child sessions but read their override from here, keyed by
+	// their logical id (so the choice applies to every future sub-turn). nil/empty
+	// = every agent uses its Brain default.
+	ModelOverrides map[string]string
+	TurnCount      int
+	Interrupted    bool
 
 	// CurrentTurnID identifies the in-flight turn, or "" when no turn is
 	// running. CurrentTurnPhase tracks its state across phase changes ;
@@ -348,6 +357,9 @@ func (s *SessionState) Snapshot() SessionSnapshot {
 		Title:                    s.Title,
 		Workspace:                s.Workspace,
 		Workdir:                  s.Workdir,
+		EntryAgent:               s.EntryAgent,
+		ContextExtra:             s.ContextExtra,
+		ModelOverrides:           s.ModelOverrides,
 		TurnCount:                s.TurnCount,
 		Interrupted:              s.Interrupted,
 		CurrentTurnID:            s.CurrentTurnID,

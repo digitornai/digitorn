@@ -317,6 +317,12 @@ func updateMetaAfterSnapshot(dir string, snap *SessionSnapshot, wr *WriteSnapsho
 	if snap.Workdir != "" {
 		existing.Workdir = snap.Workdir
 	}
+	if snap.EntryAgent != "" {
+		existing.EntryAgent = snap.EntryAgent
+	}
+	if snap.ContextExtra != "" {
+		existing.ContextExtra = snap.ContextExtra
+	}
 	existing.Partial = snap.Partial
 	return WriteMetaAtomic(dir, existing, false)
 }

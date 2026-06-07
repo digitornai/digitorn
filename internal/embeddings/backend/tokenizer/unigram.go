@@ -55,6 +55,10 @@ func NewUnigram(tokenizerJSONPath string) (*Unigram, error) {
 	if err != nil {
 		return nil, err
 	}
+	return newUnigramFromBytes(raw)
+}
+
+func newUnigramFromBytes(raw []byte) (*Unigram, error) {
 	var doc struct {
 		Model struct {
 			Type  string              `json:"type"`
@@ -63,7 +67,7 @@ func NewUnigram(tokenizerJSONPath string) (*Unigram, error) {
 		} `json:"model"`
 	}
 	if err := json.Unmarshal(raw, &doc); err != nil {
-		return nil, fmt.Errorf("tokenizer: parse %s: %w", tokenizerJSONPath, err)
+		return nil, fmt.Errorf("tokenizer: parse unigram: %w", err)
 	}
 	if doc.Model.Type != "Unigram" {
 		return nil, fmt.Errorf("tokenizer: expected Unigram model, got %q", doc.Model.Type)
@@ -120,8 +124,27 @@ func (t *Unigram) lookup(piece string, def int) int {
 func (t *Unigram) Encode(text string) (ids, mask, types []int64, seqLen int) {
 	ids = make([]int64, 0, 16)
 	ids = append(ids, int64(t.bosID))
+	ids = t.encodeWords(text, ids, t.maxSeq-1) // reserve a slot for </s>
+	ids = append(ids, int64(t.eosID))
+	return finalize(ids)
+}
 
-	limit := t.maxSeq - 1 // reserve a slot for the closing </s>
+// EncodePair encodes a sentence pair in the XLM-RoBERTa layout
+// (<s> A </s></s> B </s>), used by cross-encoder rerankers. The query A
+// is kept whole ; the passage B is truncated to fit maxSeq.
+func (t *Unigram) EncodePair(a, b string) (ids, mask, types []int64, seqLen int) {
+	ids = make([]int64, 0, 32)
+	ids = append(ids, int64(t.bosID))
+	ids = t.encodeWords(a, ids, t.maxSeq-4) // reserve </s></s> … </s>
+	ids = append(ids, int64(t.eosID), int64(t.eosID))
+	ids = t.encodeWords(b, ids, t.maxSeq-1)
+	ids = append(ids, int64(t.eosID))
+	return finalize(ids)
+}
+
+// encodeWords appends the metaspace-prefixed Viterbi pieces of text to
+// ids, stopping at limit.
+func (t *Unigram) encodeWords(text string, ids []int64, limit int) []int64 {
 	for _, word := range strings.Fields(norm.NFKC.String(text)) {
 		if len(ids) >= limit {
 			break
@@ -133,8 +156,11 @@ func (t *Unigram) Encode(text string) (ids, mask, types []int64, seqLen int) {
 			ids = append(ids, int64(id))
 		}
 	}
-	ids = append(ids, int64(t.eosID))
+	return ids
+}
 
+// finalize builds the all-ones mask + all-zeros token_type_ids for ids.
+func finalize(ids []int64) (out, mask, types []int64, seqLen int) {
 	seqLen = len(ids)
 	mask = make([]int64, seqLen)
 	types = make([]int64, seqLen)

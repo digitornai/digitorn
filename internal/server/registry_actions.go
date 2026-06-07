@@ -40,6 +40,7 @@ import (
 type registryActions struct {
 	Registry *module.Registry
 	Apps     appmgr.Manager
+	MCP      *mcpCatalog
 }
 
 // ForApp implements wiring.AvailableActions. ctx-free contract
@@ -79,6 +80,7 @@ func (a registryActions) ForApp(appID string) []policy.AvailableAction {
 			})
 		}
 	}
+	out = append(out, a.MCP.forApp(appID)...) // forApp self-gates on the mcp config block
 	return out
 }
 
@@ -175,9 +177,17 @@ func (c registryContributors) Gather(scope domainmodule.PromptScope, authorizedM
 // RunGates short-circuits them before any spec lookup.
 type registryToolSpecs struct {
 	Registry *module.Registry
+	MCP      *mcpCatalog
 }
 
 func (r registryToolSpecs) LookupToolSpec(moduleID, action string) *tool.Spec {
+	// mcp_<server> tools are runtime-discovered: resolve via the live catalog so
+	// the gates read a real spec instead of failing closed.
+	if r.MCP != nil && isMCPModule(moduleID) {
+		if s := r.MCP.lookupSpec(moduleID, action); s != nil {
+			return s
+		}
+	}
 	if r.Registry == nil {
 		return nil
 	}

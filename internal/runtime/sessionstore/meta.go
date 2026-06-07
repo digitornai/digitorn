@@ -27,6 +27,8 @@ type Meta struct {
 	Title          string `json:"title,omitempty"`
 	Workspace      string `json:"workspace,omitempty"`
 	Workdir        string `json:"workdir,omitempty"`
+	EntryAgent     string `json:"entry_agent,omitempty"`
+	ContextExtra   string `json:"context,omitempty"`
 	// Preview is a short snippet of the session's first user message, cached here
 	// so the list endpoint can label sessions by topic without reading each
 	// session's events file (the scaling bottleneck at thousands of sessions).

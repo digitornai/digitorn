@@ -53,6 +53,9 @@ const tui: TuiPlugin = async (api) => {
 
 const plugin: InternalTuiPlugin = {
   id,
+  // opencode-specific tips (/init, .opencode/commands, OpenCode Zen, /connect…)
+  // don't apply to digitorn apps — disabled so the home screen stays relevant.
+  enabled: false,
   tui,
 }
 

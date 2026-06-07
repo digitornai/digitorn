@@ -4,6 +4,8 @@ package backend
 
 import (
 	"errors"
+
+	"github.com/mbathepaul/digitorn/internal/embeddings/models"
 )
 
 // NewONNX is the no-op stub used when the binary is built WITHOUT
@@ -31,5 +33,15 @@ func NewONNX(modelDir string) (Backend, error) {
 
 // NewONNXWithFile is the stub variant — same not-compiled-in error.
 func NewONNXWithFile(modelDir, modelFile string) (Backend, error) {
+	return nil, errors.New("backend: ONNX support not compiled in (build with -tags onnx)")
+}
+
+// NewONNXFromSpec is the stub variant — same not-compiled-in error.
+func NewONNXFromSpec(modelDir, modelFile string, spec models.Spec) (Backend, error) {
+	return nil, errors.New("backend: ONNX support not compiled in (build with -tags onnx)")
+}
+
+// NewONNXCrossEncoder is the stub variant — same not-compiled-in error.
+func NewONNXCrossEncoder(modelDir, modelFile string, spec models.Spec) (CrossEncoder, error) {
 	return nil, errors.New("backend: ONNX support not compiled in (build with -tags onnx)")
 }

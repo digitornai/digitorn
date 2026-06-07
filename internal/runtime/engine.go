@@ -120,6 +120,9 @@ type Engine struct {
 	Blobs      BlobLoader     // optional ; nil = binary message parts skipped
 	Tools      ToolCatalog    // optional ; nil falls back to NoToolsCatalog
 	Dispatcher ToolDispatcher // optional ; nil falls back to NoopDispatcher
+	// SkillLoader resolves a /use_skill command to its instructions so the engine
+	// can inject them as a forced directive. nil = /use_skill is a no-op.
+	SkillLoader SkillLoader
 	// Compactor recovers from a mid-turn context overflow : auto_compact should
 	// prevent it, but one huge tool result can blow past the window in a single
 	// step. nil = no emergency recovery (the overflow propagates as the turn's
@@ -492,6 +495,11 @@ type TurnInput struct {
 	// default-policy (auto → first declared). Resolved per turn.
 	Mode string
 
+	// Skill is the /use_skill command the user prefixed this message with
+	// (e.g. "/commit"). Non-empty → the engine loads the skill and injects its
+	// instructions as a forced system directive for this turn. Empty = no skill.
+	Skill string
+
 	// AgentID selects which declared agent runs this turn (its logical
 	// YAML id). Empty = the entry agent (runtime.entry_agent, else the
 	// first declared agent). The AgentManager sets this when running an
@@ -587,6 +595,19 @@ func (e *Engine) Run(ctx context.Context, in TurnInput) (*TurnResult, error) {
 		return nil, fmt.Errorf("runtime: session %q has no state", in.SessionID)
 	}
 	preSnap := state.Snapshot()
+
+	// Per-session entry-agent override (e.g. set by a background channel trigger
+	// at session creation). Explicit sub-agent runs still win; a bad value is
+	// ignored. See applyEntryAgent.
+	agent = applyEntryAgent(app.Definition, agent, in.AgentID, preSnap.EntryAgent)
+
+	// Per-agent model override. Copy before touching Model so the shared
+	// Definition is never mutated.
+	if ovr := e.modelOverrideFor(in.SessionID, agent.ID, preSnap.ModelOverrides); ovr != "" {
+		ag := *agent
+		ag.Brain.Model = ovr
+		agent = &ag
+	}
 
 	// 3. Recover any in-flight turn left over by a previous daemon
 	// crash. Idempotent : 0 stale turns = no-op.
@@ -902,6 +923,18 @@ func (e *Engine) runPhases(
 		}
 	}
 
+	// Channel context : extra system-prompt text supplied at session creation
+	// (e.g. by a background channel trigger). Injected per-turn for the same
+	// reason as the workdir block — the cached BuildFor prompt is keyed per
+	// app+agent and would otherwise leak one session's context to another.
+	if snap.ContextExtra != "" {
+		if systemPrompt != "" {
+			systemPrompt += "\n\n" + snap.ContextExtra
+		} else {
+			systemPrompt = snap.ContextExtra
+		}
+	}
+
 	// BYOK routing decided once per turn (doesn't change across rounds).
 	var (
 		apiKey  string
@@ -938,6 +971,11 @@ func (e *Engine) runPhases(
 	if be != nil && be.ClassifyEnabled() {
 		e.runBehaviorClassifier(ctx, tr, app, agent, be, in, &snap, tools, apiKey, baseURL)
 	}
+
+	// /use_skill : when the user prefixed this message with a skill, load it and
+	// inject its instructions as a forced system directive before round 1 (no-op
+	// when in.Skill is empty or no SkillLoader is wired).
+	e.injectSkillDirective(ctx, in, tr.ID, &snap)
 
 	var (
 		lastSeq       uint64
@@ -1058,41 +1096,69 @@ func (e *Engine) runPhases(
 			// in one round outrun the background recount).
 			e.enforcePromptBudget(ctx, in, agent, conv, &snap, req, systemPrompt, compactPol, &guardKeep, calibRatio)
 			sentEst = estReqTokens(req)
-			r, err := e.chatOrStream(ctx, tr, in, req)
-			if err != nil && e.Compactor != nil && !emergencyCompacted && contextcompact.IsContextOverflow(err) {
-				// Context overflow : the prompt blew past the model's window in a
-				// single step (usually one huge tool result). Aggressively
-				// truncate the session, rebuild the now-smaller prompt and retry
-				// ONCE per turn. The LLM is refusing, so truncate costs no call.
-				emergencyCompacted = true
-				keep := 0
-				if agent.Brain.Context != nil {
-					keep = agent.Brain.Context.KeepRecent
-				}
-				if cerr := e.Compactor.CompactSession(ctx, in.SessionID, contextcompact.StrategyTruncate, contextcompact.EmergencyKeepRecent(keep)); cerr == nil {
-					if st, serr := e.Sessions.State(in.SessionID); serr == nil && st != nil {
-						snap = st.Snapshot()
-						vm := snap.Messages
-						if cc := snap.ContextCompaction; cc != nil && cc.CutoffSeq > 0 {
-							vm = contextcompact.ApplyView(snap.Messages, cc.CutoffSeq, cc.Summary)
-						}
-						req.Messages = conv.Convert(ctx, vm)
-						if systemPrompt != "" {
-							req.Messages = append([]llm.ChatMessage{{Role: "system", Content: systemPrompt}}, req.Messages...)
-						}
-						snipOversizedMessages(req.Messages, e.msgByteCap(in.SessionID, snap, agent.Brain))
-						r, err = e.chatOrStream(ctx, tr, in, req)
+			var r *llm.ChatResponse
+			var err error
+			for retries := 0; ; {
+				r, err = e.chatOrStream(ctx, tr, in, req)
+				if err != nil && e.Compactor != nil && !emergencyCompacted && contextcompact.IsContextOverflow(err) {
+					// Context overflow : the prompt blew past the model's window in a
+					// single step (usually one huge tool result). Aggressively
+					// truncate the session, rebuild the now-smaller prompt and retry
+					// ONCE per turn. The LLM is refusing, so truncate costs no call.
+					emergencyCompacted = true
+					keep := 0
+					if agent.Brain.Context != nil {
+						keep = agent.Brain.Context.KeepRecent
 					}
+					if cerr := e.Compactor.CompactSession(ctx, in.SessionID, contextcompact.StrategyTruncate, contextcompact.EmergencyKeepRecent(keep)); cerr == nil {
+						if st, serr := e.Sessions.State(in.SessionID); serr == nil && st != nil {
+							snap = st.Snapshot()
+							vm := snap.Messages
+							if cc := snap.ContextCompaction; cc != nil && cc.CutoffSeq > 0 {
+								vm = contextcompact.ApplyView(snap.Messages, cc.CutoffSeq, cc.Summary)
+							}
+							req.Messages = conv.Convert(ctx, vm)
+							if systemPrompt != "" {
+								req.Messages = append([]llm.ChatMessage{{Role: "system", Content: systemPrompt}}, req.Messages...)
+							}
+							snipOversizedMessages(req.Messages, e.msgByteCap(in.SessionID, snap, agent.Brain))
+							r, err = e.chatOrStream(ctx, tr, in, req)
+						}
+					}
+				}
+				// Transient auto-retry : a retryable provider/network fault that hit BEFORE
+				// any token of this attempt streamed (r empty) can be re-tried safely — a
+				// restart cannot duplicate output. Emit a DURABLE turn_retry (so the client
+				// shows "retrying… #N" and a reconnecting client replays it), back off
+				// (cancellable), and try again. A fault AFTER partial content falls through
+				// to the interrupt-resume path below instead.
+				if err == nil || retries >= maxTurnRetries || !transientRetryable(err, r) {
+					break
+				}
+				retries++
+				delay := turnRetryBackoff(retries)
+				e.emitTurnRetry(in, tr, err, retries, delay)
+				select {
+				case <-ctx.Done():
+				case <-time.After(delay):
+				}
+				if ctx.Err() != nil {
+					err = ctx.Err()
+					break
 				}
 			}
 			if err != nil {
 				// Interrupted mid-generation : the streamed deltas are NOT
 				// projected into the durable message list, so persist the
 				// partial answer as an assistant message — with a detached ctx
-				// so the cancellation itself can't suppress the save. The user
-				// keeps what was generated before "stop".
+				// so the cancellation itself can't suppress the save. We append a
+				// CLEAR interruption marker so the next turn sees both what was
+				// produced AND that it was cut off — strong context to resume.
+				// (Sub-agent turns get this too : RunSubAgent runs via e.Run.) We
+				// persist on ANY fault that cut generation short, never a clean stream.
 				if r != nil && strings.TrimSpace(r.Content) != "" {
-					e.persistInterruptedAssistant(tr, in, r.Content)
+					e.persistInterruptedAssistant(tr, in,
+						r.Content+interruptMarker(err))
 				}
 				return nil, hooks.Payload{}, fmt.Errorf("runtime: llm chat (iter %d): %w", iter, err)
 			}
@@ -1639,6 +1705,7 @@ func (e *Engine) emitTokenUsage(ctx context.Context, in TurnInput, turnID string
 		Cost: &sessionstore.CostPayload{
 			TokensIn:         int64(usage.PromptTokens),
 			TokensOut:        int64(usage.CompletionTokens),
+			ReasoningTokens:  int64(usage.ReasoningTokens),
 			CacheReadTokens:  int64(usage.CacheReadTokens),
 			CacheWriteTokens: int64(usage.CacheWriteTokens),
 		},
@@ -1712,6 +1779,116 @@ func (e *Engine) emitTurnError(ctx context.Context, in TurnInput, tr *turn.Turn,
 		e.Logger.Warn("runtime: emit turn error event failed",
 			slog.String("turn_id", tr.ID), slog.String("err", err.Error()))
 	}
+}
+
+// maxTurnRetries caps how many times the engine auto-retries a transient LLM
+// failure within a single turn before giving up and surfacing the error.
+const maxTurnRetries = 3
+
+// turnRetryBackoff is the cancellable delay before retry attempt n (1-based):
+// 1s, 2s, 4s … capped at 8s. Exponential so a flapping provider gets breathing
+// room without making the user wait absurdly long.
+func turnRetryBackoff(n int) time.Duration {
+	if n < 1 {
+		n = 1
+	}
+	d := time.Second << (n - 1) // 1<<0=1s, 1<<1=2s, 1<<2=4s
+	if d > 8*time.Second {
+		d = 8 * time.Second
+	}
+	return d
+}
+
+// transientRetryable decides whether a failed LLM call may be retried in place.
+// Two guards make it safe : (1) the error must be classified retryable
+// (network / rate_limit / provider-5xx / internal-transient — NOT auth, billing,
+// context_overflow, or a user abort/deadline) ; (2) NOTHING may have streamed
+// yet (r empty) — a fault after partial tokens stays on the interrupt-resume
+// path, since restarting the stream would duplicate what the client already
+// rendered.
+func transientRetryable(err error, r *llm.ChatResponse) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	if r != nil && strings.TrimSpace(r.Content) != "" {
+		return false
+	}
+	return errclass.Classify(err).Retry
+}
+
+// emitTurnRetry appends the DURABLE turn_retry event announcing the next attempt
+// is coming after `delay`. Durable (not transient) so a client reconnecting
+// during the backoff replays it and learns a retry is in flight — the seam that
+// keeps the client↔daemon and daemon↔provider cut-points synchronised through
+// one ordered stream. Uses a detached ctx so a racing turn cancel can't drop the
+// record. `attempt` is the just-failed retry index (1-based) ; the announced
+// attempt number is attempt+1 (the original try being #1).
+func (e *Engine) emitTurnRetry(in TurnInput, tr *turn.Turn, cause error, attempt int, delay time.Duration) {
+	info := errclass.Classify(cause)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ev := sessionstore.Event{
+		Type:          sessionstore.EventTurnRetry,
+		SessionID:     in.SessionID,
+		AppID:         in.AppID,
+		UserID:        in.UserID,
+		CorrelationID: tr.ID,
+		Retry: &sessionstore.RetryPayload{
+			Attempt:   attempt + 1,
+			Max:       maxTurnRetries + 1,
+			Message:   info.Error,
+			Code:      info.Code,
+			Category:  info.Category,
+			RetryInMs: int(delay / time.Millisecond),
+		},
+	}
+	if _, err := e.Sessions.AppendDurable(ctx, ev); err != nil && e.Logger != nil {
+		e.Logger.Warn("runtime: emit turn_retry event failed",
+			slog.String("turn_id", tr.ID), slog.String("err", err.Error()))
+	}
+}
+
+// modelOverrideFor returns the per-agent model override for this turn. Sub-agents
+// run in a child session (parent::agent::<run>); their override lives on the
+// parent, keyed by the agent's logical id.
+func (e *Engine) modelOverrideFor(sessionID, agentID string, selfOverrides map[string]string) string {
+	if i := strings.Index(sessionID, "::agent::"); i >= 0 {
+		if st, err := e.Sessions.State(sessionID[:i]); err == nil && st != nil {
+			return st.Snapshot().ModelOverrides[agentID]
+		}
+		return ""
+	}
+	return selfOverrides[agentID]
+}
+
+// interruptMarker builds the LLM-facing resume note appended to a partial
+// assistant message when a turn is cut off mid-generation. The wording reflects
+// the CAUSE (user abort, timeout, network drop, rate limit, upstream provider
+// error) so the next round — and any audit — knows why it stopped, while every
+// variant keeps the exact "[Response interrupted before completion …]" prefix
+// the client strips before display (digitorn.ts INTERRUPT_MARKER). It must
+// contain no literal ']' before the close so that regex matches.
+func interruptMarker(cause error) string {
+	reason := "generation was cut off before finishing"
+	switch {
+	case errors.Is(cause, context.Canceled):
+		reason = "generation was stopped here on request"
+	case errors.Is(cause, context.DeadlineExceeded):
+		reason = "generation timed out before finishing"
+	default:
+		switch errclass.Classify(cause).Category {
+		case "network":
+			reason = "the connection to the model provider dropped mid-generation"
+		case "rate_limit":
+			reason = "the model provider rate-limited the request mid-generation"
+		case "provider":
+			reason = "the model provider returned an error mid-generation"
+		}
+	}
+	return "\n\n[Response interrupted before completion — " + reason + ". Continue from this point if the task is unfinished.]"
 }
 
 func (e *Engine) persistInterruptedAssistant(tr *turn.Turn, in TurnInput, content string) {
@@ -2528,6 +2705,80 @@ func (e *Engine) toolSpec(module, action string) *tool.Spec {
 func (e *Engine) GateSubTool(ctx context.Context, inv ToolInvocation) *ToolOutcome {
 	app, agent := e.resolveAppAgent(ctx, inv.AppID, inv.AgentID)
 	return e.enforceGate(ctx, inv.SessionID, inv.AppID, inv.UserID, inv.CallID, app, agent, inv.Name, inv.CallID, inv.Args, nil, nil)
+}
+
+// ExecuteToolGated runs ONE tool through the full security gate (SG-4) and then the
+// dispatcher (modules + middleware), OUTSIDE a turn. It is the single-tool seam the
+// realtime voice brain (Voie B) uses : the realtime model PROPOSES a function call,
+// and the daemon gates + executes it here — the same gates, the same modules/
+// middleware, and the same workdir confinement as a tool reached inside a turn. The
+// model never touches a tool itself ; every call funnels through this chokepoint, so
+// the daemon stays the brain even when a provider model is generating the speech.
+func (e *Engine) ExecuteToolGated(ctx context.Context, inv ToolInvocation) ToolOutcome {
+	// WD : confine path-typed args to the session's workdir, exactly as the turn
+	// dispatch path attaches the policy before the gate runs.
+	if e.PathPolicies != nil {
+		if pp, ok := e.PathPolicies.PathPolicyFor(inv.AppID, inv.SessionID); ok {
+			ctx = workdir.WithPathPolicy(ctx, pp)
+		}
+	}
+	if blocked := e.GateSubTool(ctx, inv); blocked != nil {
+		return *blocked
+	}
+	return e.dispatcher().Dispatch(ctx, inv)
+}
+
+// VoiceContext assembles the system prompt + the curated, gated toolset for a
+// realtime (Voie B) session. It reuses the SAME ContextBuilder path as a text turn,
+// so the realtime model is configured with the daemon's instructions and offered
+// exactly the tools the security gates allow — no parallel tool logic. The model's
+// function calls are still gated + executed per call via ExecuteToolGated. agentID
+// is the explicit agent (empty selects the app's entry agent).
+func (e *Engine) VoiceContext(ctx context.Context, appID, agentID string) (systemPrompt string, tools []llm.ToolSpec, err error) {
+	app, _ := e.resolveAppAgent(ctx, appID, agentID)
+	if app == nil || app.Definition == nil || len(app.Definition.Agents) == 0 {
+		return "", nil, fmt.Errorf("runtime: voice context: app %q has no agent", appID)
+	}
+	agent := resolveAgent(app.Definition, agentID)
+	if agent == nil {
+		return "", nil, fmt.Errorf("runtime: voice context: agent %q not found in app %q", agentID, appID)
+	}
+	if e.Context == nil {
+		sp := agent.SystemPrompt
+		if sp == "" {
+			sp = agent.Prompt
+		}
+		return sp, e.tools().ToolsForAgent(agent), nil
+	}
+	appName, appVersion := "", ""
+	if app.Definition != nil {
+		appName = app.Definition.App.Name
+		appVersion = app.Definition.App.Version
+	}
+	if appName == "" && app.Meta != nil {
+		appName = app.Meta.AppID
+	}
+	callAppEnabled, askUserWired, useSkillWired := false, false, false
+	if pa, ok := e.Dispatcher.(primitiveAvailability); ok {
+		callAppEnabled = pa.CallAppWired()
+		askUserWired = pa.AskUserWired()
+		useSkillWired = pa.UseSkillWired()
+	}
+	res, err := e.Context.BuildFor(ctx, ContextRequest{
+		App:             app,
+		Agent:           agent,
+		AppName:         appName,
+		AppVersion:      appVersion,
+		MemoryEnabled:   appMemoryEnabled(app),
+		AgentEnabled:    appAgentSpawnEnabled(app),
+		CallAppEnabled:  callAppEnabled,
+		AskUserEnabled:  askUserWired && appGrantsAskUser(app),
+		UseSkillEnabled: useSkillWired && appHasSkills(app, agent),
+	})
+	if err != nil {
+		return "", nil, err
+	}
+	return res.SystemPrompt, res.Tools, nil
 }
 
 // resolveAppAgent looks up the RuntimeApp and the named agent from the

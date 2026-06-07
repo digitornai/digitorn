@@ -29,6 +29,18 @@ type EmbedRequest struct {
 	// error.
 	Inputs []string `json:"inputs"`
 
+	// Model selects which catalogue model serves the request
+	// (canonical id or shortcut, see internal/embeddings/models).
+	// Empty resolves to the default model — the historic behaviour,
+	// so legacy callers need no change. An unknown id is an error.
+	Model string `json:"model,omitempty"`
+
+	// Role hints retrieval intent for models that prepend a prefix
+	// (e.g. nomic : "search_query:" / "search_document:"). One of
+	// "query", "document", or "" (no prefix). Ignored by models
+	// without prefixes.
+	Role string `json:"role,omitempty"`
+
 	// Normalize, when true (default), L2-normalises every vector
 	// before returning. Required for cosine similarity ; set to
 	// false only if the caller needs raw pooled vectors.
@@ -39,6 +51,12 @@ type EmbedRequest struct {
 	// also has its own deadline.
 	Timeout time.Duration `json:"timeout,omitempty"`
 }
+
+// Retrieval roles for EmbedRequest.Role.
+const (
+	RoleQuery    = "query"
+	RoleDocument = "document"
+)
 
 // EmbedResponse carries one float32 vector per Input. Vectors are
 // always EmbeddingDim long (384 for the doc-default model).
@@ -60,6 +78,20 @@ type EmbedResponse struct {
 	// ElapsedMs is the wall-clock the worker spent in the model
 	// (excludes wire time). Used for capacity planning.
 	ElapsedMs int64 `json:"elapsed_ms"`
+}
+
+// RerankRequest scores documents against a query with a cross-encoder.
+type RerankRequest struct {
+	Model     string        `json:"model,omitempty"`
+	Query     string        `json:"query"`
+	Documents []string      `json:"documents"`
+	Timeout   time.Duration `json:"timeout,omitempty"`
+}
+
+// RerankResponse carries one relevance score per Document (same order).
+type RerankResponse struct {
+	Scores []float32 `json:"scores"`
+	Model  string    `json:"model"`
 }
 
 // InfoRequest asks the worker for its loaded model identity.

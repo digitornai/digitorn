@@ -125,6 +125,16 @@ export function QuestionPrompt(props: { request: QuestionRequest }) {
   onMount(() => {
     const popMode = modeStack.push(QUESTION_MODE)
     onCleanup(popMode)
+    // Seed the custom-answer box with any pre-filled value (editable content
+    // review / a field default), so the user edits it in place. A value that
+    // matches an offered option is left to be picked, not shown as custom.
+    const seeds = questions().map((q: any) => {
+      const v = typeof q?.value === "string" ? q.value : ""
+      if (!v) return ""
+      const labels = (q?.options ?? []).map((o: any) => String(o?.label ?? ""))
+      return labels.includes(v) ? "" : v
+    })
+    if (seeds.some(Boolean)) setStore("custom", seeds)
   })
 
   useBindings(() => ({

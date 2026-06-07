@@ -11,6 +11,8 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/mbathepaul/digitorn/internal/core/servicebus"
+	"github.com/mbathepaul/digitorn/internal/embeddings"
+	"github.com/mbathepaul/digitorn/internal/module/gateway"
 	"github.com/mbathepaul/digitorn/internal/module/service"
 	workerfw "github.com/mbathepaul/digitorn/internal/worker"
 	pkgmodule "github.com/mbathepaul/digitorn/pkg/module"
@@ -94,7 +96,8 @@ func Run(opts Options) error {
 	// workerID = "<kind>#<pid>". The daemon already knows the kind
 	// from its Spec ; the pid disambiguates instances on the wire.
 	workerID := fmt.Sprintf("%s#%d", hs.Kind, os.Getpid())
-	svc := newModuleService(bus, workerID)
+	emb, rer := dialServices(log)
+	svc := newModuleService(bus, workerID, emb, rer)
 
 	return workerfw.Run(workerfw.ServerConfig{
 		Handshake: hs,
@@ -157,6 +160,48 @@ func parseModulesEnv(v string) []string {
 		}
 	}
 	return out
+}
+
+// dialServices builds the embeddings + reranker bridges from the daemon
+// gateway, or returns nil when this worker pool has no gateway address
+// (self-contained modules like shell/lsp). A dial failure degrades to nil.
+func dialServices(log *slog.Logger) (pkgmodule.Embedder, pkgmodule.Reranker) {
+	addr := os.Getenv(gateway.EnvGatewayAddr)
+	secret := os.Getenv(gateway.EnvGatewaySecret)
+	if addr == "" {
+		return nil, nil
+	}
+	cc, err := gateway.Dial(addr, secret)
+	if err != nil {
+		log.Warn("worker: gateway dial failed, daemon services unavailable", slog.String("addr", addr), slog.String("err", err.Error()))
+		return nil, nil
+	}
+	log.Info("worker: service gateway connected", slog.String("addr", addr))
+	c := embeddings.NewDirectClient(cc)
+	return embedderAdapter{c: c}, rerankerAdapter{c: c}
+}
+
+// embedderAdapter bridges *embeddings.Client to pkgmodule.Embedder,
+// converting the vector slice type.
+type embedderAdapter struct{ c *embeddings.Client }
+
+func (a embedderAdapter) EmbedModel(ctx context.Context, model, role string, texts []string) ([][]float32, int, error) {
+	vecs, dim, err := a.c.EmbedModel(ctx, model, role, texts)
+	if err != nil {
+		return nil, 0, err
+	}
+	out := make([][]float32, len(vecs))
+	for i, v := range vecs {
+		out[i] = []float32(v)
+	}
+	return out, dim, nil
+}
+
+// rerankerAdapter bridges *embeddings.Client to pkgmodule.Reranker.
+type rerankerAdapter struct{ c *embeddings.Client }
+
+func (a rerankerAdapter) Rerank(ctx context.Context, model, query string, docs []string) ([]float32, error) {
+	return a.c.Rerank(ctx, model, query, docs)
 }
 
 // loadModuleConfig reads DIGITORN_MODULE_<UPPER>_CONFIG as JSON and

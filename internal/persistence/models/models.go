@@ -60,6 +60,25 @@ type Credential struct {
 
 func (Credential) TableName() string { return "credentials" }
 
+// OAuthState is a pending MCP OAuth authorization, binding a CSRF state token to
+// the user who started the flow (the provider callback can't carry the JWT).
+// Single-use (deleted on read) and short-lived (ExpiresAt). The PKCE Verifier is
+// a secret, stored encrypted.
+type OAuthState struct {
+	State       string    `gorm:"size:128;primaryKey"`
+	UserID      string    `gorm:"size:128;not null;index"`
+	AppID       string    `gorm:"size:128;not null"`
+	Provider    string    `gorm:"size:128;not null"`
+	ServerID    string    `gorm:"size:128;not null"`
+	Verifier    []byte    `gorm:"type:text"`
+	Nonce       string    `gorm:"size:128"`
+	RedirectURI string    `gorm:"size:512"`
+	ExpiresAt   time.Time `gorm:"index"`
+	CreatedAt   time.Time
+}
+
+func (OAuthState) TableName() string { return "oauth_state" }
+
 // AuditLog records all sensitive actions for compliance.
 type AuditLog struct {
 	ID        uint64    `gorm:"primaryKey;autoIncrement"`
@@ -84,3 +103,42 @@ type ModuleState struct {
 }
 
 func (ModuleState) TableName() string { return "module_state" }
+
+// UserSkill is a per-user, per-app authored skill : a named slash-command
+// directive the agent can load via use_skill, alongside the app's own bundled
+// skills. Owned by the user, scoped to one app, and persisted here (not in the
+// app bundle) so it survives app upgrades — the bundle dir is wiped and rebuilt
+// on every (re)install. The (user_id, app_id, name) triple is unique : one user
+// can't shadow their own skill name within an app, but two users hold
+// independent skills for the same app.
+type UserSkill struct {
+	ID           string `gorm:"size:64;primaryKey"`
+	UserID       string `gorm:"size:128;not null;uniqueIndex:idx_uskill_user_app_name,priority:1"`
+	AppID        string `gorm:"size:128;not null;uniqueIndex:idx_uskill_user_app_name,priority:2"`
+	Name         string `gorm:"size:64;not null;uniqueIndex:idx_uskill_user_app_name,priority:3"`
+	Description  string `gorm:"size:300;not null;default:''"`
+	Instructions string `gorm:"type:text;not null"`
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
+func (UserSkill) TableName() string { return "user_skills" }
+
+// UserSnippet is a per-user, per-app saved prompt the chat composer can insert.
+// Unlike a skill it is NEVER consumed by the agent/runtime — it's a pure
+// client-side convenience (title + body, with an optional emoji + tags). Stored
+// here (not the bundle) so it survives app upgrades. No name uniqueness : a user
+// may keep several snippets with the same title.
+type UserSnippet struct {
+	ID        string   `gorm:"size:64;primaryKey"`
+	UserID    string   `gorm:"size:128;not null;index:idx_usnip_user_app,priority:1"`
+	AppID     string   `gorm:"size:128;not null;index:idx_usnip_user_app,priority:2"`
+	Title     string   `gorm:"size:200;not null"`
+	Body      string   `gorm:"type:text;not null"`
+	Emoji     string   `gorm:"size:16;not null;default:''"`
+	Tags      []string `gorm:"serializer:json"`
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+func (UserSnippet) TableName() string { return "user_snippets" }

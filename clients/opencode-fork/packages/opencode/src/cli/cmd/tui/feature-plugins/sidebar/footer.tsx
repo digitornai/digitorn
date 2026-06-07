@@ -14,9 +14,9 @@ function View(props: { api: TuiPluginApi }) {
   const [digitornApps] = createResource(async () => {
     try {
       const res = await sdk.fetch(`${sdk.url}/digitorn/apps`)
-      return (await res.json()) as Array<{ id: string; name: string; color?: string; current?: boolean }>
+      return (await res.json()) as Array<{ id: string; name: string; color?: string; current?: boolean; version?: string }>
     } catch {
-      return [] as Array<{ id: string; name: string; color?: string; current?: boolean }>
+      return [] as Array<{ id: string; name: string; color?: string; current?: boolean; version?: string }>
     }
   })
   const currentApp = createMemo(() => (digitornApps() ?? []).find((a) => a.current))
@@ -105,6 +105,9 @@ function View(props: { api: TuiPluginApi }) {
         <span style={{ fg: theme().text }}>
           <b>{currentApp()?.name ?? "Digitorn"}</b>
         </span>
+        <Show when={currentApp()?.version}>
+          <span style={{ fg: theme().textMuted }}> v{currentApp()!.version}</span>
+        </Show>
       </text>
     </box>
   )

@@ -23,6 +23,7 @@ import { Flag } from "@opencode-ai/core/flag/flag"
 import semver from "semver"
 import { DialogProvider, useDialog } from "@tui/ui/dialog"
 import { DialogProvider as DialogProviderList } from "@tui/component/dialog-provider"
+import { DialogDigitornConnect } from "@tui/component/dialog-digitorn-connect"
 import { DialogApps } from "@tui/component/dialog-apps"
 import { ErrorComponent } from "@tui/component/error-component"
 import { PluginRouteMissing } from "@tui/component/plugin-route-missing"
@@ -34,7 +35,9 @@ import { StartupLoading } from "@tui/component/startup-loading"
 import { SyncProvider, useSync } from "@tui/context/sync"
 import { SyncProviderV2 } from "@tui/context/sync-v2"
 import { LocalProvider, useLocal } from "@tui/context/local"
-import { DialogModel } from "@tui/component/dialog-model"
+import { openModelsDialog } from "@tui/component/dialog-models"
+import { openSkillsDialog } from "@tui/component/dialog-skills"
+import { openWorkspaceChanges } from "@tui/component/dialog-workspace-changes"
 import { useConnected } from "@tui/component/use-connected"
 import { DialogMcp } from "@tui/component/dialog-mcp"
 import { DialogStatus } from "@tui/component/dialog-status"
@@ -546,7 +549,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       (isEmpty, wasEmpty) => {
         // only trigger when we transition into an empty-provider state
         if (!isEmpty || wasEmpty) return
-        dialog.replace(() => <DialogProviderList />)
+        dialog.replace(() => (process.env.DIGITORN_URL ? <DialogDigitornConnect /> : <DialogProviderList />))
       },
     ),
   )
@@ -635,7 +638,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
         category: "Agent",
         slashName: "models",
         run: () => {
-          dialog.replace(() => <DialogModel />)
+          void openModelsDialog(sdk, dialog, route.data.type === "session" ? route.data.sessionID : "")
         },
       },
       {
@@ -731,11 +734,12 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       },
       {
         name: "provider.connect",
-        title: "Connect provider",
+        title: process.env.DIGITORN_URL ? "Sign in to digitorn" : "Connect provider",
         suggested: !connected(),
         slashName: "connect",
+        slashAliases: process.env.DIGITORN_URL ? ["login", "signin"] : undefined,
         run: () => {
-          dialog.replace(() => <DialogProviderList />)
+          dialog.replace(() => (process.env.DIGITORN_URL ? <DialogDigitornConnect /> : <DialogProviderList />))
         },
         category: "Provider",
       },
@@ -813,6 +817,25 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
           dialog.replace(() => <DialogHelp />)
         },
         category: "System",
+      },
+      {
+        name: "skill.manage",
+        title: "Manage skills",
+        slashName: "skill",
+        run: () => {
+          void openSkillsDialog(sdk, dialog)
+        },
+        category: "System",
+      },
+      {
+        name: "workspace.changes",
+        title: "Review changes",
+        slashName: "review",
+        slashAliases: ["changes"],
+        run: () => {
+          void openWorkspaceChanges(sdk, dialog, route.data.type === "session" ? route.data.sessionID : "")
+        },
+        category: "VCS",
       },
       {
         name: "docs.open",

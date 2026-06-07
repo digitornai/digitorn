@@ -6,9 +6,10 @@
 // This file is the protocol-grounded FOUNDATION : config/auth + the REST helper
 // + the Socket.IO event bridge to our daemon. The opencode-client method surface
 // and the Envelope→GlobalEvent translation are layered on top of it.
-import { readFileSync, appendFileSync } from "node:fs"
+import { readFileSync, appendFileSync, writeFileSync, readdirSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
+import { createHash } from "node:crypto"
 import { io, type Socket } from "socket.io-client"
 
 // Opt-in file tracing : set DIGITORN_DEBUG=<path> to capture the event chain
@@ -21,6 +22,10 @@ const dlog = (msg: string): void => {
     appendFileSync(DBG, `${new Date().toISOString()} ${msg}\n`)
   } catch {}
 }
+// Build marker (logged ONCE when this module is freshly loaded) — proves whether
+// the running process actually transpiled the latest adapter or is serving stale
+// --watch / Bun-cache code.
+dlog("=== DIGITORN ADAPTER BUILD MARKER: skills-cache-v3 ===")
 
 export interface DigitornConfig {
   url: string // daemon base, e.g. http://localhost:8000
@@ -63,6 +68,18 @@ export function digitornConfig(): DigitornConfig {
     userID,
     app: process.env.DIGITORN_APP ?? "chat-claude",
   }
+}
+
+// Set by digitornFetch once the adapter is live ; called by applyDigitornCredentials
+// after /connect signs in, to swap the bearer on the running REST + socket layer.
+let reloginHook: ((token: string, userID: string) => void) | undefined
+
+// applyDigitornCredentials makes a fresh sign-in take effect WITHOUT a restart :
+// the running adapter swaps to the new token (REST immediately, socket on its next
+// connect). No-op if the adapter isn't up yet — digitornConfig() will read the
+// freshly-written ~/.digitorn/credentials.json on the next boot anyway.
+export function applyDigitornCredentials(creds: { access_token?: string; user_id?: string }): void {
+  reloginHook?.(creds.access_token ?? "", creds.user_id ?? "")
 }
 
 // daemonFetch is the REST helper : Bearer auth, JSON in/out, throws on non-2xx
@@ -147,6 +164,15 @@ const cleanToolName = (n: unknown): string => {
   return norm
 }
 
+// Slash commands we expose, each backed by an existing daemon session endpoint
+// (dispatched in POST /session/{id}/command). `template`/`hints` are required by
+// opencode's Command type; we run actions server-side, so template stays empty.
+const DIGITORN_COMMANDS = [
+  { name: "compact", description: "Compact the conversation to free up context", template: "", hints: [], source: "command" },
+  { name: "fork", description: "Fork this session into a new one", template: "", hints: [], source: "command" },
+  { name: "export", description: "Export this conversation as Markdown", template: "", hints: [], source: "command" },
+]
+
 // Internal bookkeeping tools (memory/goal/todos) — never shown as a tool chip,
 // exactly like the old CLI's isHiddenTool. Their effects surface elsewhere
 // (todos via the todo widget, goal/memory silently). Matched by suffix.
@@ -165,6 +191,67 @@ const isAgentSpawn = (raw: unknown): boolean => /agent_spawn/i.test(String(raw ?
 // type. Our spawn arg `task` is the full multi-paragraph prompt, so prefer the
 // one-line `memory_seed` ("Goal: …"), else the first non-empty prompt line,
 // capped — never dump the whole prompt.
+// formFieldToQuestion maps ONE ask_user form field to an opencode question (a tab
+// in the multi-question UI). select → single-select, multiselect → multi-select,
+// boolean → Yes/No, everything else → free-text. A field description rides in the
+// question text, and a default pre-fills (`value`). select/multiselect keep the
+// custom-answer field unless allow_custom:false.
+export const formFieldToQuestion = (f: any): Record<string, unknown> => {
+  const name = String(f?.name ?? "")
+  const label = String(f?.label ?? name) || name
+  const type = String(f?.type ?? "").toLowerCase()
+  const desc = String(f?.description ?? "")
+  const opts: string[] = Array.isArray(f?.options) ? f.options.map(String) : []
+  const def = f?.default
+  const question = desc ? `${label} — ${desc}` : label
+  const header = label.slice(0, 30)
+  const allowCustom = f?.allow_custom !== false
+  if (type === "multiselect") {
+    return { question, header, options: opts.map((o) => ({ label: o, description: "" })), multiple: true, custom: allowCustom }
+  }
+  if (type === "select" || (opts.length > 0 && type !== "boolean")) {
+    return { question, header, options: opts.map((o) => ({ label: o, description: "" })), multiple: false, custom: allowCustom, ...(def != null ? { value: String(def) } : {}) }
+  }
+  if (type === "boolean") {
+    const v = def === true || String(def).toLowerCase() === "true" ? "Yes" : def != null ? "No" : undefined
+    return { question, header, options: [{ label: "Yes", description: "" }, { label: "No", description: "" }], multiple: false, custom: false, ...(v ? { value: v } : {}) }
+  }
+  return { question, header, options: [], multiple: false, custom: true, ...(def != null ? { value: String(def) } : {}) }
+}
+
+// encodeQuestionReply turns opencode's per-question answers (string[][]) into the
+// single `reason` string the daemon's /approve expects, per the question shape :
+// form → JSON object keyed by field name (numbers/booleans coerced, multiselect →
+// array) ; multi-select → comma-joined ; text/single/content → the value.
+export const encodeQuestionReply = (
+  shape: { mode: "plain" | "content" | "multi" | "form"; fields?: { name: string; type: string }[] } | undefined,
+  answers: string[][],
+): string => {
+  if (shape?.mode === "form" && shape.fields) {
+    const obj: Record<string, unknown> = {}
+    shape.fields.forEach((f, i) => {
+      const sel = answers[i] ?? []
+      if (f.type === "multiselect") {
+        obj[f.name] = sel
+        return
+      }
+      const v = sel[0] ?? ""
+      if (["number", "float", "range", "rating", "int", "integer"].includes(f.type)) {
+        const n = Number(v)
+        obj[f.name] = v !== "" && !Number.isNaN(n) ? (f.type === "int" || f.type === "integer" ? Math.trunc(n) : n) : v
+      } else if (f.type === "boolean") {
+        obj[f.name] = v === "Yes" || v.toLowerCase() === "true"
+      } else {
+        obj[f.name] = v
+      }
+    })
+    return JSON.stringify(obj)
+  }
+  // multi-select AND single/text/content all collapse to the first question's
+  // labels ; comma-join so the daemon's multi-select splitter sees each pick.
+  return (answers[0] ?? []).join(", ")
+}
+
 const spawnInput = (args: unknown): Record<string, unknown> => {
   const a = (args ?? {}) as Record<string, any>
   const full = String(a.task ?? a.prompt ?? "")
@@ -172,7 +259,11 @@ const spawnInput = (args: unknown): Record<string, unknown> => {
   const short = (seed || full.split("\n").map((s) => s.trim()).find(Boolean) || "Subagent").trim()
   return {
     description: short.length > 80 ? short.slice(0, 79) + "…" : short,
-    subagent_type: String(a.agent ?? a.kind ?? "general"),
+    // The daemon requires an agent/specialist name to spawn (see meta/agent.go),
+    // so this is normally "explore"/"general"/… . `||` (not `??`) so an empty
+    // string also falls through → "" marks a nameless/anonymous agent, which the
+    // renderer labels "Subagent" rather than mislabelling it the "general" specialist.
+    subagent_type: String(a.agent || a.kind || ""),
   }
 }
 
@@ -200,6 +291,36 @@ const errorInfo = (p: any): { name: string; data: { message: string } } => {
   let message = friendlyError(base)
   if (detail && detail !== base && !message.includes(detail)) message += `\n${detail}`
   return { name: String(p?.code || p?.category || "DaemonError"), data: { message } }
+}
+
+// The daemon appends an interruption marker to a partial assistant message so the
+// LLM has resume context (engine.go persistInterruptedAssistant). That marker is
+// LLM-facing, NOT for the user — strip it from anything we DISPLAY (the daemon keeps
+// it in the persisted content for the model). Matched on its stable prefix so a
+// wording tweak doesn't desync. hadInterruptMarker → flag the message interrupted.
+const INTERRUPT_MARKER = /\n*\[Response interrupted before completion[^\]]*\]\s*$/
+const stripInterruptMarker = (s: string): string => s.replace(INTERRUPT_MARKER, "")
+const hadInterruptMarker = (s: string): boolean => INTERRUPT_MARKER.test(s)
+
+// manifestModel pulls the LLM model the app's entry agent is configured to use
+// from the compiled manifest (GET /api/apps/{id}/manifest) — ported from the old
+// CLI's manifestModel. The manifest serialises the daemon's AppDefinition (yaml
+// tags), so JSON keys can be lower OR Capitalised; navigate defensively. Falls
+// back to a top-level brain. Empty when nothing declares a model.
+const manifestModel = (raw: any): string => {
+  const pick = (o: any): string => {
+    const brain = o?.brain ?? o?.Brain
+    const m = brain?.model ?? brain?.Model
+    return typeof m === "string" ? m : ""
+  }
+  const agents = raw?.agents ?? raw?.Agents
+  if (Array.isArray(agents)) {
+    for (const a of agents) {
+      const m = pick(a)
+      if (m) return m
+    }
+  }
+  return pick(raw)
 }
 
 // opencode renders tool parts with per-tool components keyed by part.tool, each
@@ -304,10 +425,102 @@ function toOcSession(s: Record<string, any>, dir: string): Record<string, unknow
   }
 }
 
+// --- @ file completions ----------------------------------------------------
+// opencode's composer calls GET /find/file?query= for the @-mention picker and
+// expects a string[] of workdir-relative paths. We answer it locally : the TUI
+// process has fs access and the session workdir IS process.cwd() (the adapter
+// binds new sessions to it), so a cached recursive walk + fuzzy filename match
+// gives instant completions with no daemon round-trip.
+const FIND_IGNORE = new Set([
+  "node_modules", ".git", "dist", "build", "out", ".next", ".nuxt", "vendor",
+  "target", ".venv", "venv", "__pycache__", ".cache", "coverage", ".idea",
+  ".turbo", ".parcel-cache", ".svelte-kit", "bin", "obj",
+])
+let findCache: { root: string; files: string[]; at: number } | null = null
+
+function walkWorkdir(root: string, cap = 20000): string[] {
+  const out: string[] = []
+  const stack: string[] = [""]
+  while (stack.length && out.length < cap) {
+    const rel = stack.pop()!
+    let entries
+    try {
+      entries = readdirSync(rel ? join(root, rel) : root, { withFileTypes: true })
+    } catch {
+      continue
+    }
+    for (const e of entries) {
+      if (out.length >= cap) break
+      const name = String(e.name)
+      const childRel = rel ? `${rel}/${name}` : name
+      if (e.isDirectory()) {
+        // Skip the ignore set + hidden dirs (.git, .digitorn shadow, .vscode…) —
+        // matches ripgrep's default, which is what opencode's native find does.
+        if (!FIND_IGNORE.has(name) && !name.startsWith(".")) stack.push(childRel)
+      } else if (e.isFile()) {
+        out.push(childRel)
+      }
+    }
+  }
+  return out
+}
+
+// 5s-cached recursive file list of the workdir (re-walking on every keystroke
+// would be wasteful ; the composer queries on each character).
+function workdirFiles(root: string): string[] {
+  const now = Date.now()
+  if (findCache && findCache.root === root && now - findCache.at < 5000) return findCache.files
+  const files = walkWorkdir(root)
+  findCache = { root, files, at: now }
+  return files
+}
+
+const isSubseq = (q: string, s: string): boolean => {
+  let i = 0
+  for (let j = 0; j < s.length && i < q.length; j++) if (s[j] === q[i]) i++
+  return i === q.length
+}
+
+// Higher = better ; null = no match. Basename hits beat path hits beat
+// subsequence ; shorter paths break ties (so "app.tsx" ranks above a deep file).
+function fuzzyFileScore(p: string, q: string): number | null {
+  const base = p.slice(p.lastIndexOf("/") + 1)
+  let idx = base.indexOf(q)
+  if (idx >= 0) return 1000 - idx - base.length * 0.1
+  idx = p.indexOf(q)
+  if (idx >= 0) return 600 - idx - p.length * 0.1
+  if (isSubseq(q, base)) return 300 - base.length * 0.1
+  if (isSubseq(q, p)) return 150 - p.length * 0.1
+  return null
+}
+
+function findFiles(root: string, query: string, limit: number): string[] {
+  const files = workdirFiles(root)
+  const q = query.trim().toLowerCase()
+  if (!q) return files.slice(0, limit)
+  const scored: Array<[number, string]> = []
+  for (const f of files) {
+    const s = fuzzyFileScore(f.toLowerCase(), q)
+    if (s !== null) scored.push([s, f])
+  }
+  scored.sort((a, b) => b[0] - a[0] || a[1].length - b[1].length)
+  const out: string[] = []
+  for (let i = 0; i < scored.length && out.length < limit; i++) out.push(scored[i][1])
+  return out
+}
+
 // digitornFetch returns a fetch implementation routing opencode's API surface.
 export function digitornFetch(cfg: DigitornConfig): typeof fetch {
-  const dir = process.cwd()
+  // The agent's working directory = the launch dir, sent as `workdir` on session
+  // create (the daemon honors an absolute client workdir over its sandbox, like
+  // the Go CLI passing os.Getwd()). DIGITORN_CWD decouples it from process.cwd()
+  // for the dev launcher, which must `cd` into the package so Bun loads opencode's
+  // bunfig/tsconfig (JSX) — DIGITORN_CWD then carries the real project dir.
+  const dir = process.env.DIGITORN_CWD?.trim() || process.cwd()
   const now = Date.now()
+  // The digitorn LLM gateway (OpenAI-compatible). The /digitorn/models route below
+  // reads its catalog from here. Local default; overridable for non-local setups.
+  const gatewayURL = (process.env.DIGITORN_GATEWAY_URL ?? "http://127.0.0.1:8002/v1").replace(/\/+$/, "")
 
   // ONE synthetic "connected" provider so opencode lets the user send prompts.
   // The real model is chosen server-side by the digitorn app, so this is just a
@@ -350,7 +563,7 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
 
   // The /api/apps LIST omits icon/color (only the per-app detail has them), so we
   // enrich once and cache (apps don't change at runtime).
-  let appsCache: Array<{ id: string; name: string; description: string; category: string; icon: string; color: string }> | undefined
+  let appsCache: Array<{ id: string; name: string; description: string; category: string; icon: string; color: string; version: string }> | undefined
   const loadApps = async () => {
     if (appsCache) return appsCache
     const r = await daemonFetch<any>(cfg, `/api/apps`)
@@ -360,14 +573,16 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
         const id = String(a.app_id ?? a.id ?? "")
         let icon = a.icon
         let color = a.color
-        if (icon == null || color == null) {
+        let version = a.version
+        if (icon == null || color == null || version == null) {
           try {
             const d = await daemonFetch<any>(cfg, `/api/apps/${encodeURIComponent(id)}`)
             icon = icon ?? d?.icon
             color = color ?? d?.color
+            version = version ?? d?.version
           } catch {}
         }
-        return { id, name: String(a.name ?? id), description: String(a.description ?? ""), category: String(a.category ?? ""), icon: String(icon ?? ""), color: String(color ?? "") }
+        return { id, name: String(a.name ?? id), description: String(a.description ?? ""), category: String(a.category ?? ""), icon: String(icon ?? ""), color: String(color ?? ""), version: String(version ?? "") }
       }),
     )
     return appsCache
@@ -396,6 +611,73 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
     modesCache.set(appId, modes)
     return modes
   }
+  // The REAL model is the app's (chosen server-side) — read it from the manifest
+  // like the old CLI did, so the prompt footer shows it instead of the "Digitorn"
+  // placeholder. Cached per app (manifests don't change at runtime).
+  const modelCache = new Map<string, string>()
+  const loadModel = async (appId: string): Promise<string> => {
+    const hit = modelCache.get(appId)
+    if (hit !== undefined) return hit
+    let model = ""
+    try {
+      const m = await daemonFetch<any>(cfg, `/api/apps/${encodeURIComponent(appId)}/manifest`, {
+        signal: AbortSignal.timeout(3000), // never let a slow manifest hang the caller
+      })
+      model = manifestModel(m)
+    } catch {}
+    modelCache.set(appId, model)
+    return model
+  }
+  // Replace the prompt footer's "Digitorn Digitorn" (model.name + provider.name)
+  // with the app's REAL model : set the model NAME to the manifest model and
+  // BLANK the provider name so the line reads "Mode · <model>" (no duplicate).
+  // Re-applies when currentApp changes (so an app switch + provider refetch
+  // updates it). Falls back to the app id when no model is declared.
+  let modelApplied: string | undefined
+  const applyAppModel = async () => {
+    if (modelApplied === currentApp) return
+    dgModel.name = (await loadModel(currentApp)) || currentApp
+    dgProvider.name = ""
+    modelApplied = currentApp
+  }
+
+  // Gateway catalog grouped by kind. The hard 6s deadline is load-bearing: it is
+  // what stops a slow/unreachable gateway from freezing the models dialog.
+  type CatModel = { id: string; context: number; cat: string }
+  const loadGatewayCatalog = async (): Promise<{ groups: { category: string; models: CatModel[] }[]; error?: string }> => {
+    const build = async () => {
+      const res = await fetch(`${gatewayURL}/models`, {
+        headers: { authorization: `Bearer ${cfg.token}` },
+        signal: AbortSignal.timeout(3000),
+      })
+      if (!res.ok) return { groups: [], error: `gateway returned HTTP ${res.status}` }
+      const list: any[] = (await res.json())?.data ?? []
+      const byKind = new Map<string, CatModel[]>()
+      for (const m of list) {
+        const id = String(m?.id ?? "")
+        if (!id) continue
+        const kind = String(m?.kind ?? "").trim() || "text"
+        const context = Number(m?.max_context_tokens ?? 0)
+        const cats = Array.isArray(m?.categories) ? m.categories.map(String).filter(Boolean) : []
+        if (!byKind.has(kind)) byKind.set(kind, [])
+        byKind.get(kind)!.push({ id, context, cat: cats.join(" · ") })
+      }
+      const KIND_RANK: Record<string, number> = { chat: 0, text: 0, image: 1, audio: 2, video: 3, embedding: 4 }
+      const rank = (a: string, b: string) => (KIND_RANK[a] ?? 50) - (KIND_RANK[b] ?? 50) || a.localeCompare(b)
+      const groups = [...byKind.keys()].sort(rank).map((category) => ({ category, models: byKind.get(category)! }))
+      return { groups }
+    }
+    try {
+      return await Promise.race([
+        build(),
+        new Promise<{ groups: never[]; error: string }>((r) =>
+          setTimeout(() => r({ groups: [], error: "timed out loading models (gateway slow/unreachable)" }), 6000),
+        ),
+      ])
+    } catch (e: any) {
+      return { groups: [], error: `gateway unreachable: ${String(e?.message ?? e)}` }
+    }
+  }
 
   // ── ÉTAPE 3 : live chat plumbing ──────────────────────────────────────────
   // ONE Socket.IO to our daemon, fanned out to every open /event SSE stream,
@@ -403,6 +685,24 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
   // builds opencode "parts" from our streaming deltas.
   const sinks = new Set<(ev: unknown) => void>()
   const joined = new Set<string>()
+  // The most-recently-joined (active) session + the highest seq seen per session.
+  // On socket reconnect we re-join lastJoined and replay since its lastSeq, so a
+  // turn that was in-flight during a daemon drop catches up instead of hanging.
+  let lastJoined = ""
+  const lastSeqOf = new Map<string, number>()
+  let lastEventAt = 0 // wall-clock of the last envelope received (any, incl. replayed)
+  // The dead-turn watchdog must distinguish HISTORICAL replayed events (which the
+  // daemon re-emits on reconnect to fill the gap) from genuine LIVE progress. A
+  // daemon that CRASHED mid-turn replays only historical events then goes silent —
+  // those must NOT be mistaken for "the turn is alive". So we flip `replaying`
+  // true while a replay is in flight (until the daemon's `replay_done`), and only
+  // bump `lastLiveEventAt` for events that arrive OUTSIDE that window. The watchdog
+  // keys on lastLiveEventAt, so replayed events can't keep a dead turn spinning.
+  let replaying = false
+  let lastLiveEventAt = 0
+  // Sub-agent child sessions we've already announced (session.updated) — once per
+  // child, so opencode's sub-session UI sees them without duplicate inserts.
+  const registeredChildren = new Set<string>()
   let socket: Socket | undefined
   // Connection state for the footer dot, modelled on the Go CLI's socket-driven
   // Realtime: connecting (startup) → connected → disconnected (daemon dropped).
@@ -423,6 +723,29 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
     }
     return v
   }
+  // Per-turn WORK state, mirroring the Go CLI's renderShimmer counters : the live
+  // OUTPUT-token count (banked across rounds so a multi-round/tool turn never
+  // resets mid-turn), an `exact` flag (true once the provider's token_usage lands,
+  // dropping the "~" estimate marker), a char fallback (chars/4 before the first
+  // live count), and a `compacting` flag (between context_compacting/compacted).
+  // Pushed as digitorn.work so the in-chat working line shows "◆ ~Xk tokens" /
+  // "◆ ⟢ compacting context…" while a turn runs. Reset at turn_started.
+  type Work = { tokens: number; base: number; rounds: number; exact: boolean; chars: number; compacting: boolean }
+  const workBySession = new Map<string, Work>()
+  const workFor = (sid: string): Work => {
+    let v = workBySession.get(sid)
+    if (!v) {
+      v = { tokens: 0, base: 0, rounds: 0, exact: false, chars: 0, compacting: false }
+      workBySession.set(sid, v)
+    }
+    return v
+  }
+  const workProps = (sid: string) => {
+    const w = workFor(sid)
+    const tokens = w.tokens > 0 ? w.tokens : w.chars > 0 ? Math.floor(w.chars / 4) : 0
+    return { session: sid, tokens, exact: w.exact, compacting: w.compacting }
+  }
+  const broadcastWork = (sid: string) => emit(wrap({ type: "digitorn.work", properties: workProps(sid) }))
   // Once we've connected at least once, a later connect_error means the daemon
   // dropped (stay red), vs the initial pre-connect attempts (yellow connecting).
   let everConnected = false
@@ -432,6 +755,10 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
   // requestIDs that are ask_user questions (kind=="question"), so we resolve them
   // as opencode question.* events instead of permission.* on granted/denied.
   const questionReqs = new Set<string>()
+  // Per question requestID : how to re-encode the user's answer for the daemon —
+  // "form" rebuilds a JSON object (one field per asked sub-question), "multi"
+  // comma-joins (the daemon splits on comma), "plain"/"content" pass the text.
+  const questionShapes = new Map<string, { mode: "plain" | "content" | "multi" | "form"; fields?: { name: string; type: string }[] }>()
   // Per-session todo list (insertion-ordered). Our daemon emits single-todo
   // deltas (todo_added/updated); opencode's todo.updated wants the FULL list, so
   // we accumulate here and re-emit the whole set on every change.
@@ -446,7 +773,7 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
   // of parts (reasoning → text → tool → text …). Parts render in lexicographic
   // part.id order (sync.tsx Binary.search), so every id carries a zero-padded
   // ordinal that follows arrival. Text/reasoning text accumulates per part id.
-  type ToolRec = { partID: string; name: string; input: Record<string, unknown>; start: number; sessionId?: string }
+  type ToolRec = { partID: string; name: string; input: Record<string, unknown>; start: number; sessionId?: string; done?: boolean }
   type Turn = {
     msgID: string
     created: number
@@ -493,6 +820,84 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
     return { session: sid, tokens: c.used, window: c.window, percent }
   }
   const broadcastCtx = (sid: string) => emit(wrap({ type: "digitorn.context", properties: ctxProps(sid) }))
+  // The ACTIVE digitorn app, pushed to the home active-app indicator whenever it
+  // changes (the picker POSTs /digitorn/app). Same push pattern as conn/context.
+  const broadcastApp = async () => {
+    try {
+      const cur = (await loadApps()).find((a) => a.id === currentApp)
+      emit(wrap({ type: "digitorn.app", properties: { id: currentApp, name: cur?.name ?? currentApp, icon: cur?.icon ?? "", color: cur?.color ?? "" } }))
+    } catch {}
+  }
+  // Drives opencode's prompt status row : type:"busy" while a turn runs → the
+  // spinner + "esc interrupt" show; type:"idle" hides them. We never emitted this
+  // (only session.idle, a different event), so the spinner stayed hidden.
+  // Sessions currently in a daemon-side retry backoff (turn_retry). Tracked so the
+  // first content event after a successful retry flips the prompt row back from
+  // "retrying…" to busy ; cleared whenever the session goes idle.
+  const retrying = new Set<string>()
+  // Client-side prompt queue (opencode parity — but WE sequence it, the daemon only
+  // ever sees ONE prompt at a time). `busy` mirrors the turn state we drive; a
+  // prompt typed while busy is held in `promptQueue` + rendered as a synthetic
+  // QUEUED message, and flushed the instant the session goes idle.
+  const busy = new Set<string>()
+  const promptQueue = new Map<string, { content: string; mode: string; skill: string; msgID: string }[]>()
+  const emitStatus = (sid: string, type: "busy" | "idle") => {
+    if (type === "idle") retrying.delete(sid)
+    emit(wrap({ type: "session.status", properties: { sessionID: sid, status: { type } } }))
+    if (type === "busy") busy.add(sid)
+    else if (busy.delete(sid)) flushQueue(sid) // real busy→idle transition → start the next queued prompt
+  }
+  // Send the next queued prompt (if any) to the daemon as a fresh turn. The
+  // synthetic QUEUED message is removed first so the daemon's real user_message
+  // takes its correct chronological place. emitStatus("busy") runs SYNCHRONOUSLY
+  // (busy.add) so a redundant idle event can never double-send the next item.
+  const flushQueue = (sid: string) => {
+    const q = promptQueue.get(sid)
+    if (!q || q.length === 0) return
+    const next = q.shift()!
+    emit(wrap({ type: "message.removed", properties: { sessionID: sid, messageID: next.msgID } }))
+    emitStatus(sid, "busy")
+    void daemonFetch(cfg, `/api/apps/${encodeURIComponent(currentApp)}/sessions/${encodeURIComponent(sid)}/messages`, {
+      method: "POST",
+      body: JSON.stringify({ content: next.content, role: "user", mode: next.mode, ...(next.skill ? { skill: next.skill } : {}) }),
+    }).catch((e: any) => translate({ type: "error", session_id: sid, payload: { error: String(e?.message ?? e), source: "send" } }))
+  }
+  // Settle a turn that was killed without the usual tool_result/turn_ended : an
+  // abort (session_interrupted) OR a turn left dead by a daemon restart (detected
+  // after reconnect). Every still-running tool/task part → "Interrupted" (stops
+  // the spinners, incl. the sub-agent Tasks), the message → MessageAbortedError,
+  // the session → idle. Idempotent : a turn already gone just emits idle.
+  const interruptTurn = (sid: string) => {
+    const cur = turns.get(sid)
+    if (cur) {
+      finalizeReasoning(sid, cur)
+      const now = Date.now()
+      const running = new Map<string, { callID: string; name: string; input: Record<string, unknown>; sessionId?: string }>()
+      for (const [callID, rec] of cur.tools)
+        if (!rec.done) running.set(rec.partID, { callID, name: rec.name, input: rec.input, sessionId: rec.sessionId })
+      for (const kids of parallelChildren.values())
+        for (const kid of kids)
+          if (!running.has(kid.partID)) running.set(kid.partID, { callID: kid.callID, name: kid.name, input: kid.input })
+      for (const [partID, r] of running)
+        partUpdated(sid, {
+          id: partID,
+          sessionID: sid,
+          messageID: cur.msgID,
+          type: "tool",
+          callID: r.callID,
+          tool: r.name,
+          state: { status: "error", input: r.input, error: "Interrupted", ...(r.sessionId ? { metadata: { sessionId: r.sessionId } } : {}), time: { start: now, end: now } },
+        })
+      cur.error = { name: "MessageAbortedError", data: { message: "Interrupted" } }
+      emit(wrap({ type: "message.updated", properties: { sessionID: sid, info: asstInfo(sid, cur.msgID, cur.created, now, cur.error) } }))
+    }
+    turns.delete(sid)
+    parallelChildren.clear()
+    workBySession.delete(sid)
+    broadcastWork(sid)
+    emitStatus(sid, "idle")
+    emit(wrap({ type: "session.idle", properties: { sessionID: sid } }))
+  }
   const todosFor = (sid: string) => {
     const m = todoLists.get(sid)
     return m ? [...m.values()].map((t) => ({ content: t.text, status: t.status || "pending", priority: "medium" })) : []
@@ -519,12 +924,18 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
     tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
     ...(error ? { error } : {}),
   })
+  // Last assistant message per session, kept even AFTER the turn is deleted — so a
+  // trailing `error` event (the daemon sends turn_ended BEFORE the error) can attach
+  // to the turn that actually failed instead of spawning a detached, empty error
+  // bubble below it.
+  const lastAsst = new Map<string, { msgID: string; created: number }>()
   const ensureTurn = (sid: string, seq: number): Turn => {
     let cur = turns.get(sid)
     if (!cur) {
       const created = Date.now()
       cur = { msgID: `${sid}:m:${padNum(seq)}`, created, buf: new Map(), tools: new Map() }
       turns.set(sid, cur)
+      lastAsst.set(sid, { msgID: cur.msgID, created })
       emit(wrap({ type: "message.updated", properties: { sessionID: sid, info: asstInfo(sid, cur.msgID, created) } }))
     }
     return cur
@@ -561,6 +972,35 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
     partUpdated(sid, { id, sessionID: sid, messageID: cur.msgID, type: "reasoning", text: cur.buf.get(id) ?? "", time: { start, end: Date.now() } })
   }
 
+  // Workspace changes → opencode's SnapshotFileDiff[] / VcsFileDiff[] (identical
+  // fields). The daemon's shadow git tracks every pending edit vs the session
+  // baseline; GET /workspace/changes?include_diffs=1 returns the unified patch +
+  // line stats per file. opencode's native <diff> element parses `patch` itself,
+  // so we hand it straight through. ONE session-scoped source feeds both the
+  // sidebar files panel (session.diff event) and the /diff viewer (vcs.diff /
+  // session.diff REST). Approved files come back with empty pending diff/stats →
+  // filtered out so only the live change set shows.
+  const fetchSessionDiff = async (sid: string): Promise<Record<string, unknown>[]> => {
+    if (!sid) return []
+    const r = await daemonFetch<{ files?: Record<string, any>[] }>(
+      cfg,
+      `/api/apps/${encodeURIComponent(currentApp)}/sessions/${encodeURIComponent(sid)}/workspace/changes?include_diffs=1`,
+    )
+    return (r.files ?? [])
+      .map((f) => ({
+        file: String(f.path ?? ""),
+        patch: String(f.unified_diff_pending ?? ""),
+        additions: Number(f.insertions_pending ?? 0),
+        deletions: Number(f.deletions_pending ?? 0),
+        status: f.status === "added" || f.status === "deleted" ? f.status : "modified",
+      }))
+      .filter((f) => f.file && (f.patch || f.additions || f.deletions))
+  }
+  const emitSessionDiff = (sid: string) =>
+    void fetchSessionDiff(sid)
+      .then((diff) => emit(wrap({ type: "session.diff", properties: { sessionID: sid, diff } })))
+      .catch(() => {})
+
   const translate = (env: DaemonEnvelope) => {
     const sid = env.session_id ?? ""
     if (!sid) return
@@ -568,6 +1008,39 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
     const seq = typeof env.seq === "number" ? env.seq : Date.now()
     const t = Date.now()
     switch (env.type) {
+      case "turn_started": {
+        emitStatus(sid, "busy") // turn running → opencode shows the spinner + "esc interrupt"
+        workBySession.set(sid, { tokens: 0, base: 0, rounds: 0, exact: false, chars: 0, compacting: false })
+        broadcastWork(sid)
+        // Materialize the assistant message NOW so the working indicator (the footer
+        // diamond) shows from the turn's start — even if the turn errors before
+        // producing any content. Subsequent assistant events reuse this same turn.
+        ensureTurn(sid, seq)
+        break
+      }
+      case "turn_retry": {
+        // Daemon is auto-retrying a transient provider/network fault. Drive
+        // opencode's native retry status (prompt row : "<error> [retrying in Ns
+        // attempt #N]"). next = now + backoff for the live countdown. This event is
+        // DURABLE, so a client reconnecting mid-retry replays it and shows it too.
+        const rp: any = p ?? {}
+        retrying.add(sid)
+        emit(
+          wrap({
+            type: "session.status",
+            properties: {
+              sessionID: sid,
+              status: {
+                type: "retry",
+                message: String(rp.message ?? "Retrying…"),
+                attempt: Number(rp.attempt ?? 2),
+                next: Date.now() + (Number(rp.retry_in_ms ?? 0) || 0),
+              },
+            },
+          }),
+        )
+        break
+      }
       case "user_message": {
         const id = `${sid}:m:${padNum(seq)}`
         emit(
@@ -583,14 +1056,24 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
         break
       }
       case "assistant_delta": {
+        if (retrying.delete(sid)) emitStatus(sid, "busy") // generation resumed after a retry
         const cur = ensureTurn(sid, seq)
         finalizeReasoning(sid, cur) // thinking → answer : close the thinking block
         cur.streamed = true
         if (!cur.textPartID) cur.textPartID = nextPartID(cur, seq)
         const id = cur.textPartID
-        const text = (cur.buf.get(id) ?? "") + partsText(p)
+        const chunk = partsText(p)
+        const text = (cur.buf.get(id) ?? "") + chunk
         cur.buf.set(id, text)
         partUpdated(sid, { id, sessionID: sid, messageID: cur.msgID, type: "text", text })
+        // Live token counter for the working line. live_output_tokens is per-MESSAGE
+        // (resets each round) → add it to the rounds already banked so a multi-round
+        // turn never drops. chars is the fallback (chars/4) before the first count.
+        const w = workFor(sid)
+        w.chars += [...chunk].length
+        const live = Number(env.live_output_tokens ?? (p as any).live_output_tokens ?? 0) || 0
+        if (live > 0) w.tokens = w.base + live
+        broadcastWork(sid)
         break
       }
       case "assistant_reasoning_delta": {
@@ -610,12 +1093,25 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
         break
       }
       case "tool_call": {
+        if (retrying.delete(sid)) emitStatus(sid, "busy") // generation resumed after a retry
         const callID = String(p.call_id ?? "")
         if (!callID || isHiddenTool(p.name)) break // bookkeeping tools never show
         const cur = ensureTurn(sid, seq)
         finalizeReasoning(sid, cur) // thinking → tool : close the thinking block
         cur.textPartID = undefined // any post-tool text opens a NEW part, after the tool
         const hasArgs = p.arguments && typeof p.arguments === "object"
+        // Count the tokens the model spends EMITTING the tool call + its arguments,
+        // not just final-answer text. live_output_tokens is per-message cumulative,
+        // so add it onto the rounds already banked (Go CLI does this in its tool_call
+        // streaming handler) — the working counter never stalls during tool rounds.
+        {
+          const live = Number(env.live_output_tokens ?? (p as any).live_output_tokens ?? 0) || 0
+          if (live > 0) {
+            const w = workFor(sid)
+            w.tokens = w.base + live
+            broadcastWork(sid)
+          }
+        }
 
         // run_parallel → expand into individual native child ToolParts (no
         // wrapper/header), so the parallel tools render exactly like normal ones.
@@ -707,6 +1203,17 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
             if (kid.name === "task") {
               const rec = cur.tools.get(kid.callID)
               const sessionId = rec?.sessionId
+              if (rec) rec.done = true // settled → a later interrupt won't re-settle it
+              // A sub-agent emits NO turn_ended/session_idle for its own session, so
+              // its assistant message never got time.completed → opencode's Task
+              // duration (child assistant.completed − child user.created) was 0ms.
+              // run_parallel resolving IS the "this sub-agent finished" signal, so
+              // stamp the child assistant's completed here → the real duration shows.
+              if (sessionId) {
+                const ct = turns.get(sessionId)
+                if (ct)
+                  emit(wrap({ type: "message.updated", properties: { sessionID: sessionId, info: asstInfo(sessionId, ct.msgID, ct.created, t) } }))
+              }
               partUpdated(sid, {
                 id: kid.partID,
                 sessionID: sid,
@@ -748,22 +1255,38 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
           ? { status: "completed", input: rec.input, output, title: primaryParam(rec.input) || rec.name, metadata: { duration_ms: dur, ...(rec.sessionId ? { sessionId: rec.sessionId } : {}), ...toolMetadata(rec.name, output, rec.input) }, time: { start: rec.start, end: rec.start + dur } }
           : { status: "error", input: rec.input, error: output || "tool failed", time: { start: rec.start, end: rec.start + dur } }
         partUpdated(sid, { id: rec.partID, sessionID: sid, messageID: cur.msgID, type: "tool", callID, tool: rec.name, state })
+        rec.done = true // settled → a later interrupt won't re-settle it
+        // A direct sub-agent (wait:false) emits NO completion event — its task part
+        // settled at the spawn ACK, so its Task duration would stay 0ms until the
+        // root turn ends. Bump the CHILD assistant's completed to each tool's time
+        // so opencode's Task duration (completed − child user.created) grows LIVE
+        // and ends at the sub-agent's last activity, not the whole turn's end.
+        if (sid.includes("::agent::"))
+          emit(wrap({ type: "message.updated", properties: { sessionID: sid, info: asstInfo(sid, cur.msgID, cur.created, t) } }))
         break
       }
       case "assistant_message": {
+        if (retrying.delete(sid)) emitStatus(sid, "busy") // generation resumed after a retry
         const cur = ensureTurn(sid, seq)
         finalizeReasoning(sid, cur)
         // assistant_delta already streamed this step's text into its part —
         // re-emitting here would DUPLICATE it (a fresh part after a tool_call
         // cleared textPartID). Only materialize when nothing streamed (a
-        // non-streaming provider that sends the message whole).
-        const text = partsText(p)
+        // non-streaming provider that sends the message whole). Strip the LLM-only
+        // interruption marker so the user never sees it (the daemon keeps it).
+        const text = stripInterruptMarker(partsText(p))
         if (text && !cur.streamed) {
           const id = cur.textPartID ?? nextPartID(cur, seq)
           cur.textPartID = id
           cur.buf.set(id, text)
           partUpdated(sid, { id, sessionID: sid, messageID: cur.msgID, type: "text", text })
         }
+        // Bank this round's output tokens so the next round's per-message
+        // live_output_tokens adds ON TOP (keeps the turn counter monotonic across
+        // tool-call rounds), exactly like the Go CLI's turnTokensBase/turnRounds.
+        const w = workFor(sid)
+        w.rounds += 1
+        w.base = w.tokens
         // The turn stays alive : late tool_result / post-tool text still arrive.
         break
       }
@@ -773,29 +1296,43 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
         pendingApprovals.set(id, sid)
         const cur = turns.get(sid)
         if (p.kind === "question") {
-          // ask_user → opencode question.asked. The question text rides in
-          // `reason` ; choices/multi/extra live in `payload`.
+          // ask_user → opencode question.asked. Question text in `reason` ; the
+          // interaction shape (choices/form/content/custom) lives in `payload`.
           questionReqs.add(id)
           const pl: any = p.payload ?? {}
-          const choices: string[] = Array.isArray(pl.choices) ? pl.choices.map(String) : []
-          const q = String(p.reason ?? pl.content ?? "Question")
+          const q = String(p.reason ?? "Question")
+          let questions: any[]
+          let shape: { mode: "plain" | "content" | "multi" | "form"; fields?: { name: string; type: string }[] }
+          if (Array.isArray(pl.form) && pl.form.length) {
+            // One opencode question (tab) per form field ; the reply rebuilds the JSON.
+            questions = pl.form.map((f: any) => formFieldToQuestion(f))
+            shape = { mode: "form", fields: pl.form.map((f: any) => ({ name: String(f?.name ?? ""), type: String(f?.type ?? "").toLowerCase() })) }
+          } else if (typeof pl.content === "string" && pl.content) {
+            // Editable review : seed the free-text box with the content to edit in place.
+            questions = [{ question: q, header: q.slice(0, 30), options: [], multiple: false, custom: true, value: pl.content }]
+            shape = { mode: "content" }
+          } else {
+            const choices: string[] = Array.isArray(pl.choices) ? pl.choices.map(String) : []
+            const multiple = Boolean(pl.allow_multiple)
+            questions = [
+              {
+                question: q,
+                header: q.slice(0, 30),
+                options: choices.map((c) => ({ label: c, description: "" })),
+                multiple,
+                // The custom-answer field is ALWAYS offered on proposals unless the
+                // agent set allow_custom:false — the user can answer the unforeseen.
+                custom: choices.length === 0 ? true : pl.allow_custom !== false,
+                ...(typeof pl.default === "string" && pl.default ? { value: pl.default } : {}),
+              },
+            ]
+            shape = { mode: multiple ? "multi" : "plain" }
+          }
+          questionShapes.set(id, shape)
           emit(
             wrap({
               type: "question.asked",
-              properties: {
-                id,
-                sessionID: sid,
-                questions: [
-                  {
-                    question: q,
-                    header: q.slice(0, 30),
-                    options: choices.map((c) => ({ label: c, description: "" })),
-                    multiple: Boolean(pl.allow_multiple),
-                    custom: choices.length === 0, // no choices → free-text answer
-                  },
-                ],
-                tool: { messageID: cur?.msgID ?? "", callID: String(p.call_id ?? "") },
-              },
+              properties: { id, sessionID: sid, questions, tool: { messageID: cur?.msgID ?? "", callID: String(p.call_id ?? "") } },
             }),
           )
           break
@@ -821,6 +1358,7 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
       case "approval_denied": {
         const id = String(p.id ?? "")
         pendingApprovals.delete(id)
+        questionShapes.delete(id)
         if (questionReqs.delete(id)) {
           const type = env.type === "approval_granted" ? "question.replied" : "question.rejected"
           emit(wrap({ type, properties: { sessionID: sid, requestID: id, answers: [] } }))
@@ -852,6 +1390,14 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
         emitTodos(sid)
         break
       }
+      case "workspace_changes": {
+        // Transient live signal : the agent's pending edits changed (debounced
+        // shadow-git status). Refetch the full diff (patch + stats) and push
+        // opencode's session.diff so the sidebar files panel + any open /diff
+        // viewer update without a manual reload. No durable seq is consumed.
+        emitSessionDiff(sid)
+        break
+      }
       case "agent_spawn": {
         // Bind the spawned child session to its delegation task part, so
         // opencode's Task renderer shows the sub-agent's nested activity.
@@ -871,6 +1417,34 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
         if (!found) break
         found.rec.sessionId = childSid
         emitTask(found.sid, found.turn.msgID, parentCall, found.rec) // emits if description is set
+        // Register the sub-agent's session as a CHILD of the parent (parentID set)
+        // so opencode's NATIVE sub-session UI lights up : "ctrl+x ↓ view subagents"
+        // drills into its full transcript and child cycling (←/→) works. The picker
+        // filters parentID!==undefined, so children never pollute the session list.
+        // Its messages already stream in via the ancestor fan-out → the drilled-in
+        // view renders the sub-agent's real activity.
+        if (!registeredChildren.has(childSid)) {
+          registeredChildren.add(childSid)
+          const inp = (found.rec.input ?? {}) as any
+          const title = String(inp.description || inp.subagent_type || "Subagent")
+          emit(
+            wrap({
+              type: "session.updated",
+              properties: {
+                info: {
+                  id: childSid,
+                  slug: childSid,
+                  projectID: "digitorn",
+                  directory: dir,
+                  parentID: found.sid,
+                  title,
+                  version: "0.0.0",
+                  time: { created: Date.now(), updated: Date.now() },
+                },
+              },
+            }),
+          )
+        }
         break
       }
       // Turn failure → opencode's in-chat error banner. Our daemon emits a
@@ -879,10 +1453,33 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
       // info.error, which opencode renders as a red-bordered box. ensureTurn so
       // a failure with no streamed content still has a message to carry it.
       case "error": {
-        const cur = ensureTurn(sid, seq)
-        finalizeReasoning(sid, cur)
-        cur.error = errorInfo(p)
-        emit(wrap({ type: "message.updated", properties: { sessionID: sid, info: asstInfo(sid, cur.msgID, cur.created, t, cur.error) } }))
+        const info = errorInfo(p)
+        const cur = turns.get(sid)
+        if (cur) {
+          // Turn still in-flight → hang the error on its assistant message.
+          finalizeReasoning(sid, cur)
+          cur.error = info
+          emit(wrap({ type: "message.updated", properties: { sessionID: sid, info: asstInfo(sid, cur.msgID, cur.created, t, info) } }))
+        } else {
+          // turn_ended already fired (daemon emits it BEFORE the error) → attach to
+          // the turn that just failed (its assistant message), so the error renders
+          // INSIDE that turn in the chat flow rather than as a detached empty bubble
+          // pinned at the bottom. Only if there was never any assistant, mint one.
+          const last = lastAsst.get(sid)
+          if (last) {
+            emit(wrap({ type: "message.updated", properties: { sessionID: sid, info: asstInfo(sid, last.msgID, last.created, t, info) } }))
+          } else {
+            const c = ensureTurn(sid, seq)
+            c.error = info
+            emit(wrap({ type: "message.updated", properties: { sessionID: sid, info: asstInfo(sid, c.msgID, c.created, t, info) } }))
+          }
+        }
+        // An error ALWAYS ends the work : stop the spinner (the daemon's turn_ended
+        // may precede the error, but a send-failure / mid-stream error might not get
+        // one — never leave it spinning).
+        workBySession.delete(sid)
+        broadcastWork(sid)
+        emitStatus(sid, "idle")
         break
       }
       // Context gauge feed (CTX-7). context_tokens carries the EXACT window
@@ -897,8 +1494,60 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
         broadcastCtx(sid)
         break
       }
+      case "token_usage":
+      case "cost_update": {
+        // The provider's EXACT output usage landed. tokens_out is only the LAST
+        // round's completion, so snap to it (dropping the "~") only for a single-
+        // round turn; for a multi-round turn keep the cumulative live estimate
+        // (still ~). Never let the shown count drop. (Go CLI: token_usage handler.)
+        const out = Number((p as any).tokens_out ?? 0) || 0
+        if (out > 0) {
+          const w = workFor(sid)
+          if (w.rounds <= 1) {
+            w.tokens = out
+            w.exact = true
+          } else if (out > w.tokens) {
+            w.tokens = out
+          }
+          broadcastWork(sid)
+        }
+        break
+      }
+      case "context_compacting": {
+        workFor(sid).compacting = true // working line shows "◆ ⟢ compacting context…"
+        broadcastWork(sid)
+        break
+      }
+      case "context_compacted": {
+        workFor(sid).compacting = false
+        broadcastWork(sid)
+        break
+      }
+      // Escape / abort → the daemon stopped the turn AND its whole sub-agent tree
+      // (abortSession: sessionRunner.Abort + agents.CancelAll + background cancel)
+      // and emits this. The daemon sends NO tool_result/turn_ended for the killed
+      // work, so we settle it ourselves : every still-running tool/task part →
+      // "Interrupted" (stops the spinners, incl. the sub-agent Tasks), the message
+      // → MessageAbortedError, the session → idle. Without this the daemon stops
+      // but the UI keeps spinning — exactly the "abort doesn't stop everything" bug.
+      case "session_interrupted": {
+        interruptTurn(sid)
+        break
+      }
       case "turn_ended":
       case "session_idle": {
+        // When the ROOT turn ends, every sub-agent is finished — but the daemon
+        // never emits a child turn_ended/session_idle, so each child's assistant
+        // message still lacks time.completed and opencode's Task duration reads
+        // 0ms. Finalize every open child turn here (stamp completed) so the real
+        // duration resolves, for BOTH run_parallel and direct spawns.
+        if (!sid.includes("::agent::")) {
+          for (const [csid, ct] of turns) {
+            if (csid === sid || !csid.includes("::agent::")) continue
+            emit(wrap({ type: "message.updated", properties: { sessionID: csid, info: asstInfo(csid, ct.msgID, ct.created, t) } }))
+            turns.delete(csid)
+          }
+        }
         const cur = turns.get(sid)
         if (cur) {
           finalizeReasoning(sid, cur)
@@ -913,6 +1562,9 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
           emit(wrap({ type: "message.updated", properties: { sessionID: sid, info: asstInfo(sid, cur.msgID, cur.created, t, cur.error) } }))
         }
         turns.delete(sid)
+        workBySession.delete(sid) // turn over → clear the working-line counters
+        broadcastWork(sid)
+        emitStatus(sid, "idle") // hide the prompt spinner / "esc interrupt"
         emit(wrap({ type: "session.idle", properties: { sessionID: sid } }))
         break
       }
@@ -926,10 +1578,49 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
     broadcastConn()
     socket = io(cfg.url + "/events", { transports: ["websocket"], auth: { token: cfg.token, user_id: cfg.userID } })
     socket.on("connect", () => {
+      const reconnect = everConnected
       everConnected = true
       connState = "connected"
       broadcastConn()
-      dlog(`socket CONNECTED id=${socket?.id}`)
+      dlog(`socket CONNECTED id=${socket?.id} reconnect=${reconnect}`)
+      // RECONNECT recovery : the daemon dropped our room memberships when the
+      // socket died, and any events emitted while we were gone never arrived — so
+      // an in-flight turn (and its sub-agents) would spin forever. Re-join the
+      // active session and REPLAY everything since the last seq we saw, so the
+      // missed tool_results / run_parallel result / turn_ended land and the stuck
+      // Tasks settle. (since=lastSeq → only the gap, no duplicates.) Mirrors the
+      // old CLI's connectDaemonEvents join+replay.
+      if (reconnect && lastJoined) {
+        joined.clear()
+        joined.add(lastJoined)
+        replaying = true // events until replay_done are HISTORICAL, not live progress
+        socket!.emit("join_session", { session_id: lastJoined })
+        socket!.emit("replay", { session_id: lastJoined, since: lastSeqOf.get(lastJoined) ?? 0 })
+        dlog(`socket REJOIN+REPLAY ${lastJoined.slice(0, 8)} since=${lastSeqOf.get(lastJoined) ?? 0}`)
+        // DEAD-TURN watchdog : if the daemon RESTARTED mid-turn, the turn died with
+        // no turn_ended to replay → it would hang forever. A transient drop instead
+        // keeps the daemon alive and the turn keeps streaming LIVE events after the
+        // replay catches up. So : after a grace window, if a turn is still open AND
+        // no LIVE event arrived since reconnect (only historical replayed ones), the
+        // turn is dead → settle it. Keying on lastLiveEventAt (not lastEventAt) is
+        // what makes replayed events stop masking a dead turn.
+        const sid = lastJoined
+        const reconnectAt = Date.now()
+        setTimeout(() => {
+          if (turns.has(sid) && lastLiveEventAt < reconnectAt) {
+            dlog(`dead-turn watchdog : ${sid.slice(0, 8)} no LIVE event since reconnect → interrupt`)
+            interruptTurn(sid)
+          }
+        }, 10000)
+      }
+    })
+    // The daemon ends a replay with `replay_done` ; from here on, events are LIVE
+    // again. If the turn was dead (daemon crash mid-turn), nothing live follows and
+    // the watchdog above settles it ; if the daemon is healthy, live events resume
+    // and keep the turn alive.
+    socket.on("replay_done", () => {
+      replaying = false
+      dlog(`socket REPLAY_DONE → live again`)
     })
     socket.on("connect_error", (e: any) => {
       // Before the first successful connect these are just startup retries
@@ -945,6 +1636,13 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
     })
     socket.on("event", (env: DaemonEnvelope) => {
       if (DBG) dlog(`recv envelope type=${env.type} sid=${String(env.session_id).slice(0, 8)} seq=${env.seq}`)
+      lastEventAt = Date.now()
+      if (!replaying) lastLiveEventAt = Date.now() // only genuine live progress, not replay backfill
+      // Track the highest seq per session so a reconnect replay resumes from the
+      // exact gap (no re-processing of events we already applied).
+      if (typeof env.seq === "number" && env.session_id) {
+        if (env.seq > (lastSeqOf.get(env.session_id) ?? 0)) lastSeqOf.set(env.session_id, env.seq)
+      }
       try {
         translate(env)
       } catch (e: any) {
@@ -954,10 +1652,25 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
   }
   const joinSession = (sid: string) => {
     ensureSocket()
+    lastJoined = sid // active session → re-joined on reconnect
     if (joined.has(sid)) return
     joined.add(sid)
     dlog(`joinSession ${sid.slice(0, 8)} (connected=${socket?.connected})`)
     socket!.emit("join_session", { session_id: sid })
+  }
+
+  // /connect (DialogDigitornConnect) calls applyDigitornCredentials after a
+  // successful sign-in. We mutate the live cfg (every daemonFetch reads cfg.token
+  // at call time, so REST picks it up immediately) and, if the socket is already
+  // up, reconnect it with the fresh bearer so the /events stream is authed too.
+  reloginHook = (token: string, userID: string) => {
+    cfg.token = token || cfg.token
+    if (userID) cfg.userID = userID
+    if (socket) {
+      socket.auth = { token: cfg.token, user_id: cfg.userID }
+      socket.disconnect()
+      socket.connect()
+    }
   }
 
   return (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -965,6 +1678,14 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
     const path = new URL(req.url).pathname
     const method = req.method.toUpperCase()
     if (DBG && path !== "/event") dlog(`fetch ${method} ${path}`)
+
+    // @ file completions : opencode's composer fuzzy-finds workdir files via
+    // GET /find/file?query=&limit= and expects a string[] of relative paths.
+    if (path === "/find/file" && method === "GET") {
+      const u = new URL(req.url)
+      const limit = Math.max(1, Math.min(200, Number(u.searchParams.get("limit")) || 50))
+      return jsonRes(findFiles(dir, u.searchParams.get("query") ?? "", limit))
+    }
 
     // The live event stream : a real SSE body. ÉTAPE 0 emits server.connected and
     // stays open (keep-alive). ÉTAPE 2 wires Socket.IO → GlobalEvent into `send`.
@@ -988,6 +1709,7 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
           // state — pushed, not polled.
           send(wrap({ type: "digitorn.connection", properties: connProps() }))
           for (const sid of ctxBySession.keys()) send(wrap({ type: "digitorn.context", properties: ctxProps(sid) }))
+          for (const sid of workBySession.keys()) send(wrap({ type: "digitorn.work", properties: workProps(sid) }))
           const ping = setInterval(() => {
             try {
               controller.enqueue(enc.encode(`: keepalive\n\n`))
@@ -1026,6 +1748,246 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
       const sid = new URL(req.url).searchParams.get("session") ?? ""
       return jsonRes(ctxProps(sid))
     }
+    // Gateway model catalog for the /models dialog, grouped DYNAMICALLY by the
+    // gateway's `categories` (owned_by is becoming uniformly "digitorn", so we
+    // don't group on it). A model with no category defaults to "free". Read-only:
+    // it does NOT touch opencode's provider/model store (which destabilised it).
+    if (path === "/digitorn/models" && method === "GET") {
+      const { groups, error } = await loadGatewayCatalog()
+      // `current` only highlights the active model — never let it block the list.
+      const current = error
+        ? ""
+        : (await Promise.race([
+            loadModel(currentApp).catch(() => ""),
+            new Promise<string>((r) => setTimeout(() => r(""), 1500)),
+          ])) || ""
+      return jsonRes({ groups, current, error })
+    }
+    // Per-agent model switching. GET merges the daemon's per-agent state with the
+    // gateway catalog (skipped for BYOK, which switches within the declared list).
+    if (path === "/digitorn/session-model" && method === "GET") {
+      const sid = new URL(req.url).searchParams.get("session") ?? ""
+      if (!sid) return jsonRes({ agents: [], error: "no active session" })
+      try {
+        const state = await daemonFetch<any>(
+          cfg,
+          `/api/apps/${encodeURIComponent(currentApp)}/sessions/${encodeURIComponent(sid)}/model`,
+        )
+        const byok = !!state?.byok
+        const agents = Array.isArray(state?.agents) ? state.agents : []
+        const catalog: Record<string, CatModel[]> = {}
+        let error: string | undefined
+        if (!byok) {
+          const cat = await loadGatewayCatalog()
+          error = cat.error
+          for (const g of cat.groups) catalog[g.category] = g.models
+        }
+        return jsonRes({ byok, entry: state?.entry ?? "", agents, catalog, error })
+      } catch (e: any) {
+        return jsonRes({ agents: [], error: String(e?.message ?? e) })
+      }
+    }
+    if (path === "/digitorn/session-model" && method === "PUT") {
+      const sid = new URL(req.url).searchParams.get("session") ?? ""
+      if (!sid) return jsonRes({ error: "no active session" }, 400)
+      const b = (await req.json().catch(() => ({}))) as Record<string, any>
+      // Raw fetch so the daemon's error body + status pass through to the dialog.
+      try {
+        const r = await fetch(
+          `${cfg.url}/api/apps/${encodeURIComponent(currentApp)}/sessions/${encodeURIComponent(sid)}/model`,
+          {
+            method: "PUT",
+            headers: { authorization: `Bearer ${cfg.token}`, "content-type": "application/json" },
+            body: JSON.stringify({ agent: String(b?.agent ?? ""), model: String(b?.model ?? "") }),
+          },
+        )
+        const txt = await r.text()
+        return new Response(txt || "{}", { status: r.status, headers: { "content-type": "application/json" } })
+      } catch (e: any) {
+        return jsonRes({ error: String(e?.message ?? e) }, 502)
+      }
+    }
+    // Skills CRUD for the /skill dialog, proxied to the daemon's
+    // /api/apps/{app}/skills. GET is normalized (daemon JSON casing varies);
+    // writes pass through and surface the daemon's error (name conflict /
+    // authoring disabled) so the dialog can show it.
+    if (path === "/digitorn/skills" && method === "GET") {
+      if (DBG) dlog(`/digitorn/skills GET entered app=${currentApp}`)
+      try {
+        const resp = await fetch(`${cfg.url}/api/apps/${encodeURIComponent(currentApp)}/skills`, {
+          headers: { authorization: `Bearer ${cfg.token}` },
+          signal: AbortSignal.timeout(6000),
+        })
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+        const r: any = await resp.json()
+        const appSkills = (r?.app_skills ?? []).map((s: any) => ({
+          command: String(s?.command ?? s?.Command ?? ""),
+          description: String(s?.description ?? s?.Description ?? ""),
+        }))
+        const userSkills = (r?.user_skills ?? []).map((s: any) => ({
+          id: String(s?.id ?? s?.ID ?? ""),
+          name: String(s?.name ?? s?.Name ?? ""),
+          description: String(s?.description ?? s?.Description ?? ""),
+          instructions: String(s?.instructions ?? s?.Instructions ?? ""),
+        }))
+        if (DBG) dlog(`/digitorn/skills -> app=${appSkills.length} user=${userSkills.length} allow=${!!(r?.allow_user_skills ?? r?.allowUserSkills)}`)
+        return jsonRes({ appSkills, userSkills, allow: !!(r?.allow_user_skills ?? r?.allowUserSkills) })
+      } catch (e: any) {
+        dlog(`/digitorn/skills FAILED ${String(e?.message ?? e)}`)
+        return jsonRes({ appSkills: [], userSkills: [], allow: false, error: String(e?.message ?? e) })
+      }
+    }
+    if (path === "/digitorn/skills" && method === "POST") {
+      const b = (await req.json().catch(() => ({}))) as Record<string, any>
+      try {
+        const r = await daemonFetch(cfg, `/api/apps/${encodeURIComponent(currentApp)}/skills`, {
+          method: "POST",
+          body: JSON.stringify({ name: b?.name, description: b?.description, instructions: b?.instructions }),
+        })
+        return jsonRes(r as any)
+      } catch (e: any) {
+        return jsonRes({ error: String(e?.message ?? e) }, 400)
+      }
+    }
+    const skillOne = path.match(/^\/digitorn\/skills\/([^/]+)$/)
+    if (skillOne && method === "PATCH") {
+      const id = decodeURIComponent(skillOne[1])
+      const b = (await req.json().catch(() => ({}))) as Record<string, any>
+      try {
+        const r = await daemonFetch(cfg, `/api/apps/${encodeURIComponent(currentApp)}/skills/${encodeURIComponent(id)}`, {
+          method: "PATCH",
+          body: JSON.stringify(b),
+        })
+        return jsonRes(r as any)
+      } catch (e: any) {
+        return jsonRes({ error: String(e?.message ?? e) }, 400)
+      }
+    }
+    if (skillOne && method === "DELETE") {
+      const id = decodeURIComponent(skillOne[1])
+      try {
+        await daemonFetch(cfg, `/api/apps/${encodeURIComponent(currentApp)}/skills/${encodeURIComponent(id)}`, {
+          method: "DELETE",
+        })
+        return jsonRes({ deleted: true })
+      } catch (e: any) {
+        return jsonRes({ error: String(e?.message ?? e) }, 400)
+      }
+    }
+    // Workspace file review : approve (commit to the shadow-git baseline) or
+    // reject (revert) the agent's pending changes — file-level, or all at once.
+    // After each, the daemon pokes FileChanged → workspace_changes event → our
+    // translate re-emits session.diff, so the files panel + /diff self-refresh.
+    const wsAction = path.match(/^\/digitorn\/workspace\/(approve-all|reject-all|approve|reject)$/)
+    if (wsAction && method === "POST") {
+      const b = (await req.json().catch(() => ({}))) as Record<string, any>
+      const sid = String(b?.session ?? "")
+      if (!sid) return jsonRes({ error: "no session" }, 400)
+      const base = `/api/apps/${encodeURIComponent(currentApp)}/sessions/${encodeURIComponent(sid)}/workspace`
+      try {
+        if (wsAction[1] === "approve-all") {
+          return jsonRes((await daemonFetch(cfg, `${base}/files/approve-all`, { method: "POST", body: "{}" })) as any)
+        }
+        if (wsAction[1] === "reject-all") {
+          // No daemon reject-all : revert every pending path in one reject call.
+          const ch = await daemonFetch<{ files?: Record<string, any>[] }>(cfg, `${base}/changes`)
+          const paths = (ch.files ?? []).map((f) => String(f.path ?? "")).filter(Boolean)
+          if (paths.length === 0) return jsonRes({ rejected: 0 })
+          return jsonRes((await daemonFetch(cfg, `${base}/files/reject`, { method: "POST", body: JSON.stringify({ paths }) })) as any)
+        }
+        const endpoint = wsAction[1] === "approve" ? "files/approve" : "files/reject"
+        return jsonRes(
+          (await daemonFetch(cfg, `${base}/${endpoint}`, {
+            method: "POST",
+            body: JSON.stringify({ paths: [String(b?.path ?? "")] }),
+          })) as any,
+        )
+      } catch (e: any) {
+        return jsonRes({ error: String(e?.message ?? e) }, 400)
+      }
+    }
+    // Per-hunk review : parse a file's unified diff into hunks (web-identical
+    // hashes) so the dialog can list them; the daemon's /workspace/diff is the
+    // SAME source the hunk hashes are computed from, so they match on approve.
+    if (path === "/digitorn/workspace/hunks" && method === "GET") {
+      const u = new URL(req.url)
+      const sid = u.searchParams.get("session") ?? ""
+      const fp = u.searchParams.get("path") ?? ""
+      if (!sid || !fp) return jsonRes({ hunks: [] })
+      try {
+        const r = await daemonFetch<{ unified?: string }>(
+          cfg,
+          `/api/apps/${encodeURIComponent(currentApp)}/sessions/${encodeURIComponent(sid)}/workspace/diff?path=${encodeURIComponent(fp)}`,
+        )
+        return jsonRes({ hunks: parseHunks(String(r.unified ?? "")) })
+      } catch (e: any) {
+        return jsonRes({ hunks: [], error: String(e?.message ?? e) })
+      }
+    }
+    // Per-hunk approve (commit baseline + selected hunk) / reject (revert only the
+    // selected hunk). Body : {session, path, hunks:[hash]}.
+    const wsHunkAction = path.match(/^\/digitorn\/workspace\/(approve-hunks|reject-hunks)$/)
+    if (wsHunkAction && method === "POST") {
+      const b = (await req.json().catch(() => ({}))) as Record<string, any>
+      const sid = String(b?.session ?? "")
+      if (!sid) return jsonRes({ error: "no session" }, 400)
+      const endpoint = wsHunkAction[1] === "approve-hunks" ? "files/approve-hunks" : "files/reject-hunks"
+      try {
+        return jsonRes(
+          (await daemonFetch(
+            cfg,
+            `/api/apps/${encodeURIComponent(currentApp)}/sessions/${encodeURIComponent(sid)}/workspace/${endpoint}`,
+            {
+              method: "POST",
+              body: JSON.stringify({ path: String(b?.path ?? ""), hunks: Array.isArray(b?.hunks) ? b.hunks : [] }),
+            },
+          )) as any,
+        )
+      } catch (e: any) {
+        return jsonRes({ error: String(e?.message ?? e) }, 400)
+      }
+    }
+    // Aggregated status for the /status dialog: app + daemon + context + model +
+    // modules, assembled from loadApps + connState + ctxBySession + the app
+    // manifest (parsed defensively — daemon JSON casing varies).
+    if (path === "/digitorn/status" && method === "GET") {
+      const sid = new URL(req.url).searchParams.get("session") ?? ""
+      const apps = await loadApps().catch(() => [] as Awaited<ReturnType<typeof loadApps>>)
+      const cur = apps.find((a) => a.id === currentApp)
+      const c = ctxFor(sid)
+      const percent = c.window > 0 ? Math.round((c.used / c.window) * 100) : 0
+      let version = ""
+      let model = ""
+      const modules = new Set<string>()
+      try {
+        const m: any = await daemonFetch(cfg, `/api/apps/${encodeURIComponent(currentApp)}/manifest`)
+        const appMeta = m?.App ?? m?.app ?? {}
+        version = String(appMeta.Version ?? appMeta.version ?? m?.Version ?? m?.version ?? "")
+        const tools = m?.Tools ?? m?.tools ?? {}
+        for (const k of Object.keys(tools.Modules ?? tools.modules ?? m?.Modules ?? m?.modules ?? {})) modules.add(k)
+        const caps = tools.Capabilities ?? tools.capabilities ?? m?.Capabilities ?? m?.capabilities ?? {}
+        for (const g of caps.Grant ?? caps.grant ?? []) {
+          const name = g?.Module ?? g?.module
+          if (name) modules.add(String(name))
+        }
+        const agents = m?.Agents ?? m?.agents ?? []
+        const brain = agents[0]?.Brain ?? agents[0]?.brain ?? {}
+        model = String(brain.Model ?? brain.model ?? "")
+      } catch {}
+      return jsonRes({
+        app: { id: currentApp, name: cur?.name ?? currentApp, version, color: cur?.color ?? "" },
+        daemon: { state: connState, url: cfg.url },
+        context: { tokens: c.used, window: c.window, percent },
+        model,
+        modules: [...modules],
+      })
+    }
+    // One-shot SNAPSHOT of the current turn's working state (live tokens / exact /
+    // compacting). Live updates arrive via the pushed digitorn.work event.
+    if (path === "/digitorn/work" && method === "GET") {
+      const sid = new URL(req.url).searchParams.get("session") ?? ""
+      return jsonRes(workProps(sid))
+    }
 
     // ───── Digitorn apps : list + switch (digitorn is a multi-app platform) ─────
     if (path === "/digitorn/apps" && method === "GET") {
@@ -1049,6 +2011,7 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
         // quiet = just re-point (home quick-pick : the next prompt creates a
         // session in this app). Otherwise re-bootstrap to reload its session list.
         if (!body?.quiet) emit(wrap({ type: "server.instance.disposed", properties: {} }))
+        void broadcastApp() // update the home active-app indicator (push)
       }
       return jsonRes({ app: currentApp })
     }
@@ -1088,15 +2051,66 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
             .map((x: any) => x?.text ?? "")
             .join("\n")
         : String(body?.text ?? body?.content ?? "")
-      dlog(`PROMPT route ${path} sid=${sid.slice(0, 8)} textLen=${text.length}`)
+      // /use_skill <name> <message> : the picker prefilled this prefix. Strip it,
+      // pull the skill out, and send the rest as the message WITH `skill` so the
+      // daemon injects the skill as a forced directive (engine.injectSkillDirective).
+      let content = text
+      let skill = ""
+      const useSkill = text.match(/^\/use_skill\s+(\S+)\s*([\s\S]*)$/)
+      if (useSkill) {
+        skill = useSkill[1].startsWith("/") ? useSkill[1] : "/" + useSkill[1]
+        content = useSkill[2].trim()
+      }
+      dlog(`PROMPT route ${path} sid=${sid.slice(0, 8)} textLen=${content.length}${skill ? ` skill=${skill}` : ""}`)
       joinSession(sid)
+      // Client-side queue : if a turn is already running, DON'T start a 2nd one —
+      // hold this prompt and render it as a synthetic QUEUED message (a seq far
+      // above any daemon seq → it sorts at the bottom yet above the in-flight
+      // assistant, so opencode shows its QUEUED badge). flushQueue sends it for
+      // real (removing the synthetic) the instant the session next goes idle.
+      if (busy.has(sid)) {
+        const list = promptQueue.get(sid) ?? []
+        const seq = (lastSeqOf.get(sid) ?? 0) + 1_000_000 + list.length
+        const msgID = `${sid}:m:${padNum(seq)}`
+        list.push({ content, mode: String(body?.agent ?? ""), skill, msgID })
+        promptQueue.set(sid, list)
+        emit(
+          wrap({
+            type: "message.updated",
+            properties: {
+              sessionID: sid,
+              info: {
+                id: msgID,
+                sessionID: sid,
+                role: "user",
+                time: { created: Date.now() },
+                agent: "build",
+                model: { providerID: "digitorn", modelID: "build" },
+              },
+            },
+          }),
+        )
+        partUpdated(sid, { id: `${msgID}:p${padNum(0, 4)}`, sessionID: sid, messageID: msgID, type: "text", text: content })
+        return jsonRes({})
+      }
+      // Immediate feedback : mark the session busy the instant the user sends, so
+      // the working indicator shows right away instead of after the daemon's
+      // turn_started (which can lag, or never come if the call fails up front) —
+      // "I sent it and nothing happened" was exactly that gap. Cleared by
+      // turn_ended / error / session_interrupted.
+      emitStatus(sid, "busy")
       try {
         await daemonFetch(cfg, `/api/apps/${app}/sessions/${encodeURIComponent(sid)}/messages`, {
           method: "POST",
           // opencode sends the picked agent name — which IS our mode (build/plan/…).
-          body: JSON.stringify({ content: text, role: "user", mode: String(body?.agent ?? "") }),
+          body: JSON.stringify({ content, role: "user", mode: String(body?.agent ?? ""), ...(skill ? { skill } : {}) }),
         })
-      } catch {}
+      } catch (e: any) {
+        // The send itself failed (daemon down, 4xx, …) → there'll be no turn at all.
+        // Route it through the SAME error path (surfaces the banner + flips idle) so
+        // the spinner doesn't spin forever on a message that never left.
+        translate({ type: "error", session_id: sid, payload: { error: String(e?.message ?? e), source: "send" } })
+      }
       return jsonRes({})
     }
     // Escape → stop the AI mid-response. opencode's session.abort → our daemon's
@@ -1107,6 +2121,82 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
       try {
         await daemonFetch(cfg, `/api/apps/${app}/sessions/${encodeURIComponent(sid)}/abort`, { method: "POST" })
       } catch {}
+      return jsonRes({})
+    }
+    // opencode's DialogForkFromTimeline → sdk.client.session.fork → POST
+    // /session/{id}/fork, then it navigates to forked.data.id. Without this handler
+    // the call fell through to the empty catch-all, data.id was undefined, and the
+    // session route rendered a BLACK screen. The daemon clones the durable log under
+    // a new id and returns {session_id:newSid,…}, so toOcSession yields a valid
+    // Session to navigate to. "Full session" sends no messageID → full clone. The
+    // per-message "fork from here" sends messageID ; our ids encode the daemon seq
+    // (`${sid}:m:${padNum(seq)}`), so we extract it and pass before_seq → the daemon
+    // clones only events strictly before that message (rewind-to-here).
+    const forkPost = path.match(/^\/session\/([^/]+)\/fork$/)
+    if (forkPost && method === "POST") {
+      const sid = decodeURIComponent(forkPost[1])
+      const body = (await req.json().catch(() => ({}))) as Record<string, any>
+      const sm = String(body?.messageID ?? "").match(/:m:(\d+)$/)
+      const q = sm ? `?before_seq=${parseInt(sm[1], 10)}` : ""
+      const r = (await daemonFetch(cfg, `/api/apps/${app}/sessions/${encodeURIComponent(sid)}/fork${q}`, {
+        method: "POST",
+      })) as Record<string, any>
+      return jsonRes(toOcSession(r, dir))
+    }
+    // /rename : opencode's DialogSessionRename → sdk.client.session.update → PATCH
+    // /session/{id} {title}. Persist it on the daemon (durable rename) and emit a
+    // FULL session.updated so the new title shows in the list + header (sync's
+    // reconcile REPLACES the entry, so a partial object would wipe other fields).
+    const renamePatch = path.match(/^\/session\/([^/]+)$/)
+    if (renamePatch && method === "PATCH") {
+      const sid = decodeURIComponent(renamePatch[1])
+      const body = (await req.json().catch(() => ({}))) as Record<string, any>
+      const title = String(body?.title ?? "").trim()
+      if (!title) return jsonRes(toOcSession({ session_id: sid }, dir))
+      try {
+        const r = (await daemonFetch(cfg, `/api/apps/${app}/sessions/${encodeURIComponent(sid)}`, {
+          method: "PATCH",
+          body: JSON.stringify({ title }),
+        })) as Record<string, any>
+        const sess = toOcSession(r, dir)
+        emit(wrap({ type: "session.updated", properties: { info: sess } }))
+        return jsonRes(sess)
+      } catch {
+        return jsonRes(toOcSession({ session_id: sid, title }, dir))
+      }
+    }
+    // Slash commands (DIGITORN_COMMANDS) → existing daemon session endpoints.
+    // opencode fires session.command as void and relies on events/toasts for
+    // feedback. compact → /compact (emits compaction events); fork → /fork then
+    // navigate to the new session; export → /export written to the workdir.
+    const cmdPost = path.match(/^\/session\/([^/]+)\/command$/)
+    if (cmdPost && method === "POST") {
+      const sid = decodeURIComponent(cmdPost[1])
+      const body = (await req.json().catch(() => ({}))) as Record<string, any>
+      const command = String(body?.command ?? "")
+      const base = `/api/apps/${app}/sessions/${encodeURIComponent(sid)}`
+      const toast = (message: string, variant: "info" | "success" | "warning" | "error" = "success") =>
+        emit(wrap({ type: "tui.toast.show", properties: { message, variant } }))
+      try {
+        if (command === "compact") {
+          const r = (await daemonFetch(cfg, `${base}/compact`, { method: "POST" })) as Record<string, any>
+          toast(r?.events_compacted ? `Compacted ${r.events_compacted} events` : "Conversation compacted")
+        } else if (command === "fork") {
+          const r = (await daemonFetch(cfg, `${base}/fork`, { method: "POST" })) as Record<string, any>
+          const newId = String(r?.new_session_id ?? r?.session_id ?? "")
+          toast(`Forked → ${r?.title ?? newId}`)
+          if (newId) emit(wrap({ type: "tui.session.select", properties: { sessionID: newId } }))
+        } else if (command === "export") {
+          const r = (await daemonFetch(cfg, `${base}/export?format=markdown`)) as Record<string, any>
+          const fname = String(r?.filename ?? `export_${sid}.md`)
+          writeFileSync(join(dir, fname), String(r?.content ?? ""))
+          toast(`Exported → ${fname}`)
+        } else {
+          toast(`Unknown command: /${command}`, "warning")
+        }
+      } catch (e: any) {
+        toast(`/${command} failed: ${String(e?.message ?? e)}`, "error")
+      }
       return jsonRes({})
     }
     // ÉTAPE 4b : permission reply → our daemon's approval registry. opencode's
@@ -1127,17 +2217,20 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
       return jsonRes({})
     }
     // ÉTAPE 4e : ask_user answer. opencode question.reply carries answers as
-    // string[][] (per question → selected labels) ; our daemon takes the answer
-    // as a plain string in `reason` on the SAME /approve endpoint (action=approve;
-    // reject → deny). One question → flatten the selected labels.
+    // string[][] (per question → selected labels). We re-encode for the daemon's
+    // /approve `reason` per the question shape : a form → a JSON object keyed by
+    // field name (with type coercion), a multi-select → comma-joined (the daemon
+    // splits on comma), text/single/content → the selected/typed value.
     const qReply = path.match(/^\/question\/([^/]+)\/(reply|reject)$/)
     if (qReply && method === "POST") {
       const reqID = decodeURIComponent(qReply[1])
       const reject = qReply[2] === "reject"
       const body = (await req.json().catch(() => ({}))) as Record<string, any>
-      const answer = Array.isArray(body?.answers)
-        ? body.answers.map((a: any) => (Array.isArray(a) ? a.join(", ") : String(a ?? ""))).filter(Boolean).join("; ")
-        : ""
+      const answers: string[][] = Array.isArray(body?.answers)
+        ? body.answers.map((a: any) => (Array.isArray(a) ? a.map(String) : [String(a ?? "")]))
+        : []
+      const answer = encodeQuestionReply(questionShapes.get(reqID), answers)
+      questionShapes.delete(reqID)
       const sidForReq = pendingApprovals.get(reqID) ?? ""
       try {
         await daemonFetch(cfg, `/api/apps/${app}/approve`, {
@@ -1152,6 +2245,7 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
     if (msgList && method === "GET") {
       const sid = decodeURIComponent(msgList[1])
       joinSession(sid) // opening a session joins its room so live events stream
+      emitSessionDiff(sid) // seed the files panel with existing pending changes
       try {
         const r = await daemonFetch<{ messages?: Record<string, any>[] }>(
           cfg,
@@ -1167,11 +2261,42 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
     if (todoGet && method === "GET") {
       return jsonRes(todosFor(decodeURIComponent(todoGet[1])))
     }
-    if (method === "GET" && /^\/session\/[^/]+\/diff$/.test(path)) {
-      return jsonRes([])
+    // Session-scoped diff (opencode's "last-turn" source + the sidebar files
+    // panel's session.diff store). Maps the daemon's shadow-git pending changes
+    // to SnapshotFileDiff[]. messageID is ignored : the daemon tracks one live
+    // change set per session, not per message.
+    const diffOne = path.match(/^\/session\/([^/]+)\/diff$/)
+    if (method === "GET" && diffOne) {
+      const sid = decodeURIComponent(diffOne[1])
+      try {
+        return jsonRes(await fetchSessionDiff(sid))
+      } catch {
+        return jsonRes([])
+      }
+    }
+    // VCS "git" source of the /diff viewer (default mode). opencode calls this
+    // project-wide with no session, so we resolve to the active session
+    // (lastJoined) — our change tracking is per-session shadow git, not a global
+    // working tree. Returns the same VcsFileDiff[] shape as session.diff.
+    if (method === "GET" && path === "/vcs/diff") {
+      try {
+        return jsonRes(await fetchSessionDiff(lastJoined))
+      } catch {
+        return jsonRes([])
+      }
     }
     const sessOne = path.match(/^\/session\/([^/]+)$/)
     if (sessOne && sessOne[1] !== "status" && method === "GET") {
+      // A sub-agent's CHILD session ("<root>::agent::<run>") is NOT a first-class
+      // daemon session (the daemon 404s its /history). Its transcript lives in the
+      // live store : registered via session.updated, streamed via the ancestor
+      // fan-out. If we returned a session here, opencode's sync.session.sync would
+      // succeed on session.get, then fetch the (empty) child history and OVERWRITE
+      // that live data with [] — wiping every finished sub-agent's tool activity
+      // (and the drilled-in transcript). 404 → sync.session.sync rejects on the
+      // throwOnError session.get and never reaches the wiping setStore; the Task's
+      // nested ↳ and the drill-in both read the intact store.
+      if (decodeURIComponent(sessOne[1]).includes("::agent::")) return jsonRes({ error: "sub_session" }, 404)
       try {
         const r = await daemonFetch<{ sessions?: Record<string, any>[] }>(
           cfg,
@@ -1190,7 +2315,13 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
       switch (path) {
         case "/config":
           return jsonRes({}) // Config (all fields optional)
+        // ConsoleState : opencode reconciles this into sync.data.console_state.
+        // Must carry consoleManagedProviders (the model/provider dialogs call
+        // .has/.includes on it) — a bare {} makes it undefined and crashes /models.
+        case "/experimental/console":
+          return jsonRes({ consoleManagedProviders: [], switchableOrgCount: 0 })
         case "/config/providers": // populates data.provider + provider_default
+          await applyAppModel()
           return jsonRes({ providers: [dgProvider], default: dgDefault })
         case "/path":
           return jsonRes({ home: dir, state: dir, config: dir, worktree: dir, directory: dir })
@@ -1204,6 +2335,7 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
             sandboxes: [],
           })
         case "/provider": // provider.list → provider_next shape {all,default,connected}
+          await applyAppModel()
           return jsonRes({ all: [dgProvider], default: dgDefault, connected: ["digitorn"] })
         case "/provider/auth":
           return jsonRes({})
@@ -1211,16 +2343,22 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
           // app.agents → our digitorn MODES as opencode primary agents, so Tab
           // cycles them (build/plan/…) exactly like the old CLI's mode picker.
           const modes = await loadModes(currentApp)
+          // native:false → the mode picker shows each mode's real description (not
+          // the literal word "native"). mode:"primary" keeps them Tab-cyclable.
           if (modes.length)
-            return jsonRes(modes.map((m) => ({ name: m.id, description: m.description || m.label, mode: "primary", native: true, permission: {}, options: {} })))
-          return jsonRes([{ name: "build", mode: "primary", native: true, permission: {}, options: {} }])
+            return jsonRes(modes.map((m) => ({ name: m.id, description: m.description || m.label, mode: "primary", native: false, permission: {}, options: {} })))
+          return jsonRes([{ name: "build", mode: "primary", native: false, permission: {}, options: {} }])
         }
         case "/session":
           return jsonRes([]) // ÉTAPE 1 : real session list
         case "/session/status":
           return jsonRes({})
-        // Non-blocking boot stores : arrays vs objects matter for reconcile().
+        // Slash commands backed by daemon session endpoints. opencode lists these
+        // (sync.data.command) and runs them via POST /session/{id}/command, which
+        // we dispatch below. template/hints are required by the Command type.
         case "/command":
+          return jsonRes(DIGITORN_COMMANDS)
+        // Non-blocking boot stores : arrays vs objects matter for reconcile().
         case "/lsp":
         case "/formatter":
           return jsonRes([])
@@ -1236,6 +2374,50 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
   }) as typeof fetch
 }
 
+// parseHunks splits one file's unified diff into hunks, computing each hunk's
+// stable 12-char hash IDENTICALLY to the daemon (internal/gitrepo/hunks.go) so a
+// per-hunk approve/reject references the exact hunk byte-for-byte:
+//   hash = sha256(header + "\n" + body.join("\n")).hex()[:12]
+// header = the full "@@ … @@[ ctx]" line (only when it matches the @@ regex);
+// body = the content lines (" "/"-"/"+"), kept verbatim with their prefix. Lines
+// before the first @@ (the diff/index/file markers) are ignored — exactly as the
+// daemon does, or the hash would diverge and the daemon would find nothing.
+const HUNK_HEADER_RE = /^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@/
+type DiffHunk = { hash: string; header: string; additions: number; deletions: number }
+function parseHunks(unified: string): DiffHunk[] {
+  const out: DiffHunk[] = []
+  let header = ""
+  let body: string[] = []
+  let adds = 0
+  let dels = 0
+  const flush = () => {
+    if (!header) return
+    const hash = createHash("sha256")
+      .update(header + "\n" + body.join("\n"))
+      .digest("hex")
+      .slice(0, 12)
+    out.push({ hash, header, additions: adds, deletions: dels })
+    header = ""
+    body = []
+    adds = 0
+    dels = 0
+  }
+  for (const line of unified.split("\n")) {
+    if (line.startsWith("@@")) {
+      flush()
+      if (HUNK_HEADER_RE.test(line)) header = line
+      continue
+    }
+    if (header && line.length > 0 && (line[0] === " " || line[0] === "-" || line[0] === "+")) {
+      body.push(line)
+      if (line[0] === "+") adds++
+      else if (line[0] === "-") dels++
+    }
+  }
+  flush()
+  return out
+}
+
 // toOcMessages translates OUR flat history (Go CLI: {messages:[{seq,role,content,ts}]},
 // the reference) into opencode's {info: Message, parts: Part[]}[] model. ÉTAPE 2 :
 // user/assistant text only — tool calls become parts in a later step.
@@ -1249,7 +2431,11 @@ function toOcMessages(
   for (const m of msgs) {
     const role = m.role
     if (role !== "user" && role !== "assistant") continue // tool/system → later
-    const content = String(m.content ?? "")
+    const rawContent = String(m.content ?? "")
+    // The daemon's interruption marker is LLM-only — strip it for display and flag
+    // the message interrupted instead (opencode shows a subtle "· interrupted").
+    const interrupted = role === "assistant" && hadInterruptMarker(rawContent)
+    const content = interrupted ? stripInterruptMarker(rawContent) : rawContent
     // Assistant tool rounds carry a tool_calls[] array ({id,name,arguments,
     // status}; the daemon merges call+result, no output text persisted). Render
     // each as a completed ToolPart. Skip a round that has neither text nor tools.
@@ -1323,6 +2509,8 @@ function toOcMessages(
           path: { cwd: dir, root: dir },
           cost: 0,
           tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          // Marker stripped → show opencode's subtle "· interrupted" instead.
+          ...(interrupted ? { error: { name: "MessageAbortedError", data: { message: "Interrupted" } } } : {}),
         },
         parts,
       })

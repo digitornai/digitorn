@@ -49,6 +49,15 @@ var skipDirs = map[string]struct{}{
 	".pub-cache": {}, "Pods": {}, ".bundle": {},
 }
 
+// IsNoiseDir reports whether a directory name is VCS/build/dependency noise that
+// is never descended into — and so never surfaced to the client's file tree.
+// Exported so the daemon's workspace-tree route shares this single source of
+// truth instead of duplicating the list.
+func IsNoiseDir(name string) bool {
+	_, ok := skipDirs[name]
+	return ok
+}
+
 // grepMatch is one content-mode hit. Context lines (when requested) ride in
 // Before/After so the agent sees the surrounding code.
 type grepMatch struct {

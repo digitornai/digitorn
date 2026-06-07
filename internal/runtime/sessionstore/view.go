@@ -297,6 +297,10 @@ func eventPayload(ev *Event) any {
 		return ev.Meta
 	case ev.Error != nil:
 		return ev.Error
+	case ev.Retry != nil:
+		return ev.Retry
+	case ev.Turn != nil:
+		return ev.Turn
 	case ev.Background != nil:
 		return ev.Background
 	case ev.WorkspaceChanges != nil:

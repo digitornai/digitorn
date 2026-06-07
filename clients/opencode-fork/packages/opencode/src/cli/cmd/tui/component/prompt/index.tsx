@@ -50,6 +50,7 @@ import { useToast } from "../../ui/toast"
 import { useKV } from "../../context/kv"
 import { createFadeIn } from "../../util/signal"
 import { DialogSkill } from "../dialog-skill"
+import { openUseSkillPicker } from "../dialog-skills"
 import {
   confirmWorkspaceFileChanges,
   openWorkspaceSelect,
@@ -149,6 +150,21 @@ export function Prompt(props: PromptProps) {
   const dialog = useDialog()
   const toast = useToast()
   const status = createMemo(() => sync.data.session_status?.[props.sessionID ?? ""] ?? { type: "idle" })
+  // A sub-agent can outlive the parent turn (background/wait:false), leaving the
+  // parent idle while work runs. Keep ESC live then: busy turn, running task part,
+  // or a busy child session (parent::agent::…). session.abort stops the whole tree.
+  const liveWork = createMemo(() => {
+    const sid = props.sessionID
+    if (!sid) return false
+    if (status().type !== "idle") return true
+    for (const m of sync.data.message[sid] ?? [])
+      for (const p of sync.data.part[m.id] ?? [])
+        if (p.type === "tool" && p.tool === "task" && (p as any).state?.status === "running") return true
+    const prefix = sid + "::agent::"
+    const all = sync.data.session_status ?? {}
+    for (const k in all) if (k.startsWith(prefix) && all[k]?.type && all[k].type !== "idle") return true
+    return false
+  })
   const history = usePromptHistory()
   const stash = usePromptStash()
   const keymap = useOpencodeKeymap()
@@ -476,7 +492,7 @@ export function Prompt(props: PromptProps) {
         name: "session.interrupt",
         category: "Session",
         hidden: true,
-        enabled: status().type !== "idle",
+        enabled: liveWork(),
         run: () => {
           if (auto()?.visible) return
           if (!input.focused) return
@@ -493,7 +509,10 @@ export function Prompt(props: PromptProps) {
             setStore("interrupt", 0)
           }, 5000)
 
-          if (store.interrupt >= 2) {
+          // digitorn: a SINGLE esc aborts (like the old CLI), instead of opencode's
+          // two-press "esc again to interrupt". Stock opencode keeps the two-press.
+          const threshold = process.env.DIGITORN_URL ? 1 : 2
+          if (store.interrupt >= threshold) {
             void sdk.client.session.abort({
               sessionID: props.sessionID,
             })
@@ -611,6 +630,23 @@ export function Prompt(props: PromptProps) {
               }}
             />
           ))
+        },
+      },
+      {
+        title: "Use a skill",
+        name: "prompt.use_skill",
+        category: "Prompt",
+        slashName: "use_skill",
+        run: () => {
+          // Pick a digitorn skill, then prefill the composer with the prefix so
+          // the user just types their message and sends; the adapter parses the
+          // "/use_skill <name> " prefix and injects the skill server-side.
+          void openUseSkillPicker(sdk, dialog, (name) => {
+            const next = `/use_skill ${name} `
+            input.setText(next)
+            setStore("prompt", { input: next, parts: [] })
+            input.gotoBufferEnd()
+          })
         },
       },
       {
@@ -1643,7 +1679,7 @@ export function Prompt(props: PromptProps) {
         </box>
         <box width="100%" flexDirection="row" justifyContent="space-between">
           <Switch>
-            <Match when={status().type !== "idle"}>
+            <Match when={liveWork()}>
               <box
                 flexDirection="row"
                 gap={1}
@@ -1651,11 +1687,15 @@ export function Prompt(props: PromptProps) {
                 justifyContent={status().type === "retry" ? "space-between" : "flex-start"}
               >
                 <box flexShrink={0} flexDirection="row" gap={1}>
-                  <box marginLeft={1}>
-                    <Show when={kv.get("animations_enabled", true)} fallback={<text fg={theme.textMuted}>[⋯]</text>}>
-                      <spinner color={spinnerDef().color} frames={spinnerDef().frames} interval={40} />
-                    </Show>
-                  </box>
+                  {/* digitorn: no spinner here — the working diamond lives in the chat
+                      message footer. Stock opencode keeps its status-row spinner. */}
+                  <Show when={!process.env.DIGITORN_URL}>
+                    <box marginLeft={1}>
+                      <Show when={kv.get("animations_enabled", true)} fallback={<text fg={theme.textMuted}>[⋯]</text>}>
+                        <spinner color={spinnerDef().color} frames={spinnerDef().frames} interval={40} />
+                      </Show>
+                    </box>
+                  </Show>
                   <box flexDirection="row" gap={1} flexShrink={0}>
                     {(() => {
                       const retry = createMemo(() => {
@@ -1762,7 +1802,16 @@ export function Prompt(props: PromptProps) {
           </Switch>
           <Show when={status().type !== "retry"}>
             <box gap={2} flexDirection="row">
-              <Show when={editorContextLabelState() !== "none" ? editorFileLabelDisplay() : undefined}>
+              {/* digitorn: hide the IDE editor-context file label — we don't use that
+                  integration (the editor_context parts are stripped from the prompt),
+                  and digitorn apps aren't all for coding, so the active-file label is
+                  just misleading noise. Stock opencode keeps it. */}
+              <Show
+                when={
+                  !process.env.DIGITORN_URL &&
+                  (editorContextLabelState() !== "none" ? editorFileLabelDisplay() : undefined)
+                }
+              >
                 {(file) => (
                   <text fg={editorContextLabelState() === "pending" ? theme.secondary : theme.textMuted}>{file()}</text>
                 )}

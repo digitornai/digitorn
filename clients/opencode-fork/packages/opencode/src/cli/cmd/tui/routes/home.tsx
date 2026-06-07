@@ -2,7 +2,6 @@ import { Prompt, type PromptRef } from "@tui/component/prompt"
 import { createEffect, createMemo, createSignal, onMount } from "solid-js"
 import { Logo } from "../component/logo"
 import { HomeApps } from "../component/home-apps"
-import { ErrorBoundary, Show } from "solid-js"
 import { useSync } from "../context/sync"
 import { Toast } from "../ui/toast"
 import { useArgs } from "../context/args"
@@ -80,16 +79,14 @@ export function Home() {
         <box height={1} minHeight={0} flexShrink={1} />
         <box width="100%" maxWidth={promptMaxWidth()} zIndex={1000} paddingTop={1} flexShrink={0}>
           <TuiPluginRuntime.Slot name="home_prompt" mode="replace" ref={bind}>
-            <Prompt ref={bind} right={<TuiPluginRuntime.Slot name="home_prompt_right" />} placeholders={placeholder} />
+            <Prompt
+              ref={bind}
+              right={<TuiPluginRuntime.Slot name="home_prompt_right" />}
+              placeholders={placeholder}
+              hint={<HomeApps />}
+            />
           </TuiPluginRuntime.Slot>
         </box>
-        <Show when={Boolean(process.env.DIGITORN_URL)}>
-          <ErrorBoundary fallback={null}>
-            <box flexShrink={0} paddingTop={1}>
-              <HomeApps />
-            </box>
-          </ErrorBoundary>
-        </Show>
         <TuiPluginRuntime.Slot name="home_bottom" />
         <box flexGrow={1} minHeight={0} />
         <Toast />

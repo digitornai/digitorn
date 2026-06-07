@@ -247,6 +247,12 @@ type ChatChunk struct {
 type Usage struct {
 	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`
+	// ReasoningTokens is the provider's EXACT count of tokens spent on the
+	// model's hidden reasoning/thinking — a SUBSET already included in
+	// CompletionTokens (OpenAI convention, which bifrost normalises for every
+	// provider via completion_tokens_details.reasoning_tokens). Surfaced as a
+	// breakdown so clients can show it; never add it on top of CompletionTokens.
+	ReasoningTokens  int `json:"reasoning_tokens,omitempty"`
 	TotalTokens      int `json:"total_tokens"`
 	CacheReadTokens  int `json:"cache_read_tokens,omitempty"`
 	CacheWriteTokens int `json:"cache_write_tokens,omitempty"`

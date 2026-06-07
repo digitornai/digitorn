@@ -63,9 +63,7 @@ func TestParity_StatusMatchesGitCLI(t *testing.T) {
 	r, dir := fresh(t)
 	writeFile(t, dir, "keep.txt", "k1\nk2\n")
 	writeFile(t, dir, "mod.txt", "m1\nm2\n")
-	if _, err := r.Commit("base", nil); err != nil {
-		t.Fatal(err)
-	}
+	commitAll(t, r, "base")
 	// added / modified / deleted in one shot
 	writeFile(t, dir, "sub/new.txt", "new\n")
 	writeFile(t, dir, "mod.txt", "m1\nCHANGED\n")
@@ -126,9 +124,7 @@ func TestParity_NumstatMatchesGitCLI(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			r, dir := fresh(t)
 			writeFile(t, dir, "f.txt", tc.before)
-			if _, err := r.Commit("base", nil); err != nil {
-				t.Fatal(err)
-			}
+			commitAll(t, r, "base")
 			writeFile(t, dir, "f.txt", tc.after)
 
 			_, ins, del, err := r.FileDiff("f.txt")

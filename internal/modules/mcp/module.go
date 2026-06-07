@@ -1,13 +1,289 @@
-// Package mcp implements the mcp module.
-//
-// TODO: port from the Python reference in
-//
-//	digitorn-bridge/packages/digitorn/modules/mcp/
-//
-// Construction pattern (mirrors filesystem and shell):
-//
-//	m := &Module{}
-//	m.Base = module.Base{ID: "mcp", Version: "0.1.0", Description: "..."}
-//	m.RegisterTool(module.Tool{Name: "...", Handler: m.something})
-//	return m
+// Package mcp connects external Model Context Protocol servers (stdio or http)
+// and exposes their tools to the agent as first-class native digitorn tools.
 package mcp
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"regexp"
+	"sync"
+	"time"
+
+	"github.com/mbathepaul/digitorn/internal/compiler/schema"
+	domainmodule "github.com/mbathepaul/digitorn/internal/domain/module"
+	"github.com/mbathepaul/digitorn/internal/domain/tool"
+	"github.com/mbathepaul/digitorn/pkg/module"
+)
+
+const (
+	moduleID          = "mcp"
+	moduleVersion     = "1.0.0"
+	defaultMaxRetries = 4
+	healthInterval    = 60 * time.Second
+	defaultTimeout    = 30 * time.Second
+
+	// userKeySep joins a server id with a user id for per-user stdio pools.
+	// NUL can't appear in a server id, so the key is unambiguous.
+	userKeySep = "\x00"
+	// maxUserPools caps concurrent per-user stdio subprocesses (LRU-evicted).
+	maxUserPools = 20
+)
+
+// virtualRe splits "mcp_<server>__<tool>"; the server group stops before "__"
+// so mcp_google_calendar__list_events resolves correctly.
+var virtualRe = regexp.MustCompile(`^mcp_([^_]+(?:_[^_]+)*)__(.+)$`)
+
+type Module struct {
+	module.Base
+
+	mu         sync.RWMutex
+	pool       *pool
+	healthStop chan struct{}
+}
+
+func New() *Module {
+	m := &Module{}
+	m.Base = module.Base{
+		ID:          moduleID,
+		Version:     moduleVersion,
+		Description: "Connect external Model Context Protocol servers; their tools become native agent tools.",
+		SupportedPlatforms: []domainmodule.Platform{
+			domainmodule.PlatformLinux,
+			domainmodule.PlatformMacOS,
+			domainmodule.PlatformWindows,
+		},
+	}
+	m.pool = newPool(defaultMaxRetries)
+	return m
+}
+
+func (m *Module) Init(ctx context.Context, cfg map[string]any) error {
+	servers, _ := schema.NormalizeServers(cfg["servers"])
+	for id, sc := range servers {
+		spec, ok := toConnectSpec(sc)
+		if !ok {
+			continue // bare/catalog ref — resolved in a later chunk
+		}
+		_, _ = m.pool.connect(ctx, id, spec)
+	}
+	return nil
+}
+
+func (m *Module) Start(ctx context.Context) error {
+	m.startHealth()
+	return m.Base.Start(ctx)
+}
+
+func (m *Module) Stop(ctx context.Context) error {
+	m.mu.Lock()
+	if m.healthStop != nil {
+		close(m.healthStop)
+		m.healthStop = nil
+	}
+	pool := m.pool
+	m.mu.Unlock()
+	if pool != nil {
+		pool.shutdown(ctx)
+	}
+	return m.Base.Stop(ctx)
+}
+
+// Invoke routes a virtual-tool call (mcp_<server>__<tool>) to the owning server.
+func (m *Module) Invoke(ctx context.Context, toolName string, params []byte) (tool.Result, error) {
+	server, action, ok := parseVirtual(toolName)
+	if !ok {
+		return tool.Result{Success: false, Error: "mcp: unroutable tool " + toolName},
+			fmt.Errorf("mcp: unroutable tool %q", toolName)
+	}
+	m.ensureConnected(ctx)
+	// Route to the physical connection: bare server id for http/non-auth, or a
+	// per-user key for an authenticated stdio server (its token rides its env).
+	key := m.routeKey(ctx, server)
+
+	var args map[string]any
+	if len(params) > 0 {
+		_ = json.Unmarshal(params, &args)
+	}
+
+	switch action {
+	case "list_prompts":
+		return wrapJSON(server, map[string]any{"server_id": server, "prompts": m.pool.promptsOf(key)}), nil
+	case "get_prompt":
+		name, _ := args["prompt_name"].(string)
+		res, err := m.pool.getPrompt(ctx, key, name, toStringMap(args["arguments"]))
+		if err != nil {
+			return failResult(err), nil
+		}
+		return wrapJSON(server, res), nil
+	case "list_resources":
+		return wrapJSON(server, map[string]any{"server_id": server, "resources": m.pool.resourcesOf(key)}), nil
+	case "read_resource":
+		uri, _ := args["uri"].(string)
+		res, err := m.pool.readResource(ctx, key, uri)
+		if err != nil {
+			return failResult(err), nil
+		}
+		return wrapJSON(server, res), nil
+	}
+
+	res, err := m.pool.callTool(ctx, key, action, args)
+	if err != nil {
+		return failResult(err), nil
+	}
+	return wrapResult(server, action, res), nil
+}
+
+// isStdioOAuth reports whether a server runs over stdio with an oauth2 block —
+// the only servers that need a per-user subprocess (their token is an env var).
+func isStdioOAuth(sc schema.MCPServerConfig) bool {
+	return normTransport(string(sc.Transport)) == "stdio" && sc.Auth != nil && sc.Auth.Type == "oauth2"
+}
+
+// physicalKey is the pool key for a server: per-user for authenticated stdio,
+// shared (bare id) for http and non-auth stdio.
+func physicalKey(serverID string, sc schema.MCPServerConfig, userID string) string {
+	if userID != "" && isStdioOAuth(sc) {
+		return serverID + userKeySep + userID
+	}
+	return serverID
+}
+
+// routeKey resolves the physical pool key for a logical server on this call.
+func (m *Module) routeKey(ctx context.Context, server string) string {
+	cfg := module.ModuleConfigFrom(ctx)
+	if len(cfg) == 0 {
+		return server
+	}
+	servers, _ := schema.NormalizeServers(cfg["servers"])
+	sc, ok := servers[server]
+	if !ok {
+		return server
+	}
+	return physicalKey(server, sc, callerUserID(ctx))
+}
+
+func callerUserID(ctx context.Context) string {
+	if id, ok := tool.IdentityFromContext(ctx); ok {
+		return id.UserID
+	}
+	return ""
+}
+
+func injectTokenEnv(env map[string]string, ac module.AuthContext) map[string]string {
+	out := make(map[string]string, len(env)+1)
+	for k, v := range env {
+		out[k] = v
+	}
+	out[ac.EnvTokenVar] = ac.Token
+	return out
+}
+
+func toStringMap(v any) map[string]string {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return nil
+	}
+	out := make(map[string]string, len(m))
+	for k, val := range m {
+		if s, ok := val.(string); ok {
+			out[k] = s
+		} else {
+			out[k] = fmt.Sprintf("%v", val)
+		}
+	}
+	return out
+}
+
+func parseVirtual(name string) (server, action string, ok bool) {
+	g := virtualRe.FindStringSubmatch(name)
+	if g == nil {
+		return "", "", false
+	}
+	return g[1], g[2], true
+}
+
+func toConnectSpec(sc schema.MCPServerConfig) (connectSpec, bool) {
+	if sc.Command == "" && sc.URL == "" {
+		return connectSpec{}, false
+	}
+	timeout := defaultTimeout
+	if sc.Timeout > 0 {
+		timeout = time.Duration(sc.Timeout * float64(time.Second))
+	}
+	return connectSpec{
+		Transport: string(sc.Transport),
+		Command:   sc.Command,
+		Args:      sc.Args,
+		Env:       sc.Env,
+		URL:       sc.URL,
+		Headers:   sc.Headers,
+		Timeout:   timeout,
+	}, true
+}
+
+// ensureConnected lazily connects the calling app's declared servers from the
+// per-call config. http / non-auth servers share one connection (left alone once
+// up). An authenticated stdio server gets a per-user subprocess with its token
+// baked into the env; if the user's token changed, it is reconnected.
+func (m *Module) ensureConnected(ctx context.Context) {
+	cfg := module.ModuleConfigFrom(ctx)
+	if len(cfg) == 0 {
+		return
+	}
+	servers, _ := schema.NormalizeServers(cfg["servers"])
+	userID := callerUserID(ctx)
+	authCtx, _ := module.AuthContextFrom(ctx)
+	for id, sc := range servers {
+		spec, ok := toConnectSpec(sc)
+		if !ok {
+			continue // bare/catalog ref — resolved in a later chunk
+		}
+		key := physicalKey(id, sc, userID)
+		stdioAuth := userID != "" && isStdioOAuth(sc)
+		if stdioAuth && authCtx.Token != "" && authCtx.EnvTokenVar != "" {
+			spec.Env = injectTokenEnv(spec.Env, authCtx)
+		}
+		if existing, up := m.pool.get(key); up {
+			if !stdioAuth {
+				continue // http / non-auth: leave as-is
+			}
+			if existing.spec.Env[authCtx.EnvTokenVar] == authCtx.Token {
+				continue // same user, unchanged token
+			}
+			// token rotated → fall through to reconnect with the new env
+		} else if stdioAuth {
+			m.pool.evictOldestUserConn(userKeySep, maxUserPools)
+		}
+		_, _ = m.pool.connect(ctx, key, spec)
+	}
+}
+
+func (m *Module) startHealth() {
+	m.mu.Lock()
+	if m.healthStop != nil {
+		m.mu.Unlock()
+		return
+	}
+	stop := make(chan struct{})
+	m.healthStop = stop
+	pool := m.pool
+	m.mu.Unlock()
+
+	go func() {
+		t := time.NewTicker(healthInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-t.C:
+				hctx, cancel := context.WithTimeout(context.Background(), healthInterval)
+				for _, id := range pool.healthCheck(hctx) {
+					pool.reconnect(hctx, id)
+				}
+				cancel()
+			}
+		}
+	}()
+}

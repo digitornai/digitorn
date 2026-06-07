@@ -22,6 +22,22 @@ func writeFile(t *testing.T, dir, rel, content string) {
 	}
 }
 
+// commitAll advances the baseline with EVERY pending change — the test analogue
+// of "approve all, then commit". The product Commit is strict (staged-only); a
+// snapshot-everything helper keeps the git-mechanics tests honest without
+// re-encoding the approve flow each time.
+func commitAll(tb testing.TB, r *Repo, msg string) string {
+	tb.Helper()
+	if err := r.StageAll(); err != nil {
+		tb.Fatalf("StageAll: %v", err)
+	}
+	sha, err := r.Commit(msg, nil)
+	if err != nil {
+		tb.Fatalf("Commit: %v", err)
+	}
+	return sha
+}
+
 func TestShadowRepo_TracksAgentChanges(t *testing.T) {
 	dir := t.TempDir()
 	r, err := Open(dir)
@@ -57,9 +73,8 @@ func TestShadowRepo_TracksAgentChanges(t *testing.T) {
 	}
 
 	// commit (validate) -> clean
-	sha, err := r.Commit("ship", nil)
-	if err != nil || sha == "" {
-		t.Fatalf("commit: sha=%q err=%v", sha, err)
+	if sha := commitAll(t, r, "ship"); sha == "" {
+		t.Fatalf("commit returned no sha")
 	}
 	if ch, _ := r.Changes(); len(ch) != 0 {
 		t.Fatalf("must be clean after commit, got %+v", ch)

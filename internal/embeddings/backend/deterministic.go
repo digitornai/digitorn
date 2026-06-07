@@ -5,6 +5,8 @@ import (
 	"hash/fnv"
 	"math"
 	"strings"
+
+	"github.com/mbathepaul/digitorn/internal/embeddings/models"
 )
 
 // Deterministic is the fallback inference backend : it produces
@@ -25,7 +27,8 @@ import (
 // Production deployments MUST use the ONNX backend (build with
 // `-tags onnx`).
 type Deterministic struct {
-	dim int
+	dim  int
+	name string
 }
 
 // NewDeterministic constructs the fallback backend. dim should
@@ -35,10 +38,25 @@ func NewDeterministic(dim int) *Deterministic {
 	if dim <= 0 {
 		dim = 384
 	}
-	return &Deterministic{dim: dim}
+	return &Deterministic{dim: dim, name: "deterministic-hash-v1"}
 }
 
-func (d *Deterministic) Model() string  { return "deterministic-hash-v1" }
+// NewDeterministicFor builds a fallback backend matching a model Spec's
+// dimension and echoing its id, so a no-ONNX build still serves the
+// requested model's shape (vectors are not semantic — fallback only).
+func NewDeterministicFor(spec models.Spec) *Deterministic {
+	dim := spec.Dim
+	if dim <= 0 {
+		dim = 384
+	}
+	name := spec.ID
+	if name == "" {
+		name = "deterministic-hash-v1"
+	}
+	return &Deterministic{dim: dim, name: name}
+}
+
+func (d *Deterministic) Model() string  { return d.name }
 func (d *Deterministic) Dimension() int { return d.dim }
 func (d *Deterministic) Close() error   { return nil }
 
@@ -77,6 +95,30 @@ func (d *Deterministic) Embed(_ context.Context, inputs []string, l2norm bool) (
 			normalize(vec)
 		}
 		out[i] = vec
+	}
+	return out, nil
+}
+
+// deterministicCrossEncoder is the no-op reranker fallback : it preserves
+// the input order (descending scores) so retrieval still works without a
+// real cross-encoder. NOT a real relevance model.
+type deterministicCrossEncoder struct{ name string }
+
+// NewDeterministicCrossEncoder builds the fallback reranker for a Spec.
+func NewDeterministicCrossEncoder(spec models.Spec) CrossEncoder {
+	name := spec.ID
+	if name == "" {
+		name = "deterministic-rerank"
+	}
+	return &deterministicCrossEncoder{name: name}
+}
+
+func (d *deterministicCrossEncoder) Model() string { return d.name }
+func (d *deterministicCrossEncoder) Close() error  { return nil }
+func (d *deterministicCrossEncoder) Rerank(_ context.Context, _ string, docs []string) ([]float32, error) {
+	out := make([]float32, len(docs))
+	for i := range docs {
+		out[i] = float32(len(docs) - i)
 	}
 	return out, nil
 }

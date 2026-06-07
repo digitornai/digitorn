@@ -138,94 +138,117 @@ export const TuiThreadCommand = cmd({
         return
       }
       const cwd = Filesystem.resolve(process.cwd())
-      const env = sanitizedProcessEnv({
-        [OPENCODE_PROCESS_ROLE]: "worker",
-        [OPENCODE_RUN_ID]: ensureRunID(),
-      })
-
-      const worker = new Worker(file, {
-        env,
-      })
-      worker.onerror = (e) => {
-        Log.Default.error("thread error", {
-          message: e.message,
-          filename: e.filename,
-          lineno: e.lineno,
-          colno: e.colno,
-          error: e.error,
-        })
-      }
-
-      const client = Rpc.client<typeof rpc>(worker)
-      const error = (e: unknown) => {
-        Log.Default.error("process error", { error: errorMessage(e) })
-      }
-      const reload = () => {
-        client.call("reload", undefined).catch((err) => {
-          Log.Default.warn("worker reload failed", {
-            error: errorMessage(err),
-          })
-        })
-      }
-      process.on("uncaughtException", error)
-      process.on("unhandledRejection", error)
-      process.on("SIGUSR2", reload)
-
-      let stopped = false
-      const stop = async () => {
-        if (stopped) return
-        stopped = true
-        process.off("uncaughtException", error)
-        process.off("unhandledRejection", error)
-        process.off("SIGUSR2", reload)
-        await withTimeout(client.call("shutdown", undefined), 5000).catch((error) => {
-          Log.Default.warn("worker shutdown failed", {
-            error: errorMessage(error),
-          })
-        })
-        worker.terminate()
-      }
-
       const prompt = await input(args.prompt)
       const config = await TuiConfig.get()
 
-      const network = resolveNetworkOptionsNoConfig(args)
-      const external =
-        process.argv.includes("--port") ||
-        process.argv.includes("--hostname") ||
-        process.argv.includes("--mdns") ||
-        network.mdns ||
-        network.port !== 0 ||
-        network.hostname !== "127.0.0.1"
+      // Digitorn replaces opencode's ENTIRE backend through the injected fetch
+      // (sdk.tsx → digitornFetch) when DIGITORN_URL is set, so the embedded
+      // opencode Server worker is dead weight — spawning it and booting the whole
+      // backend is a large chunk of startup we never use. Skip it: no Worker, no
+      // Server boot, no validateSession/checkUpgrade. Non-digitorn keeps the exact
+      // original worker path unchanged.
+      const digitorn = !!process.env.DIGITORN_URL
+      let client: RpcClient | undefined
+      let stop = async () => {}
+      let transport: { url: string; fetch?: typeof fetch; events?: EventSource }
 
-      const transport = external
-        ? {
-            url: (await client.call("server", network)).url,
-            fetch: undefined,
-            events: undefined,
-          }
-        : {
-            url: "http://opencode.internal",
-            fetch: createWorkerFetch(client),
-            events: createEventSource(client),
-          }
-
-      try {
-        await validateSession({
-          url: transport.url,
-          sessionID: args.session,
-          directory: cwd,
-          fetch: transport.fetch,
-        })
-      } catch (error) {
-        UI.error(errorMessage(error))
-        process.exitCode = 1
-        return
+      // Log (not crash) on stray errors — opencode's resilience net, kept for BOTH
+      // paths so the digitorn TUI is no less robust than stock opencode.
+      const error = (e: unknown) => {
+        Log.Default.error("process error", { error: errorMessage(e) })
       }
+      process.on("uncaughtException", error)
+      process.on("unhandledRejection", error)
 
-      setTimeout(() => {
-        client.call("checkUpgrade", { directory: cwd }).catch(() => {})
-      }, 1000).unref?.()
+      if (digitorn) {
+        transport = { url: process.env.DIGITORN_URL!, fetch: undefined, events: undefined }
+        stop = async () => {
+          process.off("uncaughtException", error)
+          process.off("unhandledRejection", error)
+        }
+      } else {
+        const env = sanitizedProcessEnv({
+          [OPENCODE_PROCESS_ROLE]: "worker",
+          [OPENCODE_RUN_ID]: ensureRunID(),
+        })
+
+        const worker = new Worker(file, {
+          env,
+        })
+        worker.onerror = (e) => {
+          Log.Default.error("thread error", {
+            message: e.message,
+            filename: e.filename,
+            lineno: e.lineno,
+            colno: e.colno,
+            error: e.error,
+          })
+        }
+
+        client = Rpc.client<typeof rpc>(worker)
+        const workerClient = client
+        const reload = () => {
+          workerClient.call("reload", undefined).catch((err) => {
+            Log.Default.warn("worker reload failed", {
+              error: errorMessage(err),
+            })
+          })
+        }
+        process.on("SIGUSR2", reload)
+
+        let stopped = false
+        stop = async () => {
+          if (stopped) return
+          stopped = true
+          process.off("uncaughtException", error)
+          process.off("unhandledRejection", error)
+          process.off("SIGUSR2", reload)
+          await withTimeout(workerClient.call("shutdown", undefined), 5000).catch((error) => {
+            Log.Default.warn("worker shutdown failed", {
+              error: errorMessage(error),
+            })
+          })
+          worker.terminate()
+        }
+
+        const network = resolveNetworkOptionsNoConfig(args)
+        const external =
+          process.argv.includes("--port") ||
+          process.argv.includes("--hostname") ||
+          process.argv.includes("--mdns") ||
+          network.mdns ||
+          network.port !== 0 ||
+          network.hostname !== "127.0.0.1"
+
+        transport = external
+          ? {
+              url: (await workerClient.call("server", network)).url,
+              fetch: undefined,
+              events: undefined,
+            }
+          : {
+              url: "http://opencode.internal",
+              fetch: createWorkerFetch(workerClient),
+              events: createEventSource(workerClient),
+            }
+
+        try {
+          await validateSession({
+            url: transport.url,
+            sessionID: args.session,
+            directory: cwd,
+            fetch: transport.fetch,
+          })
+        } catch (error) {
+          UI.error(errorMessage(error))
+          process.exitCode = 1
+          return
+        }
+
+        setTimeout(() => {
+          workerClient.call("checkUpgrade", { directory: cwd }).catch(() => {})
+        }, 1000).unref?.()
+      }
 
       try {
         const { createTuiRenderer, tui } = await import("./app")
@@ -235,6 +258,7 @@ export const TuiThreadCommand = cmd({
           renderer,
           async onSnapshot() {
             const tui = writeHeapSnapshot("tui.heapsnapshot")
+            if (!client) return [tui]
             const server = await client.call("snapshot", undefined)
             return [tui, server]
           },

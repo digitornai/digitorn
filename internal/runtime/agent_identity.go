@@ -36,6 +36,21 @@ func resolveAgent(def *schema.AppDefinition, agentID string) *schema.Agent {
 	return &def.Agents[0]
 }
 
+// applyEntryAgent honors a per-session entry-agent override (set at session
+// creation by a non-human launcher, e.g. a background channel trigger). An
+// explicit caller agent (sub-agent runs set explicitID) still wins; an empty or
+// non-existent sessionEntry leaves the already-resolved agent untouched, so a
+// bad value can never break the session.
+func applyEntryAgent(def *schema.AppDefinition, current *schema.Agent, explicitID, sessionEntry string) *schema.Agent {
+	if explicitID != "" || sessionEntry == "" {
+		return current
+	}
+	if a := resolveAgent(def, sessionEntry); a != nil {
+		return a
+	}
+	return current
+}
+
 // agentRunID returns the distinct per-instance identity attributed to the
 // gateway/provider + telemetry : the explicit run id when set (sub-agents),
 // else the agent's stable logical id (the entry agent).

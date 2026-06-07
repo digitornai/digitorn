@@ -7,6 +7,7 @@ import {
   For,
   Match,
   on,
+  onCleanup,
   onMount,
   Show,
   Switch,
@@ -525,9 +526,10 @@ export function Session() {
       title: "Fork session",
       value: "session.fork",
       category: "Session",
-      slash: {
-        name: "fork",
-      },
+      // digitorn exposes its OWN /fork (the daemon full-fork) — drop this duplicate
+      // /fork slash for digitorn so the menu has a single /fork. The dialog (with the
+      // per-message point-fork) stays reachable from the command palette by title.
+      slash: process.env.DIGITORN_URL ? undefined : { name: "fork" },
       run: () => {
         dialog.replace(() => (
           <DialogForkFromTimeline
@@ -1356,10 +1358,11 @@ function UserMessage(props: {
       <Show when={text()}>
         <box
           id={props.message.id}
-          border={["left"]}
+          border={["right"]}
           borderColor={color()}
           customBorderChars={SplitBorder.customBorderChars}
           marginTop={props.index === 0 ? 0 : 1}
+          marginRight={2}
         >
           <box
             onMouseOver={() => {
@@ -1372,6 +1375,8 @@ function UserMessage(props: {
             paddingTop={1}
             paddingBottom={1}
             paddingLeft={2}
+            paddingRight={2}
+            alignItems="flex-end"
             backgroundColor={hover() ? theme.backgroundElement : theme.backgroundPanel}
             flexShrink={0}
           >
@@ -1427,16 +1432,60 @@ function UserMessage(props: {
   )
 }
 
+// digitorn's old-CLI working indicator (the "pulsing diamond" shimmer) + its live
+// token counter, shown in place of the ▣ Mode·model footer while a turn runs.
+const DIGITORN_DIAMOND = ["·", "◦", "◇", "◈", "◆", "◼", "◆", "◈", "◇", "◦"]
+const humanizeTokens = (n: number): string => {
+  if (n <= 0) return "0"
+  if (n < 1000) return String(n)
+  const trim = (v: number) => {
+    const s = v.toFixed(1)
+    return s.endsWith(".0") ? s.slice(0, -2) : s
+  }
+  return n < 1_000_000 ? trim(n / 1000) + "k" : trim(n / 1_000_000) + "M"
+}
+
 function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; last: boolean }) {
   const ctx = use()
   const local = useLocal()
   const { theme } = useTheme()
   const sync = useSync()
+  const sdk = useSDK()
   const messages = createMemo(() => sync.data.message[props.message.sessionID] ?? [])
   const model = createMemo(() => Model.name(ctx.providers(), props.message.providerID, props.message.modelID))
 
   const final = createMemo(() => {
     return props.message.finish && !["tool-calls", "unknown"].includes(props.message.finish)
+  })
+
+  // digitorn: while this (last) message's turn is running, its footer becomes the
+  // working line — the pulsing diamond + live token count (or compaction note),
+  // exactly like the old CLI. work is PUSHED via digitorn.work; running is read
+  // from the session status the adapter drives (busy ↔ idle).
+  const [work, setWork] = createSignal<{ tokens: number; exact: boolean; compacting: boolean }>({
+    tokens: 0,
+    exact: false,
+    compacting: false,
+  })
+  const running = createMemo(
+    () =>
+      Boolean(process.env.DIGITORN_URL) &&
+      props.last &&
+      sync.data.session_status[props.message.sessionID]?.type === "busy" &&
+      props.message.error?.name !== "MessageAbortedError",
+  )
+  onMount(() => {
+    if (!process.env.DIGITORN_URL) return
+    const unsub = sdk.event.on("event", (ev: any) => {
+      const p = ev?.payload
+      if (p?.type !== "digitorn.work" || p.properties?.session !== props.message.sessionID) return
+      setWork({
+        tokens: p.properties.tokens ?? 0,
+        exact: !!p.properties.exact,
+        compacting: !!p.properties.compacting,
+      })
+    })
+    onCleanup(() => unsub())
   })
 
   const duration = createMemo(() => {
@@ -1445,6 +1494,29 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
     const user = messages().find((x) => x.role === "user" && x.id === props.message.parentID)
     if (!user || !user.time) return 0
     return props.message.time.completed - user.time.created
+  })
+
+  // digitorn: live elapsed time of the RUNNING turn, shown in the working line —
+  // but only once the turn has run at least a minute (sub-minute turns stay clean).
+  // The clock ticks every second ONLY while running, anchored at the user message
+  // that opened the turn (same anchor as the completed `duration` above).
+  const [nowMs, setNowMs] = createSignal(Date.now())
+  createEffect(() => {
+    if (!running()) return
+    setNowMs(Date.now())
+    const id = setInterval(() => setNowMs(Date.now()), 1000)
+    onCleanup(() => clearInterval(id))
+  })
+  const elapsedLabel = createMemo(() => {
+    if (!running()) return ""
+    const user = messages().find((x) => x.role === "user" && x.id === props.message.parentID)
+    const start = user?.time?.created ?? props.message.time.created
+    const s = Math.floor(Math.max(0, nowMs() - start) / 1000)
+    if (s < 60) return "" // stay silent for the first minute, then start showing
+    const h = Math.floor(s / 3600)
+    const m = Math.floor((s % 3600) / 60)
+    const sec = s % 60
+    return h > 0 ? `${h}h${String(m).padStart(2, "0")}m` : `${m}m${String(sec).padStart(2, "0")}s`
   })
 
   const childShortcut = useCommandShortcut("session.child.first")
@@ -1491,26 +1563,60 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
       <Switch>
         <Match when={props.last || final() || props.message.error?.name === "MessageAbortedError"}>
           <box paddingLeft={3}>
-            <text marginTop={1}>
-              <span
-                style={{
-                  fg:
-                    props.message.error?.name === "MessageAbortedError"
-                      ? theme.textMuted
-                      : local.agent.color(props.message.agent),
-                }}
-              >
-                ▣{" "}
-              </span>{" "}
-              <span style={{ fg: theme.text }}>{Locale.titlecase(props.message.mode)}</span>
-              <span style={{ fg: theme.textMuted }}> · {model()}</span>
-              <Show when={duration()}>
-                <span style={{ fg: theme.textMuted }}> · {Locale.duration(duration())}</span>
-              </Show>
-              <Show when={props.message.error?.name === "MessageAbortedError"}>
-                <span style={{ fg: theme.textMuted }}> · interrupted</span>
-              </Show>
-            </text>
+            <Show
+              when={running()}
+              fallback={
+                // digitorn: show NOTHING at this footer when not running (no ▣ Mode·model·
+                // duration). Stock opencode keeps its footer.
+                <Show when={!process.env.DIGITORN_URL}>
+                  <text marginTop={1}>
+                    <span
+                      style={{
+                        fg:
+                          props.message.error?.name === "MessageAbortedError"
+                            ? theme.textMuted
+                            : local.agent.color(props.message.agent),
+                      }}
+                    >
+                      ▣{" "}
+                    </span>{" "}
+                    <span style={{ fg: theme.text }}>{Locale.titlecase(props.message.mode)}</span>
+                    <span style={{ fg: theme.textMuted }}> · {model()}</span>
+                    <Show when={duration()}>
+                      <span style={{ fg: theme.textMuted }}> · {Locale.duration(duration())}</span>
+                    </Show>
+                    <Show when={props.message.error?.name === "MessageAbortedError"}>
+                      <span style={{ fg: theme.textMuted }}> · interrupted</span>
+                    </Show>
+                  </text>
+                </Show>
+              }
+            >
+              {/* digitorn working line : the pulsing diamond + faint live tokens
+                  (or compaction note), in place of ▣ Mode·model while the turn runs. */}
+              <box flexDirection="row" gap={1} marginTop={1}>
+                <spinner color={theme.primary} frames={DIGITORN_DIAMOND} interval={200} />
+                <Show
+                  when={work().compacting}
+                  fallback={
+                    <Show when={work().tokens > 0}>
+                      <text attributes={TextAttributes.DIM} fg={theme.textMuted}>
+                        {(work().exact ? "" : "~") + humanizeTokens(work().tokens) + " tokens"}
+                      </text>
+                    </Show>
+                  }
+                >
+                  <text attributes={TextAttributes.DIM} fg={theme.textMuted}>
+                    ⟢ compacting context…
+                  </text>
+                </Show>
+                <Show when={elapsedLabel()}>
+                  <text attributes={TextAttributes.DIM} fg={theme.textMuted}>
+                    · {elapsedLabel()}
+                  </text>
+                </Show>
+              </box>
+            </Show>
           </box>
         </Match>
       </Switch>
@@ -2280,9 +2386,14 @@ function Task(props: ToolProps<typeof TaskTool>) {
     // 3 levels that hold in BOTH running and completed (where the whole row dims
     // to textMuted) : header = BOLD title (stands out by weight even when grey),
     // current tool = state color, everything else (desc, param, counts) = muted.
+    // A named specialist → "Explore Task" / "General Task" ; a nameless/anonymous
+    // agent (no subagent_type) → just "Subagent" (no empty " Task", no fake "General").
+    const agentLabel = props.input.subagent_type
+      ? `${Locale.titlecase(props.input.subagent_type)} Task`
+      : "Subagent"
     const header = (
       <>
-        <b>{`${Locale.titlecase(props.input.subagent_type ?? "General")} Task`}</b>
+        <b>{agentLabel}</b>
         {muted(` — ${description}`)}
       </>
     )
@@ -2328,10 +2439,12 @@ function Task(props: ToolProps<typeof TaskTool>) {
     <InlineTool
       icon="│"
       // Task always passes a truthy `complete` (the description), so InlineTool's
-      // fg() would dim it to textMuted even while running — same color as done.
-      // Force the accent while running so a live sub-agent reads as ACTIVE (accent
-      // + spinner), distinct from prose, and only dims once completed.
-      color={retry() ? theme.error : isRunning() ? theme.primary : undefined}
+      // fg() would dim the WHOLE row to textMuted (since `complete` is truthy),
+      // making the header + its muted detail the same grey once done. Force the
+      // header color in EVERY state so the layering stays consistent : accent while
+      // running, plain text when done — always distinct from the muted description/
+      // footer. (retry → error.)
+      color={retry() ? theme.error : isRunning() ? theme.primary : theme.text}
       spinner={isRunning()}
       complete={props.input.description}
       pending="Delegating..."

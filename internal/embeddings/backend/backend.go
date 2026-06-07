@@ -15,6 +15,14 @@ package backend
 
 import "context"
 
+// CrossEncoder scores (query, document) pairs for reranking : one
+// relevance score per document, higher = more relevant.
+type CrossEncoder interface {
+	Rerank(ctx context.Context, query string, docs []string) ([]float32, error)
+	Model() string
+	Close() error
+}
+
 // Backend is the inference contract.
 type Backend interface {
 	// Embed returns one [EmbeddingDim]float32 per input text.

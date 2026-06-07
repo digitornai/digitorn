@@ -31,7 +31,14 @@ const ServiceName = "digitorn.module.v1.ModuleService"
 const (
 	MethodInvoke    = "Invoke"
 	MethodManifests = "Manifests"
+	MethodTools     = "Tools"
 )
+
+// ToolsProvider is the optional extension reporting a module's runtime tools.
+// The handler type-asserts it; an impl without it returns no dynamic tools.
+type ToolsProvider interface {
+	Tools(ctx context.Context, req *ToolsRequest) (*ToolsResponse, error)
+}
 
 // RegisterService wires a Service implementation onto a gRPC server.
 // Called by the worker binary inside its worker.Run() Register hook.
@@ -47,6 +54,7 @@ var serviceDesc = grpc.ServiceDesc{
 	Methods: []grpc.MethodDesc{
 		{MethodName: MethodInvoke, Handler: invokeHandler},
 		{MethodName: MethodManifests, Handler: manifestsHandler},
+		{MethodName: MethodTools, Handler: toolsHandler},
 	},
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "internal/module/service/service.go",
@@ -77,5 +85,23 @@ func manifestsHandler(srv any, ctx context.Context, dec func(any) error, interce
 	info := &grpc.UnaryServerInfo{Server: srv, FullMethod: "/" + ServiceName + "/" + MethodManifests}
 	return interceptor(ctx, in, info, func(ctx context.Context, req any) (any, error) {
 		return srv.(Service).Manifests(ctx, req.(*ManifestsRequest))
+	})
+}
+
+func toolsHandler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+	in := new(ToolsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	tp, ok := srv.(ToolsProvider)
+	if !ok {
+		return &ToolsResponse{ModuleID: in.ModuleID}, nil
+	}
+	if interceptor == nil {
+		return tp.Tools(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{Server: srv, FullMethod: "/" + ServiceName + "/" + MethodTools}
+	return interceptor(ctx, in, info, func(ctx context.Context, req any) (any, error) {
+		return tp.Tools(ctx, req.(*ToolsRequest))
 	})
 }

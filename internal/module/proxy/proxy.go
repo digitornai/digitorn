@@ -12,6 +12,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -23,6 +24,7 @@ import (
 	"github.com/mbathepaul/digitorn/internal/domain/tool"
 	"github.com/mbathepaul/digitorn/internal/module/service"
 	"github.com/mbathepaul/digitorn/internal/worker"
+	pkgmodule "github.com/mbathepaul/digitorn/pkg/module"
 )
 
 // Picker is the minimal surface the proxy needs from a worker pool :
@@ -46,6 +48,11 @@ type ProxyModule struct {
 	// enough for heavy LSP / MCP calls, short enough that a wedged
 	// worker doesn't hold a runtime turn forever.
 	invokeTimeout time.Duration
+
+	// authResolver, when set (the mcp proxy only), resolves a per-user
+	// credential before each call and either injects it (req.AuthContext) or
+	// short-circuits the call with a blocking needs-auth result. nil disables it.
+	authResolver service.AuthResolver
 }
 
 // Options configures a ProxyModule. ModuleID + Kind are required ;
@@ -65,6 +72,10 @@ type Options struct {
 
 	// Logger for transport-level errors. Defaults to slog.Default.
 	Logger *slog.Logger
+
+	// AuthResolver resolves per-user MCP credentials. Set only for the mcp
+	// module; nil for every other worker-hosted module.
+	AuthResolver service.AuthResolver
 }
 
 // New constructs a ProxyModule. It fetches the worker's manifest list
@@ -128,6 +139,7 @@ func New(ctx context.Context, opts Options) (*ProxyModule, error) {
 		picker:        opts.Picker,
 		logger:        logger,
 		invokeTimeout: timeout,
+		authResolver:  opts.AuthResolver,
 	}, nil
 }
 
@@ -184,6 +196,27 @@ func (p *ProxyModule) Invoke(ctx context.Context, toolName string, params []byte
 	if id, ok := tool.IdentityFromContext(ctx); ok {
 		req.AppID, req.SessionID, req.UserID, req.AgentID = id.AppID, id.SessionID, id.UserID, id.AgentID
 	}
+	// Forward the app's resolved per-module config so the worker-hosted
+	// module reads its app-specific configuration on this call.
+	if cfg := pkgmodule.ModuleConfigFrom(ctx); len(cfg) > 0 {
+		if b, err := json.Marshal(cfg); err == nil {
+			req.Config = b
+		}
+	}
+	// Resolve the per-user MCP credential daemon-side (mcp proxy only). The
+	// resolver either injects a token (req.AuthContext) or returns a challenge,
+	// in which case the call is blocked here and never reaches the worker — so
+	// the worker never mints auth URLs and never sees a missing-token decision.
+	if p.authResolver != nil && p.manifest.ID == "mcp" && req.UserID != "" {
+		ac, challenge, rerr := p.authResolver.ResolveAuth(ctx, req.UserID, req.AppID, req.ModuleID, toolName)
+		if rerr != nil {
+			return tool.Result{Success: false, Error: "auth resolution failed: " + rerr.Error()}, nil
+		}
+		if challenge != nil {
+			return needsAuthResult(challenge), nil
+		}
+		req.AuthContext = ac
+	}
 	if dl, ok := ctx.Deadline(); ok {
 		req.DeadlineMs = time.Until(dl).Milliseconds()
 	}
@@ -206,6 +239,55 @@ func (p *ProxyModule) Invoke(ctx context.Context, toolName string, params []byte
 	// Worker-shaped result : pass through (Success may be true or
 	// false depending on what the module returned).
 	return out.Result, nil
+}
+
+// Tools fetches the module's runtime tools from the worker, forwarding identity
+// + config. Returns nil on transport failure (daemon falls back to the manifest).
+func (p *ProxyModule) Tools(ctx context.Context) []tool.Spec {
+	if p.invokeTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, p.invokeTimeout)
+		defer cancel()
+	}
+	conn, err := p.picker.Pick(ctx, p.kind)
+	if err != nil {
+		return nil
+	}
+	req := &service.ToolsRequest{ModuleID: p.manifest.ID}
+	if id, ok := tool.IdentityFromContext(ctx); ok {
+		req.AppID, req.UserID, req.AgentID = id.AppID, id.UserID, id.AgentID
+	}
+	if cfg := pkgmodule.ModuleConfigFrom(ctx); len(cfg) > 0 {
+		if b, err := json.Marshal(cfg); err == nil {
+			req.Config = b
+		}
+	}
+	out := new(service.ToolsResponse)
+	if err := conn.GRPC().Invoke(ctx,
+		"/"+service.ServiceName+"/"+service.MethodTools,
+		req, out,
+		grpc.CallContentSubtype(service.CodecName),
+	); err != nil {
+		return nil
+	}
+	return out.Tools
+}
+
+// needsAuthResult builds the canonical blocking result for a missing/expired MCP
+// credential. The metadata rides to the client (which drives the OAuth flow) and
+// is invisible to the model; the Error text is what the model sees.
+func needsAuthResult(c *service.AuthChallenge) tool.Result {
+	return tool.Result{
+		Success: false,
+		Error:   "requires authentication for " + c.Provider,
+		Metadata: map[string]any{
+			"requires_oauth": true,
+			"provider":       c.Provider,
+			"server_id":      c.ServerID,
+			"auth_url":       c.AuthURL,
+			"state":          c.State,
+		},
+	}
 }
 
 // newRequestID returns a 16-hex-character random id for tracing.

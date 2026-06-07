@@ -1,6 +1,7 @@
 package gitrepo
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -120,9 +121,7 @@ func TestEdge_MultiHunkDiff(t *testing.T) {
 		sb.WriteByte('\n')
 	}
 	writeFile(t, dir, "big.txt", sb.String())
-	if _, err := r.Commit("base", nil); err != nil {
-		t.Fatal(err)
-	}
+	commitAll(t, r, "base")
 	// change line 2 and line 28 -> two separate hunks
 	lines := strings.Split(sb.String(), "\n")
 	lines[1] = "CHANGED EARLY"
@@ -144,9 +143,7 @@ func TestEdge_MultiHunkDiff(t *testing.T) {
 func TestEdge_RenameShowsAddAndDelete(t *testing.T) {
 	r, dir := fresh(t)
 	writeFile(t, dir, "old.txt", "same content\n")
-	if _, err := r.Commit("base", nil); err != nil {
-		t.Fatal(err)
-	}
+	commitAll(t, r, "base")
 	if err := os.Remove(filepath.Join(dir, "old.txt")); err != nil {
 		t.Fatal(err)
 	}
@@ -166,9 +163,7 @@ func TestLifecycle_ReopenIsDurable(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeFile(t, dir, "a.txt", "v1\n")
-	if _, err := r1.Commit("ship a", nil); err != nil {
-		t.Fatal(err)
-	}
+	commitAll(t, r1, "ship a")
 
 	// Simulate a daemon restart: a brand-new Repo handle on the same workdir.
 	r2, err := Open(dir)
@@ -224,9 +219,7 @@ func TestLifecycle_MultipleCommitsAdvanceHead(t *testing.T) {
 	r, dir := fresh(t)
 	for i := 0; i < 3; i++ {
 		writeFile(t, dir, "f.txt", strings.Repeat("x\n", i+1))
-		if _, err := r.Commit("step", nil); err != nil {
-			t.Fatal(err)
-		}
+		commitAll(t, r, "step")
 		if cs := changeSet(t, r); len(cs) != 0 {
 			t.Fatalf("clean expected after commit %d, got %v", i, cs)
 		}
@@ -299,7 +292,7 @@ func TestIsolation_UserRepoHistoryIntact(t *testing.T) {
 	r, _ := Open(dir)
 	r.EnsureBaseline()
 	writeFile(t, dir, "agent.txt", "a\n")
-	r.Commit("agent validates", nil) // shadow commit must not leak into user repo
+	commitAll(t, r, "agent validates") // shadow commit must not leak into user repo
 
 	headAfter, _ := userRepo.Head()
 	if headBefore.Hash() != headAfter.Hash() {
@@ -334,14 +327,13 @@ func TestRobust_FileDiffMissingPath(t *testing.T) {
 	}
 }
 
-func TestRobust_CommitNothingIsEmptyCommit(t *testing.T) {
+// A commit with nothing approved must NOT advance the baseline — the approval
+// gate is the whole point. A clean tree returns ErrNothingStaged, never an empty
+// commit.
+func TestRobust_CommitNothingStagedErrors(t *testing.T) {
 	r, _ := fresh(t)
-	sha, err := r.Commit("", nil) // clean tree
-	if err != nil {
-		t.Fatalf("empty commit should be allowed: %v", err)
-	}
-	if sha == "" {
-		t.Fatal("empty commit returned no sha")
+	if _, err := r.Commit("", nil); !errors.Is(err, ErrNothingStaged) {
+		t.Fatalf("clean-tree commit must return ErrNothingStaged, got %v", err)
 	}
 }
 

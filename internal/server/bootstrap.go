@@ -27,6 +27,7 @@ import (
 	"github.com/mbathepaul/digitorn/internal/embeddings"
 	"github.com/mbathepaul/digitorn/internal/llm"
 	"github.com/mbathepaul/digitorn/internal/middlewareplugin"
+	"github.com/mbathepaul/digitorn/internal/module/gateway"
 	"github.com/mbathepaul/digitorn/internal/persistence/db"
 	"github.com/mbathepaul/digitorn/internal/ports"
 	"github.com/mbathepaul/digitorn/internal/runtime"
@@ -43,7 +44,10 @@ import (
 	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
 	"github.com/mbathepaul/digitorn/internal/runtime/skills"
 	"github.com/mbathepaul/digitorn/internal/runtime/turn"
+	"github.com/mbathepaul/digitorn/internal/server/mcpoauth"
 	"github.com/mbathepaul/digitorn/internal/tokenizer"
+	"github.com/mbathepaul/digitorn/internal/userskills"
+	"github.com/mbathepaul/digitorn/internal/usersnippets"
 	"github.com/mbathepaul/digitorn/internal/worker"
 	"github.com/mbathepaul/digitorn/pkg/module"
 
@@ -65,6 +69,7 @@ type Daemon struct {
 	sessionPaths    sessionstore.Paths
 	envelopeBuilder *sessionstore.EnvelopeBuilder
 	bridge          *SocketIOBridge
+	workspaceLive   *workspaceLive // debounced workspace-change notifier (also reused by the REST file save)
 
 	jwks          *JWKS
 	jwtVerifier   *JWTVerifier
@@ -74,13 +79,20 @@ type Daemon struct {
 	llmClient        *llm.Client
 	embeddingsClient *embeddings.Client
 	tokenizerClient  *tokenizer.Client
+	serviceGateway   *gateway.Server                       // worker→daemon service bridge (embeddings, …)
+	gatewayAddr      string                                // gateway loopback addr handed to worker pools
+	gatewaySecret    string                                // gateway's dedicated handshake secret
 	contextBG        atomic.Pointer[contextsvc.Background] // background EXACT context recompute (CTX-7)
 	contextTracker   *contextsvc.Tracker                   // freshest per-session context variable (engine + hooks read it)
 	ctxParts         sync.Map                              // sessionID -> ctxParts (build-time system+tools for the recount breakdown)
 	agents           *agent.Manager
 
-	appCompiler *compiler.Compiler
-	appMgr      appmgr.Manager
+	appCompiler  *compiler.Compiler
+	appMgr       appmgr.Manager
+	userSkills   *userskills.Store
+	userSnippets *usersnippets.Store
+	mcpCatalog   *mcpCatalog       // materializes worker-hosted MCP tools as native actions
+	mcpOAuth     *mcpoauth.Service // daemon-side MCP OAuth (token store, CSRF flow); nil if the key file is unavailable
 
 	engine           runtime.Runner
 	sessionRunner    *sessionRunner // serializes + coalesces agent turns per session (user + proactive wakes)
@@ -90,6 +102,11 @@ type Daemon struct {
 
 	secretsOnce sync.Once
 	secrets     *secretStore
+
+	previewSecret     []byte // process-wide HMAC key for iframe-loadable preview tokens
+	previewSecretOnce sync.Once
+	previewLastKey    sync.Map                           // session root -> last pushed (entry|mtime) — dedup web_preview:attached
+	activePreview     atomic.Pointer[activePreviewState] // build the iframe currently shows — serves its root-absolute assets (/assets/*)
 
 	once sync.Once
 }
@@ -202,6 +219,15 @@ func Build(cfg *config.Config) (*Daemon, error) {
 		return nil, fmt.Errorf("bootstrap: appmgr: %w", err)
 	}
 
+	// MCP OAuth: a process-wide sealer over a key file backs the encrypted token
+	// store. A key-file failure disables OAuth (handlers 503) without blocking boot.
+	var mcpOAuth *mcpoauth.Service
+	if sealer, serr := mcpoauth.NewSealer(mcpoauth.DefaultKeyPath()); serr != nil {
+		logger.Warn("bootstrap: mcp oauth disabled (key file unavailable)", slog.String("error", serr.Error()))
+	} else {
+		mcpOAuth = mcpoauth.NewService(gdb, sealer)
+	}
+
 	d := &Daemon{
 		cfg:             cfg,
 		logger:          logger,
@@ -221,6 +247,9 @@ func Build(cfg *config.Config) (*Daemon, error) {
 		workerMgr:       wmgr,
 		appCompiler:     appCompiler,
 		appMgr:          am,
+		userSkills:      userskills.NewStore(gdb),
+		userSnippets:    usersnippets.NewStore(gdb),
+		mcpOAuth:        mcpOAuth,
 	}
 	// Let the bridge resolve a session's window so a joining client gets the last
 	// real context gauge on open (footer ctx used/window before any new turn).
@@ -370,8 +399,13 @@ func (d *Daemon) buildEngine() {
 	// module registry the dispatcher executes against, so gates 2/3 see
 	// the real spec. Meta-tools and system modules bypass before any
 	// lookup, so this never blocks context_builder primitives.
+	mcpCat := newMCPCatalog(d.modules, d.appMgr)
+	d.mcpCatalog = mcpCat // shared with the OAuth handlers (server-config lookup)
+	if d.mcpOAuth != nil {
+		d.mcpOAuth.SetServerAuthLookup(d.mcpServerAuthLookup)
+	}
 	eng.PolicyEvaluator = &runtime.DefaultPolicyEvaluator{
-		Lookup: registryToolSpecs{Registry: d.modules},
+		Lookup: registryToolSpecs{Registry: d.modules, MCP: mcpCat},
 	}
 
 	// WD : per-session workdir confinement. The engine attaches the resolved
@@ -435,7 +469,7 @@ func (d *Daemon) buildEngine() {
 	// engine populated via Context.BuildFor at the start of the
 	// turn, guaranteeing the meta-tools see the same tool universe
 	// the LLM was offered. RT-3 isolation contract enforced.
-	actions := registryActions{Registry: d.modules, Apps: d.appMgr}
+	actions := registryActions{Registry: d.modules, Apps: d.appMgr, MCP: mcpCat}
 	contextBuilder := wiring.New(actions)
 	// CE-7 : enable semantic search when an embeddings worker is
 	// up. Falls back silently to keyword-only when nil per the
@@ -451,6 +485,15 @@ func (d *Daemon) buildEngine() {
 	eng.Context = contextBuilder
 
 	busAdapter := dispatch.NewBusAdapter(d.bus)
+	// Per-app module config delivery : resolve tools.modules.<id>.config for
+	// each call so a shared (in-proc or worker) module reads its app-specific
+	// configuration. The worker proxy forwards it across the boundary.
+	busAdapter.ModuleConfigs = appModuleConfigSource{apps: d.appMgr}
+	// In-proc embeddings/rerank : in-proc modules (filesystem code-grep) reach
+	// the embeddings client the same way worker modules reach the gateway. Lazy
+	// (reads d.embeddingsClient at call time — wired later in startWorkers).
+	busAdapter.Embedder = daemonEmbedder{d: d}
+	busAdapter.Reranker = daemonReranker{d: d}
 	// MW-C3 : wire the per-app tool-call middleware onion. The source resolves
 	// (and caches) one pipeline per (app, module) from the app's
 	// tools.modules.<id>.middleware config, so retry / timeout /
@@ -480,6 +523,7 @@ func (d *Daemon) buildEngine() {
 	if busAdapter != nil {
 		if wl := d.newWorkspaceLive(); wl != nil {
 			busAdapter.FileChangeNotifier = wl
+			d.workspaceLive = wl // reused by the REST file-save route for the live git refresh
 		}
 	}
 
@@ -534,9 +578,31 @@ func (d *Daemon) buildEngine() {
 		eng.LLMSem = make(chan struct{}, n)
 	}
 
-	// P-1d : SkillLoader resolves use_skill /commands declared in
-	// the app's dev.skills[] block to their markdown content.
-	skillLoader := skills.New(d.appMgr)
+	// P-1d : SkillLoader resolves use_skill /commands. Two layers in one
+	// registry — the caller's own authored skills (DB-backed, per user × app)
+	// take precedence, then the app's bundled dev.skills[] markdown. The user
+	// layer is adapted here so the skills package stays persistence-free.
+	userSkills := d.userSkills
+	skillLoader := skills.NewLayered(
+		skills.UserLoaderFunc(func(ctx context.Context, appID, userID, command string) (meta.SkillEntry, bool, error) {
+			sk, found, err := userSkills.GetByName(ctx, userID, appID, command)
+			if err != nil || !found {
+				return meta.SkillEntry{}, found, err
+			}
+			return meta.SkillEntry{
+				Command:     "/" + sk.Name,
+				Description: sk.Description,
+				Content:     sk.Instructions,
+			}, true, nil
+		}),
+		skills.New(d.appMgr),
+	)
+
+	// User-driven path : a message carrying a `/command` skill makes the engine
+	// inject that skill's instructions as a forced directive (injectSkillDirective).
+	// Same layered loader as the agent's use_skill tool, adapted to the runtime's
+	// SkillContent shape (runtime can't import meta).
+	eng.SkillLoader = skillContentAdapter{inner: skillLoader}
 
 	eng.Dispatcher = &meta.MetaDispatcher{
 		IndexLookup: func(appID, agentID string) *index.ToolIndex {
@@ -738,6 +804,10 @@ func (d *Daemon) Shutdown() error {
 			if err := d.workerMgr.Stop(ctx); err != nil {
 				d.logger.Warn("daemon: worker manager stop error", slog.String("err", err.Error()))
 			}
+		}
+		// Gateway after the workers that dial it are gone.
+		if d.serviceGateway != nil {
+			d.serviceGateway.Stop()
 		}
 		if d.jwks != nil {
 			_ = d.jwks.Stop(ctx)

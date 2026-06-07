@@ -38,6 +38,7 @@ import (
 	ort "github.com/yalue/onnxruntime_go"
 
 	"github.com/mbathepaul/digitorn/internal/embeddings/backend/tokenizer"
+	"github.com/mbathepaul/digitorn/internal/embeddings/models"
 )
 
 // envOnce guards the one-time onnxruntime environment initialisation.
@@ -54,12 +55,14 @@ var (
 type ONNXBackend struct {
 	mu       sync.Mutex
 	session  *ort.DynamicAdvancedSession
-	tok      *tokenizer.Unigram
+	tok      tokenizer.Tokenizer
 	inNames  []string // model input order, restricted to those we feed
 	feedType bool     // model declares token_type_ids
 	outName  string
 	dim      int
-	device   string // execution provider actually in use (cpu/directml/cuda/coreml)
+	pooling  models.Pooling // mean (sentence-transformers) or cls (BGE)
+	name     string         // canonical model id echoed to callers
+	device   string         // execution provider actually in use (cpu/directml/cuda/coreml)
 }
 
 // NewONNX loads the doc-default full-precision graph (model.onnx).
@@ -68,10 +71,23 @@ func NewONNX(modelDir string) (Backend, error) {
 }
 
 // NewONNXWithFile loads the named ONNX graph + tokenizer from modelDir
-// and builds a persistent session. modelFile is "model.onnx" (default)
-// or "model_quantized.onnx" (the int8 variant — ~4x smaller/faster,
-// same 384-dim output and tokenizer).
+// for the doc-default model (minilm, mean pooling, 384). Kept for the
+// historic single-model path and tests ; multi-model callers use
+// NewONNXFromSpec.
 func NewONNXWithFile(modelDir, modelFile string) (Backend, error) {
+	spec, _ := models.Resolve(models.Default)
+	return NewONNXFromSpec(modelDir, modelFile, spec)
+}
+
+// NewONNXFromSpec loads the named ONNX graph + tokenizer from modelDir
+// and builds a persistent session configured for the given model Spec
+// (output dimension, pooling strategy, tokenizer family). modelFile is
+// "model.onnx" (default) or "model_quantized.onnx" (the int8 variant).
+//
+// A model whose tokenizer family this backend cannot decode is refused
+// up front : serving it with the wrong tokenizer would emit silently
+// wrong vectors, which is worse than a clear error.
+func NewONNXFromSpec(modelDir, modelFile string, spec models.Spec) (Backend, error) {
 	if modelDir == "" {
 		return nil, errors.New("onnx: modelDir required")
 	}
@@ -86,7 +102,7 @@ func NewONNXWithFile(modelDir, modelFile string) (Backend, error) {
 		return nil, fmt.Errorf("onnx: init env: %w", envErr)
 	}
 
-	tok, err := tokenizer.NewUnigram(filepath.Join(modelDir, "tokenizer.json"))
+	tok, err := tokenizer.Load(filepath.Join(modelDir, "tokenizer.json"))
 	if err != nil {
 		return nil, fmt.Errorf("onnx: tokenizer: %w", err)
 	}
@@ -132,8 +148,14 @@ func NewONNXWithFile(modelDir, modelFile string) (Backend, error) {
 	if outName == "" {
 		return nil, fmt.Errorf("onnx: model declares no outputs")
 	}
+	// Prefer the graph's declared hidden size ; fall back to the Spec's
+	// when the export hides it behind a dynamic axis. A graph that
+	// disagrees with the Spec is a packaging error — fail loud.
 	if dim == 0 {
-		dim = 384 // doc-default hidden size
+		dim = spec.Dim
+	}
+	if spec.Dim > 0 && dim != spec.Dim {
+		return nil, fmt.Errorf("onnx: model %s graph dim=%d disagrees with spec dim=%d", spec.ID, dim, spec.Dim)
 	}
 
 	// Pick an execution provider (GPU when requested + available) and
@@ -157,6 +179,14 @@ func NewONNXWithFile(modelDir, modelFile string) (Backend, error) {
 	}
 	fmt.Fprintf(os.Stderr, "worker-embeddings: execution provider = %s\n", ep)
 
+	pooling := spec.Pooling
+	if pooling == "" {
+		pooling = models.PoolingMean
+	}
+	name := spec.ID
+	if name == "" {
+		name = models.Default
+	}
 	return &ONNXBackend{
 		session:  session,
 		tok:      tok,
@@ -164,6 +194,8 @@ func NewONNXWithFile(modelDir, modelFile string) (Backend, error) {
 		feedType: feedType,
 		outName:  outName,
 		dim:      dim,
+		pooling:  pooling,
+		name:     name,
 		device:   ep,
 	}, nil
 }
@@ -245,7 +277,7 @@ func appendProvider(o *ort.SessionOptions, ep string) error {
 	}
 }
 
-func (b *ONNXBackend) Model() string  { return "paraphrase-multilingual-MiniLM-L12-v2" }
+func (b *ONNXBackend) Model() string  { return b.name }
 func (b *ONNXBackend) Dimension() int { return b.dim }
 
 // Device reports the execution provider in use (cpu/directml/cuda/coreml).
@@ -327,9 +359,15 @@ func (b *ONNXBackend) embedOne(text string) ([]float32, error) {
 		return nil, runErr
 	}
 
-	// Mean-pool over the sequence dimension, weighted by attention mask.
 	raw := outT.GetData()
 	vec := make([]float32, b.dim)
+	if b.pooling == models.PoolingCLS {
+		// CLS pooling : the first token's hidden state is the sentence
+		// representation (BGE retrieval convention).
+		copy(vec, raw[:b.dim])
+		return vec, nil
+	}
+	// Mean-pool over the sequence dimension, weighted by attention mask.
 	var denom float32
 	for t := 0; t < seq; t++ {
 		m := float32(mask[t])
@@ -345,6 +383,168 @@ func (b *ONNXBackend) embedOne(text string) ([]float32, error) {
 		}
 	}
 	return vec, nil
+}
+
+// ONNXCrossEncoder runs a sentence-pair classification graph (reranker)
+// and returns one relevance logit per (query, doc) pair.
+type ONNXCrossEncoder struct {
+	mu       sync.Mutex
+	session  *ort.DynamicAdvancedSession
+	tok      tokenizer.Tokenizer
+	inNames  []string
+	feedType bool
+	outName  string
+	outDim   int
+	name     string
+	device   string
+}
+
+// NewONNXCrossEncoder loads a cross-encoder graph + tokenizer for the
+// given Spec. Only the Unigram tokenizer family is supported.
+func NewONNXCrossEncoder(modelDir, modelFile string, spec models.Spec) (CrossEncoder, error) {
+	if modelDir == "" {
+		return nil, errors.New("onnx: modelDir required")
+	}
+	if modelFile == "" {
+		modelFile = "model.onnx"
+	}
+	envOnce.Do(func() {
+		resolveSharedLibrary()
+		envErr = ort.InitializeEnvironment()
+	})
+	if envErr != nil {
+		return nil, fmt.Errorf("onnx: init env: %w", envErr)
+	}
+	tok, err := tokenizer.Load(filepath.Join(modelDir, "tokenizer.json"))
+	if err != nil {
+		return nil, fmt.Errorf("onnx: tokenizer: %w", err)
+	}
+	modelPath := filepath.Join(modelDir, modelFile)
+	inInfo, outInfo, err := ort.GetInputOutputInfo(modelPath)
+	if err != nil {
+		return nil, fmt.Errorf("onnx: inspect %q: %w", modelPath, err)
+	}
+	feedable := map[string]bool{"input_ids": true, "attention_mask": true, "token_type_ids": true}
+	var inNames []string
+	feedType := false
+	for _, in := range inInfo {
+		if feedable[in.Name] {
+			inNames = append(inNames, in.Name)
+			if in.Name == "token_type_ids" {
+				feedType = true
+			}
+		}
+	}
+	if len(inNames) == 0 {
+		return nil, fmt.Errorf("onnx: reranker declares no recognised inputs")
+	}
+	outName, outDim := "", 1
+	for _, o := range outInfo {
+		if o.Name == "logits" {
+			outName = o.Name
+			if n := len(o.Dimensions); n > 0 && o.Dimensions[n-1] > 0 {
+				outDim = int(o.Dimensions[n-1])
+			}
+			break
+		}
+	}
+	if outName == "" && len(outInfo) > 0 {
+		outName = outInfo[0].Name
+	}
+	if outName == "" {
+		return nil, fmt.Errorf("onnx: reranker declares no outputs")
+	}
+	opts, ep := buildSessionOptions(deviceFromEnv())
+	session, err := ort.NewDynamicAdvancedSession(modelPath, inNames, []string{outName}, opts)
+	if err != nil && opts != nil {
+		fmt.Fprintf(os.Stderr, "worker-embeddings: reranker %s EP unavailable (%v); CPU\n", ep, err)
+		opts.Destroy()
+		opts, ep = nil, "cpu"
+		session, err = ort.NewDynamicAdvancedSession(modelPath, inNames, []string{outName}, nil)
+	}
+	if opts != nil {
+		opts.Destroy()
+	}
+	if err != nil {
+		return nil, fmt.Errorf("onnx: create reranker session: %w", err)
+	}
+	name := spec.ID
+	if name == "" {
+		name = "cross-encoder"
+	}
+	return &ONNXCrossEncoder{
+		session: session, tok: tok, inNames: inNames, feedType: feedType,
+		outName: outName, outDim: outDim, name: name, device: ep,
+	}, nil
+}
+
+func (c *ONNXCrossEncoder) Model() string { return c.name }
+
+func (c *ONNXCrossEncoder) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.session != nil {
+		err := c.session.Destroy()
+		c.session = nil
+		return err
+	}
+	return nil
+}
+
+func (c *ONNXCrossEncoder) Rerank(ctx context.Context, query string, docs []string) ([]float32, error) {
+	out := make([]float32, len(docs))
+	for i, d := range docs {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		s, err := c.scoreOne(query, d)
+		if err != nil {
+			return nil, fmt.Errorf("onnx: rerank doc[%d]: %w", i, err)
+		}
+		out[i] = s
+	}
+	return out, nil
+}
+
+func (c *ONNXCrossEncoder) scoreOne(query, doc string) (float32, error) {
+	ids, mask, types, seq := c.tok.EncodePair(query, doc)
+	shape := ort.NewShape(1, int64(seq))
+	idsT, err := ort.NewTensor(shape, ids)
+	if err != nil {
+		return 0, err
+	}
+	defer idsT.Destroy()
+	maskT, err := ort.NewTensor(shape, mask)
+	if err != nil {
+		return 0, err
+	}
+	defer maskT.Destroy()
+	byName := map[string]ort.Value{"input_ids": idsT, "attention_mask": maskT}
+	if c.feedType {
+		typesT, err := ort.NewTensor(shape, types)
+		if err != nil {
+			return 0, err
+		}
+		defer typesT.Destroy()
+		byName["token_type_ids"] = typesT
+	}
+	inputs := make([]ort.Value, len(c.inNames))
+	for i, n := range c.inNames {
+		inputs[i] = byName[n]
+	}
+	outT, err := ort.NewEmptyTensor[float32](ort.NewShape(1, int64(c.outDim)))
+	if err != nil {
+		return 0, err
+	}
+	defer outT.Destroy()
+
+	c.mu.Lock()
+	runErr := c.session.Run(inputs, []ort.Value{outT})
+	c.mu.Unlock()
+	if runErr != nil {
+		return 0, runErr
+	}
+	return outT.GetData()[0], nil
 }
 
 func l2Normalize(v []float32) {

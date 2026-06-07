@@ -189,6 +189,9 @@ func hydrateFromSnapshot(s *SessionState, snap *SessionSnapshot) {
 	s.Title = snap.Title
 	s.Workspace = snap.Workspace
 	s.Workdir = snap.Workdir
+	s.EntryAgent = snap.EntryAgent
+	s.ContextExtra = snap.ContextExtra
+	s.ModelOverrides = snap.ModelOverrides
 	s.TurnCount = snap.TurnCount
 	s.Interrupted = snap.Interrupted
 	s.ActiveMode = snap.ActiveMode

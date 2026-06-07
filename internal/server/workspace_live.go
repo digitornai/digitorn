@@ -17,6 +17,13 @@ import (
 // status + ONE push, so a heavy edit never fans out into a storm of refreshes.
 const workspaceLiveDebounce = 250 * time.Millisecond
 
+// workspaceLiveMaxCoalesce caps how long a continuous burst of writes may delay
+// a push. Rapid writes still coalesce (one git status per quiet window), but a
+// long uninterrupted edit (a scaffold, a multi_edit, parallel writes) flushes at
+// least this often instead of only once the burst ends — so the web streams the
+// latest state while the agent works, never waiting for the turn to finish.
+const workspaceLiveMaxCoalesce = 750 * time.Millisecond
+
 // workspaceChangesTimeout bounds the background git status so a pathological
 // repo can never pin a goroutine forever.
 const workspaceChangesTimeout = 30 * time.Second
@@ -37,8 +44,17 @@ type workspaceLive struct {
 	// repo). Injected so tests don't need a real repo, and so it moves to a
 	// worker pool later without touching this debouncer.
 	changes func(ctx context.Context, workdir string) ([]sessionstore.WorkspaceChangedFile, error)
-	log     *slog.Logger
-	window  time.Duration
+	// previewPush re-resolves + pushes the live preview URL (web_preview:attached)
+	// for the session root, off the same debounced workspace-change signal. nil in
+	// tests / when realtime is absent.
+	previewPush func(ctx context.Context, root string)
+	// diagnosticsPush re-runs the lsp module over the changed files and streams
+	// the result to the session's Problems panel (diagnostics channel), off the
+	// same debounced signal. nil in tests / when realtime is absent.
+	diagnosticsPush func(ctx context.Context, root string, changed []string)
+	log             *slog.Logger
+	window          time.Duration
+	maxWait         time.Duration
 
 	mu   sync.Mutex
 	pend map[string]*wsPend // session-root -> in-flight debounce state
@@ -50,6 +66,7 @@ type workspaceLive struct {
 type wsPend struct {
 	workdir string
 	timer   *time.Timer
+	first   time.Time // start of the current coalesce window (for the max-wait cap)
 	running bool
 	again   bool
 }
@@ -61,12 +78,15 @@ func (d *Daemon) newWorkspaceLive() *workspaceLive {
 		return nil
 	}
 	return &workspaceLive{
-		rt:      d.rt,
-		builder: d.envelopeBuilder,
-		changes: d.workspaceChangedFiles,
-		log:     d.logger,
-		window:  workspaceLiveDebounce,
-		pend:    make(map[string]*wsPend),
+		rt:              d.rt,
+		builder:         d.envelopeBuilder,
+		changes:         d.workspaceChangedFiles,
+		previewPush:     d.pushPreviewSource,
+		diagnosticsPush: d.pushDiagnostics,
+		log:             d.logger,
+		window:          workspaceLiveDebounce,
+		maxWait:         workspaceLiveMaxCoalesce,
+		pend:            make(map[string]*wsPend),
 	}
 }
 
@@ -87,16 +107,20 @@ func (l *workspaceLive) FileChanged(sessionID, workdir string) {
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	now := time.Now()
 	if p := l.pend[root]; p != nil {
 		p.workdir = workdir
-		if p.running {
+		switch {
+		case p.running:
 			p.again = true // a write landed mid-refresh: refresh once more after.
-		} else {
+		case now.Sub(p.first) >= l.maxWait:
+			p.timer.Reset(0) // burst longer than the cap: flush now, don't keep deferring.
+		default:
 			p.timer.Reset(l.window)
 		}
 		return
 	}
-	p := &wsPend{workdir: workdir}
+	p := &wsPend{workdir: workdir, first: now}
 	p.timer = time.AfterFunc(l.window, func() { l.fire(root) })
 	l.pend[root] = p
 }
@@ -123,6 +147,7 @@ func (l *workspaceLive) fire(root string) {
 		p.running = false
 		if p.again {
 			p.again = false
+			p.first = time.Now()    // fresh coalesce window for the post-flush burst
 			p.timer.Reset(l.window) // a write arrived during the refresh — re-run.
 		} else {
 			delete(l.pend, root)
@@ -155,6 +180,22 @@ func (l *workspaceLive) fire(root string) {
 	// (one session room only), best-effort.
 	if err := l.rt.Emit(ctx, bridgeNamespace, "session:"+root, "event", env); err != nil && l.log != nil {
 		l.log.Debug("workspace live emit failed", "root", root, "err", err.Error())
+	}
+
+	// Same debounced signal also refreshes the live preview source: re-resolve the
+	// built entry and push web_preview:attached so the iframe reloads — no polling.
+	if l.previewPush != nil {
+		l.previewPush(ctx, root)
+	}
+
+	// Same debounced signal feeds the Problems panel: re-diagnose the changed
+	// source files and stream LSP errors/warnings on the diagnostics channel.
+	if l.diagnosticsPush != nil && len(files) > 0 {
+		paths := make([]string, 0, len(files))
+		for _, f := range files {
+			paths = append(paths, f.Path)
+		}
+		l.diagnosticsPush(ctx, root, paths)
 	}
 }
 

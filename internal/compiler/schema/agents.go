@@ -124,9 +124,16 @@ type AgentPoolConfig struct {
 }
 
 type Brain struct {
-	ProviderID       string         `yaml:"provider_id,omitempty"`
-	Provider         string         `yaml:"provider,omitempty"`
+	ProviderID string `yaml:"provider_id,omitempty"`
+	Provider   string `yaml:"provider,omitempty"`
+	// Model is the DEFAULT model. Kind is the modality this brain operates on
+	// (chat|image|audio|video|embedding) — it constrains which models a session
+	// may switch to. Models lists the declared alternatives (same provider): in
+	// direct/BYOK mode those are the ONLY switchable targets ; in gateway mode a
+	// session may switch to ANY gateway model whose kind == Kind.
 	Model            string         `yaml:"model,omitempty"`
+	Kind             string         `yaml:"kind,omitempty"`
+	Models           []string       `yaml:"models,omitempty"`
 	Backend          Backend        `yaml:"backend,omitempty"`
 	Config           map[string]any `yaml:"config,omitempty"`
 	Credential       any            `yaml:"credential,omitempty"`

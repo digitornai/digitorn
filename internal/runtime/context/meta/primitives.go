@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"runtime/debug"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/mbathepaul/digitorn/internal/llm"
@@ -64,20 +65,27 @@ type AskUserRequest struct {
 	Content       string           // optional reviewable / editable markdown
 	Choices       []string         // optional clickable choices (buttons / dropdown)
 	AllowMultiple bool             // with Choices : user may pick several
+	AllowCustom   bool             // with proposals : the user may type an answer not offered
+	MinSelect     int              // multi-select : minimum picks (0 = no floor)
+	MaxSelect     int              // multi-select : maximum picks (0 = no cap)
+	Default       string           // pre-filled answer for a text / single-choice question
+	Placeholder   string           // hint shown in an empty text input
+	Multiline     bool             // text answer spans multiple lines
 	Form          []map[string]any // optional structured form fields
 	TimeoutSecs   float64          // 0 = bridge default
 }
 
 // SkillLoader resolves a slash command (e.g. "/commit") to a skill
-// entry the agent loads as a workflow. The loader matches against
-// the app's compiled `dev.skills[]` entries — the canonical source
-// of truth per docs-site/language/21-skills.md.
+// entry the agent loads as a workflow. Resolution layers two sources :
+// the caller's own authored skills (per user × app) take precedence,
+// then the app's compiled `dev.skills[]` entries (the canonical app
+// source per docs-site/language/21-skills.md).
 //
-// `command` is matched case-sensitively against SkillEntry.Command.
-// The leading "/" is accepted both with and without — both forms
-// resolve to the same entry.
+// `command` is matched against SkillEntry.Command with the leading "/"
+// optional. `userID` scopes the user-authored layer ; it's ignored by
+// loaders that only serve app skills.
 type SkillLoader interface {
-	Load(ctx context.Context, appID, command string) (SkillEntry, error)
+	Load(ctx context.Context, appID, userID, command string) (SkillEntry, error)
 }
 
 // SkillEntry is what use_skill returns to the agent. Matches the
@@ -449,7 +457,22 @@ func (m *MetaDispatcher) handleAskUser(ctx context.Context, call runtime.ToolInv
 	timeout, _ := call.Args["timeout"].(float64)
 	choices := stringSliceArg(call.Args["choices"])
 	allowMultiple, _ := call.Args["allow_multiple"].(bool)
-	form := mapSliceArg(call.Args["form"])
+	// Normalize a model-written form so even a weak model produces a working one :
+	// every field gets a name + a canonical type (aliases folded, type inferred
+	// from options).
+	form := normalizeAskUserForm(mapSliceArg(call.Args["form"]))
+	// The custom-answer escape hatch is ON by default whenever the agent makes
+	// proposals — the user can always answer something the agent didn't foresee.
+	// The agent opts out only for a strict enum (allow_custom: false).
+	allowCustom := true
+	if v, ok := call.Args["allow_custom"].(bool); ok {
+		allowCustom = v
+	}
+	defaultAns, _ := call.Args["default"].(string)
+	placeholder, _ := call.Args["placeholder"].(string)
+	multiline, _ := call.Args["multiline"].(bool)
+	minSelect, _ := call.Args["min_select"].(float64)
+	maxSelect, _ := call.Args["max_select"].(float64)
 
 	req := AskUserRequest{
 		SessionID:     call.SessionID,
@@ -460,6 +483,12 @@ func (m *MetaDispatcher) handleAskUser(ctx context.Context, call runtime.ToolInv
 		Content:       content,
 		Choices:       choices,
 		AllowMultiple: allowMultiple,
+		AllowCustom:   allowCustom,
+		MinSelect:     int(minSelect),
+		MaxSelect:     int(maxSelect),
+		Default:       defaultAns,
+		Placeholder:   placeholder,
+		Multiline:     multiline,
 		Form:          form,
 		TimeoutSecs:   timeout,
 	}
@@ -475,7 +504,7 @@ func (m *MetaDispatcher) handleAskUser(ctx context.Context, call runtime.ToolInv
 	out := map[string]any{
 		"status":        "answered",
 		"question":      question,
-		"raw_response":  reply,
+		"raw_response":  coerceAskUserReply(req, reply),
 		"user_response": formatAskUserResponse(req, reply),
 	}
 	if content != "" {
@@ -525,6 +554,159 @@ func formatAskUserResponse(req AskUserRequest, raw string) string {
 		}
 	}
 	return raw
+}
+
+// coerceAskUserReply retypes a form reply against its field declarations so the
+// agent receives typed values (the UI validates ; the daemon coerces). A numeric
+// field's value becomes a number, a boolean's becomes a bool — even if the client
+// sent a string. Non-form replies pass through untouched.
+func coerceAskUserReply(req AskUserRequest, raw string) string {
+	if len(req.Form) == 0 {
+		return raw
+	}
+	var vals map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &vals); err != nil || len(vals) == 0 {
+		return raw
+	}
+	for _, f := range req.Form {
+		name, _ := f["name"].(string)
+		v, ok := vals[name]
+		if name == "" || !ok {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(fmt.Sprint(f["type"]))) {
+		case "number", "float", "range", "rating":
+			if n, ok := toFloat(v); ok {
+				vals[name] = n
+			}
+		case "int", "integer":
+			if n, ok := toFloat(v); ok {
+				vals[name] = int64(n)
+			}
+		case "boolean", "bool", "confirm", "toggle":
+			vals[name] = toBool(v)
+		}
+	}
+	if b, err := json.Marshal(vals); err == nil {
+		return string(b)
+	}
+	return raw
+}
+
+// toFloat coerces a JSON number or numeric string to float64.
+func toFloat(v any) (float64, bool) {
+	switch x := v.(type) {
+	case float64:
+		return x, true
+	case string:
+		if f, err := strconv.ParseFloat(strings.TrimSpace(x), 64); err == nil {
+			return f, true
+		}
+	}
+	return 0, false
+}
+
+// toBool coerces a JSON bool or truthy string (true/yes/1/on) to bool.
+func toBool(v any) bool {
+	switch x := v.(type) {
+	case bool:
+		return x
+	case string:
+		switch strings.ToLower(strings.TrimSpace(x)) {
+		case "true", "yes", "1", "on", "y":
+			return true
+		}
+	}
+	return false
+}
+
+// normalizeAskUserForm makes a model-written form robust so even a weak model
+// produces a working one : every field gets a non-empty `name` (slug of label,
+// else fieldN) and a canonical `type` (aliases folded; a field with options but
+// no usable type becomes a select). Mutates the maps in place and returns them.
+func normalizeAskUserForm(form []map[string]any) []map[string]any {
+	for i, f := range form {
+		if f == nil {
+			continue
+		}
+		name, _ := f["name"].(string)
+		if strings.TrimSpace(name) == "" {
+			if lbl, _ := f["label"].(string); strings.TrimSpace(lbl) != "" {
+				name = slugify(lbl)
+			}
+			if name == "" {
+				name = fmt.Sprintf("field%d", i+1)
+			}
+			f["name"] = name
+		}
+		t, _ := f["type"].(string)
+		canon := canonFieldType(t)
+		if canon == "" {
+			if _, ok := f["options"]; ok {
+				canon = "select"
+			}
+		}
+		if canon != "" {
+			f["type"] = canon
+		}
+	}
+	return form
+}
+
+// canonFieldType folds the aliases a model is likely to write into the canonical
+// field type. An unrecognised value returns "" so the caller can fall back to
+// options-inference (→ select) or free-text.
+func canonFieldType(t string) string {
+	switch strings.ToLower(strings.TrimSpace(t)) {
+	case "text", "string", "str", "input", "line":
+		return "text"
+	case "textarea", "multiline", "text_area", "long_text", "longtext", "paragraph":
+		return "textarea"
+	case "number", "float", "double", "decimal":
+		return "number"
+	case "int", "integer":
+		return "integer"
+	case "bool", "boolean", "toggle", "confirm", "yesno", "yes_no":
+		return "boolean"
+	case "select", "choice", "dropdown", "enum", "picklist", "radio", "single":
+		return "select"
+	case "multiselect", "multi_select", "multi-select", "multichoice", "checkboxes", "tags", "multi":
+		return "multiselect"
+	case "date", "datetime", "time", "day":
+		return "date"
+	case "email", "mail":
+		return "email"
+	case "url", "link", "uri":
+		return "url"
+	case "password", "secret", "masked":
+		return "password"
+	case "range", "slider":
+		return "range"
+	case "rating", "stars", "score":
+		return "rating"
+	default:
+		return ""
+	}
+}
+
+// slugify turns a human label into a safe field key : lowercase alphanumerics,
+// runs of other characters collapsed to a single underscore, trimmed.
+func slugify(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	var b strings.Builder
+	pendingSep := false
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			if pendingSep && b.Len() > 0 {
+				b.WriteByte('_')
+			}
+			pendingSep = false
+			b.WriteRune(r)
+		} else {
+			pendingSep = true
+		}
+	}
+	return b.String()
 }
 
 // stringSliceArg coerces a JSON array arg into []string (nil when absent
@@ -722,7 +904,7 @@ func (m *MetaDispatcher) handleUseSkill(ctx context.Context, call runtime.ToolIn
 	if m.SkillLoader == nil {
 		return errored("use_skill not wired (no SkillLoader)")
 	}
-	entry, err := m.SkillLoader.Load(ctx, call.AppID, command)
+	entry, err := m.SkillLoader.Load(ctx, call.AppID, call.UserID, command)
 	if err != nil {
 		return errored("use_skill: " + err.Error())
 	}
