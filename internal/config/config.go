@@ -329,16 +329,21 @@ type Observability struct {
 	OTLPEndpoint   string `koanf:"otlp_endpoint"`
 }
 
-// defaultAppsRoot returns the cross-platform default install root for
-// digitorn apps : {USER_HOME}/.digitorn/apps. Falls back to "./apps"
-// relative to CWD if the user home cannot be resolved (no $HOME,
-// container without a user dir, etc.).
-func defaultAppsRoot() string {
+// defaultDataDir is the per-user, cross-platform home for all daemon runtime
+// state (db, sessions, installed apps) : {USER_HOME}/.digitorn. This keeps state
+// OUT of the repo / working directory and makes a fresh clone run anywhere without
+// machine-specific config. Falls back to ".digitorn" (CWD-relative) only when the
+// user home can't be resolved (container without a user dir, etc.).
+func defaultDataDir() string {
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		return filepath.Join(home, ".digitorn", "apps")
+		return filepath.Join(home, ".digitorn")
 	}
-	return "apps"
+	return ".digitorn"
 }
+
+func defaultAppsRoot() string     { return filepath.Join(defaultDataDir(), "apps") }
+func defaultSessionsRoot() string { return filepath.Join(defaultDataDir(), "sessions") }
+func defaultDSN() string          { return filepath.Join(defaultDataDir(), "digitorn.db") }
 
 // Defaults returns a configuration with sensible defaults applied.
 func Defaults() Config {
@@ -360,7 +365,7 @@ func Defaults() Config {
 		},
 		Database: Database{
 			Driver:          "sqlite",
-			DSN:             "digitorn.db",
+			DSN:             defaultDSN(),
 			MaxOpenConns:    25,
 			MaxIdleConns:    5,
 			ConnMaxLifetime: 5 * time.Minute,
@@ -387,7 +392,7 @@ func Defaults() Config {
 			},
 		},
 		Sessions: Sessions{
-			Root:                   "",
+			Root:                   defaultSessionsRoot(),
 			NumShards:              32,
 			QueueCapPerShard:       16384,
 			BatchMax:               500,

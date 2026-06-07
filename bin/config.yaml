@@ -15,20 +15,19 @@ server:
     - http://localhost:5173
     - http://127.0.0.1:5173
 
+# Runtime data (db / sessions / installed apps) defaults to a per-user dir,
+# ~/.digitorn (e.g. %USERPROFILE%\.digitorn on Windows) — OUT of the repo, so a
+# fresh clone runs anywhere with no machine-specific paths. The daemon creates it
+# on first start. Set database.dsn / sessions.root / apps.root only to override.
 database:
   driver: sqlite
-  dsn: C:/Users/ASUS/AppData/Local/Temp/digitorn-live-chat/digitorn.db
 
 sessions:
-  root: C:/Users/ASUS/AppData/Local/Temp/digitorn-live-chat/sessions
   num_shards: 2
   queue_cap_per_shard: 1024
   batch_max: 50
   flush_interval: 5ms
   fsync: true
-
-apps:
-  root: C:/Users/ASUS/AppData/Local/Temp/digitorn-live-chat/apps
 
 auth:
   # Real JWT auth : the daemon validates the CLI's bearer against auth.digitorn.ai's

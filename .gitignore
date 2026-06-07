@@ -2,6 +2,7 @@
 # https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
 #
 # Binaries for programs and plugins
+*.exe
 *.exe~
 *.dll
 *.so
@@ -26,20 +27,10 @@ go.work.sum
 # env file
 .env
 
-# --- bin/ build outputs ---------------------------------------------------
-# Keep ONLY the runnable binaries needed to launch without a rebuild ; ignore
-# every backup / variant (.bak / .old / .cache / .fix / preVoiceB / voiceB …),
-# all logs, and scratch dirs. NOTE : already-committed junk must ALSO be
-# untracked once (it stays ignored after) :  git rm -r --cached <those files>.
-bin/*.exe
-!bin/digitornd.exe
-!bin/digitorn.exe
-!bin/digitorn-cli.exe
-!bin/digitorn-background.exe
-!bin/digitorn-worker.exe
-!bin/digitorn-worker-llm.exe
-!bin/digitorn-worker-embeddings.exe
-!bin/digitorn-worker-tokenizer.exe
+# --- bin/ scratch ---------------------------------------------------------
+# All .exe are ignored globally (above). Also drop the binary backups that don't
+# end in .exe plus build scratch dirs. NOTE : already-committed binaries must be
+# untracked once (they stay ignored after) :  git rm -r --cached <those files>.
 bin/*.bak*
 bin/*.old*
 bin/*.preVoiceB
