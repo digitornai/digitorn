@@ -7,6 +7,9 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/glebarez/sqlite"
@@ -92,6 +95,10 @@ func dialect(driver, dsn string) (gorm.Dialector, error) {
 	case DriverMySQL:
 		return mysql.Open(dsn), nil
 	case DriverSQLite:
+		// SQLite returns CANTOPEN (surfaced confusingly as "out of memory (14)")
+		// when the DB file's PARENT dir is missing — exactly what a fresh clone hits
+		// when its configured data dir doesn't exist yet. Create it first.
+		ensureSQLiteDir(dsn)
 		return sqlite.Open(dsn), nil
 	case DriverSQLServer:
 		return sqlserver.Open(dsn), nil
@@ -99,6 +106,21 @@ func dialect(driver, dsn string) (gorm.Dialector, error) {
 		return oracleDialect(dsn)
 	default:
 		return nil, fmt.Errorf("db: unknown driver %q (supported: postgres, mysql, sqlite, sqlserver, oracle)", driver)
+	}
+}
+
+// ensureSQLiteDir creates the parent directory of a sqlite DB file so opening it
+// never fails on a missing dir. No-op for :memory: or an empty/relative-cwd path.
+func ensureSQLiteDir(dsn string) {
+	p := strings.TrimPrefix(strings.TrimSpace(dsn), "file:")
+	if i := strings.IndexByte(p, '?'); i >= 0 {
+		p = p[:i]
+	}
+	if p == "" || strings.HasPrefix(p, ":") {
+		return
+	}
+	if dir := filepath.Dir(p); dir != "" && dir != "." {
+		_ = os.MkdirAll(dir, 0o755)
 	}
 }
 
