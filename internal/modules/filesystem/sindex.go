@@ -274,7 +274,7 @@ func chunkLines(src, path string) []sChunk {
 }
 
 func snippet(s string) string {
-	const max = 400
+	const max = 800
 	if len(s) > max {
 		return s[:max] + "\n…"
 	}

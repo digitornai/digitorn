@@ -80,6 +80,17 @@ func evaluateCondition(cond map[string]any, st *SessionState, toolName string, p
 		value, _ := cfg["value"].(string)
 		return strings.Contains(strings.ToLower(paramString(params, pname)), strings.ToLower(value))
 	}
+	if raw, ok := cond["param_has_any"]; ok {
+		names, _ := raw.([]any)
+		for _, n := range names {
+			if name, ok := n.(string); ok {
+				if _, exists := params[name]; exists {
+					return true
+				}
+			}
+		}
+		return false
+	}
 	if raw, ok := cond["flag_is"]; ok {
 		cfg, _ := raw.(map[string]any)
 		name, _ := cfg["name"].(string)

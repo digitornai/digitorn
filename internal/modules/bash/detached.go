@@ -2,20 +2,45 @@ package bash
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"io"
 	"os/exec"
 	"strings"
 	"time"
+	"unicode/utf16"
 
 	"github.com/mbathepaul/digitorn/internal/domain/tool"
 )
 
 func detachedArgs(kind, command string) []string {
 	if kind == "powershell" {
-		return []string{"-NoProfile", "-NonInteractive", "-Command", command}
+		// Use -EncodedCommand to avoid quoting issues with -Command:
+		// Windows command-line parsing strips unescaped double quotes from
+		// -Command arguments, corrupting commands that contain embedded
+		// quotes (e.g. cmd /c "exit 0"). Base64-encoded command is immune
+		// to quoting problems, but MUST be UTF-16LE (PowerShell's native
+		// encoding) — plain UTF-8 base64 produces garbage characters that
+		// cause parse errors like "Unexpected token '}'".
+		enc := base64.StdEncoding.EncodeToString(utf16leBytes(command))
+		return []string{"-NoProfile", "-NonInteractive", "-EncodedCommand", enc}
 	}
 	return append(shellArgs(kind), "-c", command)
+}
+
+// utf16leBytes encodes a UTF-8 string as a UTF-16LE byte slice, which is
+// what PowerShell's -EncodedCommand expects. Without this, characters are
+// decoded as garbage (UTF-8 bytes misinterpreted as UTF-16LE code units),
+// leading to spurious "Unexpected token" errors on curly braces and quotes.
+func utf16leBytes(s string) []byte {
+	runes := []rune(s)
+	u16 := utf16.Encode(runes)
+	b := make([]byte, len(u16)*2)
+	for i, r := range u16 {
+		b[i*2] = byte(r)
+		b[i*2+1] = byte(r >> 8)
+	}
+	return b
 }
 
 // runDetached executes a command as an independent one-shot process — used both

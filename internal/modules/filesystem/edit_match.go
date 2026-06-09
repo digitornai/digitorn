@@ -160,6 +160,55 @@ func closestMatches(content, old string, n int) []suggestion {
 
 func stripCR(s string) string { return strings.TrimRight(s, "\r") }
 
+// stripReadLineNumbers removes the "  142\t" prefix that `read` prepends to every
+// line (numberedSlice formats "%*d\t"), for when a model pastes numbered read
+// output verbatim into old_string. Strips the prefix from each line that carries
+// one and leaves other lines untouched — so a block where the model modified
+// one line still resolves correctly. The prefix is only ever stripped when the
+// exact old_string (with numbers) did NOT exist in the file (applyEditTry tried
+// exact match first), so a line that genuinely starts with "42\tcontent" in the
+// source file was already matched exactly and never reaches this function.
+// Returns the input unchanged when no line had a number prefix.
+func stripReadLineNumbers(s string) string {
+	lines := strings.Split(s, "\n")
+	out := make([]string, len(lines))
+	stripped := false
+	for i, l := range lines {
+		if strings.TrimSpace(l) == "" {
+			out[i] = l
+			continue
+		}
+		rest, ok := trimLineNumberPrefix(l)
+		if ok {
+			out[i] = rest
+			stripped = true
+		} else {
+			out[i] = l // keep the line as-is
+		}
+	}
+	if !stripped {
+		return s
+	}
+	return strings.Join(out, "\n")
+}
+
+// trimLineNumberPrefix strips a single leading "<spaces><digits>\t" from one line
+// (the exact shape read emits). Reports whether a prefix was found and removed.
+func trimLineNumberPrefix(l string) (string, bool) {
+	i := 0
+	for i < len(l) && l[i] == ' ' {
+		i++
+	}
+	j := i
+	for j < len(l) && l[j] >= '0' && l[j] <= '9' {
+		j++
+	}
+	if j == i || j >= len(l) || l[j] != '\t' {
+		return l, false
+	}
+	return l[j+1:], true
+}
+
 // splitLogicalLines splits on "\n" and drops a single trailing empty line so a
 // trailing "\n" in old_string doesn't force matching a phantom blank line.
 func splitLogicalLines(s string) []string {

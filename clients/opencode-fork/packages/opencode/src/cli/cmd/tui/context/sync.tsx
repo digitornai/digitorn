@@ -520,11 +520,14 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
         },
         async sync(sessionID: string) {
           if (fullSyncedSessions.has(sessionID)) return
-          const [session, messages, todo, diff] = await Promise.all([
+          // Only the data needed to RENDER the conversation is awaited. The
+          // workspace diff (shadow-git status) can be slow on a large repo and is
+          // NOT needed to open the session — it only feeds the "changed files"
+          // panel — so it must never block the open.
+          const [session, messages, todo] = await Promise.all([
             sdk.client.session.get({ sessionID }, { throwOnError: true }),
             sdk.client.session.messages({ sessionID, limit: 100 }),
             sdk.client.session.todo({ sessionID }),
-            sdk.client.session.diff({ sessionID }),
           ])
           setStore(
             produce((draft) => {
@@ -538,10 +541,15 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
                 draft.part[message.info.id] = message.parts
               }
               draft.message[sessionID] = infos
-              draft.session_diff[sessionID] = diff.data ?? []
             }),
           )
           fullSyncedSessions.add(sessionID)
+          // Load the diff in the background; fill the panel when it arrives. Live
+          // session.diff events keep it fresh afterwards.
+          void sdk.client.session
+            .diff({ sessionID })
+            .then((diff) => setStore("session_diff", sessionID, diff.data ?? []))
+            .catch(() => {})
         },
       },
       bootstrap,

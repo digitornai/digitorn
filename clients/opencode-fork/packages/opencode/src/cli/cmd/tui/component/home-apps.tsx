@@ -1,7 +1,8 @@
-import { createSignal, onCleanup, onMount, Show } from "solid-js"
+import { createMemo, createSignal, onCleanup, onMount, Show } from "solid-js"
 import { RGBA } from "@opentui/core"
 import { useSDK } from "../context/sdk"
 import { useTheme } from "@tui/context/theme"
+import { digitornAuthState } from "../context/digitorn-auth"
 
 // The ACTIVE digitorn app, shown left-aligned under the home input. Reflects the
 // current app and updates live when it changes — the adapter pushes a digitorn.app
@@ -40,13 +41,27 @@ export function HomeApps() {
   })
 
   const iconColor = () => hexRGBA(app()?.color ?? "") ?? theme.textMuted
+  const auth = createMemo(() => digitornAuthState())
 
   return (
-    <Show when={app()}>
-      <box flexDirection="row" gap={1} justifyContent="flex-start">
-        <text fg={iconColor()}>{app()!.icon || "▪"}</text>
-        <text fg={theme.text}>{app()!.name}</text>
-      </box>
+    <Show
+      when={auth().connected}
+      fallback={
+        <box flexDirection="row" gap={1} justifyContent="flex-start">
+          <text fg={theme.warning}>●</text>
+          <text fg={theme.text}>{auth().expired ? "Session expired" : "Not signed in"}</text>
+          <text fg={theme.textMuted}>— type</text>
+          <text fg={theme.text}>/connect</text>
+          <text fg={theme.textMuted}>to sign in</text>
+        </box>
+      }
+    >
+      <Show when={app()}>
+        <box flexDirection="row" gap={1} justifyContent="flex-start">
+          <text fg={iconColor()}>{app()!.icon || "▪"}</text>
+          <text fg={theme.text}>{app()!.name}</text>
+        </box>
+      </Show>
     </Show>
   )
 }

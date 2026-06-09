@@ -439,23 +439,47 @@ func (m *Manager) Wait(ctx context.Context, root, runID string, timeout time.Dur
 	}
 }
 
-// WaitAll waits for several agents and returns their snapshots in input order.
-// A timeout applies to the whole batch.
+// WaitAll waits for several agents concurrently and returns their snapshots in
+// input order. All agents are awaited simultaneously — the first to finish
+// unblocks its slot immediately rather than waiting for earlier agents to
+// complete first. A timeout applies to the whole batch.
 func (m *Manager) WaitAll(ctx context.Context, root string, runIDs []string, timeout time.Duration) ([]Snapshot, error) {
+	if len(runIDs) == 0 {
+		return nil, nil
+	}
 	if timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
-	out := make([]Snapshot, 0, len(runIDs))
-	for _, id := range runIDs {
-		s, err := m.Wait(ctx, root, id, 0)
-		out = append(out, s)
-		if err != nil {
-			return out, err
+
+	type result struct {
+		idx      int
+		snapshot Snapshot
+		err      error
+	}
+
+	// Buffered to the number of agents so every goroutine can deliver without
+	// blocking even if the collector stopped reading early (cancellation).
+	resCh := make(chan result, len(runIDs))
+
+	for i, id := range runIDs {
+		go func(idx int, runID string) {
+			s, err := m.Wait(ctx, root, runID, 0)
+			resCh <- result{idx: idx, snapshot: s, err: err}
+		}(i, id)
+	}
+
+	out := make([]Snapshot, len(runIDs))
+	var firstErr error
+	for range runIDs {
+		r := <-resCh
+		out[r.idx] = r.snapshot
+		if r.err != nil && firstErr == nil {
+			firstErr = r.err
 		}
 	}
-	return out, nil
+	return out, firstErr
 }
 
 // Status returns one agent's live snapshot.

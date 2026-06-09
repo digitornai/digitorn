@@ -65,10 +65,6 @@ func splitLines(s string) []string {
 // with right-aligned 1-based line numbers, clipping any over-long line so a
 // minified bundle can't blow the context window.
 func numberedSlice(lines []string, start, end int) string {
-	width := len(fmt.Sprintf("%d", end)) // align to the largest number shown
-	if width < 4 {
-		width = 4
-	}
 	var b strings.Builder
 	for i := start; i < end; i++ {
 		line := lines[i]
@@ -76,7 +72,9 @@ func numberedSlice(lines []string, start, end int) string {
 			r := []rune(line)[:readMaxLineRunes]
 			line = string(r) + " … [line truncated]"
 		}
-		fmt.Fprintf(&b, "%*d\t%s\n", width, i+1, line)
+		// Flush-left line number + tab + content — byte-identical to Claude Code's
+		// `cat -n` read output (no width padding), so the two are interchangeable.
+		fmt.Fprintf(&b, "%d\t%s\n", i+1, line)
 	}
 	return b.String()
 }

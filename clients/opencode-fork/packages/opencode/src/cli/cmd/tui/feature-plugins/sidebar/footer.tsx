@@ -3,6 +3,9 @@ import type { InternalTuiPlugin } from "../../plugin/internal"
 import { createMemo, createResource, createSignal, onCleanup, onMount, Show } from "solid-js"
 import { Global } from "@opencode-ai/core/global"
 import { useSDK } from "@tui/context/sdk"
+import { digitornAuthState } from "../../context/digitorn-auth"
+
+const DIGITORN = Boolean(process.env.DIGITORN_URL)
 
 const id = "internal:sidebar-footer"
 
@@ -49,7 +52,12 @@ function View(props: { api: TuiPluginApi }) {
     ),
   )
   const done = createMemo(() => props.api.kv.get("dismissed_getting_started", false))
-  const show = createMemo(() => !has() && !done())
+  // Stock opencode's provider banner is about opencode's own providers — irrelevant
+  // when digitorn drives the models, so it's suppressed here in favour of the
+  // digitorn sign-in banner below.
+  const show = createMemo(() => !DIGITORN && !has() && !done())
+  const auth = createMemo(() => digitornAuthState())
+  const showSignIn = createMemo(() => DIGITORN && !auth().connected)
   const path = createMemo(() => {
     const dir = props.api.state.path.directory || process.cwd()
     const out = dir.replace(Global.Path.home, "~")
@@ -63,6 +71,31 @@ function View(props: { api: TuiPluginApi }) {
 
   return (
     <box gap={1}>
+      <Show when={showSignIn()}>
+        <box
+          backgroundColor={theme().backgroundElement}
+          paddingTop={1}
+          paddingBottom={1}
+          paddingLeft={2}
+          paddingRight={2}
+          flexDirection="row"
+          gap={1}
+        >
+          <text flexShrink={0} fg={theme().warning}>
+            ●
+          </text>
+          <box flexGrow={1} gap={1}>
+            <text fg={theme().text}>
+              <b>{auth().expired ? "Session expired" : "Not signed in"}</b>
+            </text>
+            <text fg={theme().textMuted}>Sign in to digitorn to start a session.</text>
+            <box flexDirection="row" gap={1} justifyContent="space-between">
+              <text fg={theme().text}>Sign in</text>
+              <text fg={theme().textMuted}>/connect</text>
+            </box>
+          </box>
+        </box>
+      </Show>
       <Show when={show()}>
         <box
           backgroundColor={theme().backgroundElement}
@@ -109,6 +142,9 @@ function View(props: { api: TuiPluginApi }) {
           <span style={{ fg: theme().textMuted }}> v{currentApp()!.version}</span>
         </Show>
       </text>
+      <Show when={DIGITORN && auth().connected && (auth().name || auth().email)}>
+        <text fg={theme().textMuted}>Signed in as {auth().name || auth().email}</text>
+      </Show>
     </box>
   )
 }

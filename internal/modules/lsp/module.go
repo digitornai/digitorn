@@ -126,9 +126,85 @@ func (m *Module) manager() *manager {
 	return m.mgr
 }
 
+// flexContent accepts the file body in whatever shape the model emits:
+//
+//   - a plain JSON string        → used as-is
+//   - an array of strings        → joined with "\n" (models often send lines this way)
+//   - an array of objects        → the first of "text"/"content"/"line"/"value" key
+//                                  found on each object is extracted, then joined
+//   - any other scalar (number…) → converted via fmt.Sprintf
+//
+// Prevents "cannot unmarshal array into … of type string" when an LLM
+// structures file content as a line array instead of a single string.
+type flexContent string
+
+func (f *flexContent) UnmarshalJSON(b []byte) error {
+	// 1. Explicit null
+	if string(b) == "null" {
+		*f = ""
+		return nil
+	}
+
+	// 2. Fast path : plain JSON string
+	var s string
+	if err := json.Unmarshal(b, &s); err == nil {
+		*f = flexContent(s)
+		return nil
+	}
+
+	// 3. Array path : []any — each element becomes a line
+	var arr []any
+	if err := json.Unmarshal(b, &arr); err == nil {
+		lines := make([]string, 0, len(arr))
+		for _, el := range arr {
+			switch v := el.(type) {
+			case string:
+				lines = append(lines, v)
+			case map[string]any:
+				found := false
+				for _, k := range []string{"text", "content", "line", "value", "code", "source", "snippet"} {
+					if sv, ok := v[k].(string); ok {
+						lines = append(lines, sv)
+						found = true
+						break
+					}
+				}
+				if !found {
+					b2, _ := json.Marshal(v)
+					lines = append(lines, string(b2))
+				}
+			default:
+				b2, _ := json.Marshal(el)
+				lines = append(lines, string(b2))
+			}
+		}
+		*f = flexContent(strings.Join(lines, "\n"))
+		return nil
+	}
+
+	// 4. Object path
+	var obj map[string]any
+	if err := json.Unmarshal(b, &obj); err == nil {
+		for _, k := range []string{"content", "text", "body", "code", "source"} {
+			if sv, ok := obj[k].(string); ok {
+				*f = flexContent(sv)
+				return nil
+			}
+		}
+		// Fallback: serialize the object so the LLM sees its mistake
+		b2, _ := json.MarshalIndent(obj, "", "  ")
+		*f = flexContent(string(b2))
+		return nil
+	}
+
+	// 5. Scalar fallback (number, bool…)
+	*f = flexContent(strings.Trim(string(b), `"`))
+	return nil
+}
+
 type changeParams struct {
-	Path    string  `json:"path"`
-	Content *string `json:"content"`
+	Path    string       `json:"path"`
+	Content *flexContent `json:"content"`
 }
 
 func (m *Module) notifyChange(ctx context.Context, raw json.RawMessage) (tool.Result, error) {
@@ -151,7 +227,7 @@ func (m *Module) notifyChange(ctx context.Context, raw json.RawMessage) (tool.Re
 
 	content := ""
 	if p.Content != nil {
-		content = *p.Content
+		content = string(*p.Content)
 	} else {
 		c, err := readFileText(p.Path)
 		if err != nil {

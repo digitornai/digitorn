@@ -28,6 +28,7 @@ import (
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/cache"
+	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/format/gitignore"
 	"github.com/go-git/go-git/v5/plumbing/format/index"
 	"github.com/go-git/go-git/v5/plumbing/object"
@@ -76,7 +77,9 @@ func gitDirOf(workdir string) string { return filepath.Join(workdir, metaDir, gi
 func Open(workdir string) (*Repo, error) {
 	gd := gitDirOf(workdir)
 	storer := noGitlinkStorer{filesystem.NewStorage(osfs.New(gd), cache.NewObjectLRUDefault())}
-	wtfs := osfs.New(workdir)
+	// Wrap the worktree FS so go-git's status/add walk never descends into
+	// node_modules / .git / .digitorn — the speed fix without leaving go-git.
+	wtfs := newPruningFS(osfs.New(workdir))
 
 	var (
 		repo *git.Repository
@@ -275,11 +278,111 @@ func (r *Repo) EnsureBaseline() (bool, error) {
 	} else if !errors.Is(err, plumbing.ErrReferenceNotFound) {
 		return false, err
 	}
-	if err := r.wt.AddWithOptions(&git.AddOptions{All: true}); err != nil {
+	if err := r.stageAllOnePassLocked(); err != nil {
 		return false, err
 	}
 	_, err := r.commit("baseline: workspace start")
 	return true, err
+}
+
+// stageAllOnePassLocked stages every pending (non-meta) file by writing the index
+// in ONE pass. go-git's AddWithOptions{All:true} rewrites the whole index on each
+// file (O(n²)) — minutes on a large tree; here we hash each changed file once and
+// SetIndex once (O(n)). The file SET and statuses come from go-git's own Status,
+// so .gitignore + the excludes are honoured exactly as AddWithOptions would — the
+// resulting tree is identical, just built without the quadratic blow-up.
+func (r *Repo) stageAllOnePassLocked() error {
+	st, err := r.wt.Status()
+	if err != nil {
+		return err
+	}
+	idx, err := r.repo.Storer.Index()
+	if err != nil {
+		idx = &index.Index{Version: 2}
+	}
+	if idx.Version == 0 {
+		idx.Version = 2
+	}
+	for p, s := range st {
+		if skipPath(p) {
+			continue
+		}
+		rel := filepath.ToSlash(p)
+		// A file gone from the worktree (and not still in the index as untracked)
+		// is a deletion: drop its entry so the commit records the removal.
+		if s.Worktree == git.Deleted {
+			_, _ = idx.Remove(rel)
+			continue
+		}
+		ent, err := r.indexEntryForLocked(rel)
+		if err != nil {
+			return err
+		}
+		if ent == nil {
+			continue
+		}
+		upsertIndexEntry(idx, ent)
+	}
+	sort.Slice(idx.Entries, func(i, j int) bool { return idx.Entries[i].Name < idx.Entries[j].Name })
+	return r.repo.Storer.SetIndex(idx)
+}
+
+// indexEntryForLocked builds the index entry for one worktree path: it hashes the
+// content into a blob (the link target for a symlink) and stamps the file's mode
+// + mtime + size — the same fields go-git's Add records, so the staged tree and
+// the index stat data match. Returns nil for a path that vanished mid-walk.
+func (r *Repo) indexEntryForLocked(rel string) (*index.Entry, error) {
+	abs := filepath.Join(r.workdir, filepath.FromSlash(rel))
+	info, err := os.Lstat(abs)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if info.IsDir() {
+		return nil, nil
+	}
+	mode, err := filemode.NewFromOSFileMode(info.Mode())
+	if err != nil {
+		return nil, err
+	}
+	var content string
+	if info.Mode()&os.ModeSymlink != 0 {
+		target, err := os.Readlink(abs)
+		if err != nil {
+			return nil, err
+		}
+		content = target
+	} else {
+		b, err := os.ReadFile(abs)
+		if err != nil {
+			return nil, err
+		}
+		content = string(b)
+	}
+	h, err := r.writeBlobLocked(content)
+	if err != nil {
+		return nil, err
+	}
+	return &index.Entry{
+		Name:       rel,
+		Hash:       h,
+		Mode:       mode,
+		Size:       uint32(len(content)),
+		ModifiedAt: info.ModTime(),
+	}, nil
+}
+
+// upsertIndexEntry replaces an existing same-name entry in place, else appends.
+func upsertIndexEntry(idx *index.Index, ent *index.Entry) {
+	for i := range idx.Entries {
+		if idx.Entries[i].Name == ent.Name {
+			idx.Entries[i] = ent
+			return
+		}
+	}
+	idx.Entries = append(idx.Entries, ent)
 }
 
 func (r *Repo) commit(msg string) (plumbing.Hash, error) {
@@ -355,7 +458,7 @@ func (r *Repo) Stage(paths []string) error {
 func (r *Repo) StageAll() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.wt.AddWithOptions(&git.AddOptions{All: true})
+	return r.stageAllOnePassLocked()
 }
 
 // Restore discards the agent's pending change to each path — the "reject"

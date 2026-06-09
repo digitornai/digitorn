@@ -6,6 +6,8 @@ declared_permissions: [filesystem.read, filesystem.write]
 config_schema:
   workspace: { type: string }
   max_file_bytes: { type: integer }
+  auto_index_workdir: { type: boolean }
+  code_embed_model: { type: string }
 constraints:
   - { name: allowed_paths, type: string_list, scope: module }
   - { name: blocked_actions, type: string_list, scope: universal }
@@ -25,14 +27,26 @@ tools:
       - { name: path, type: string, required: true }
       - { name: content, type: string, required: true }
   - name: edit
-    description: Replace exact text occurrences inside a file.
+    description: Surgically edit a file — by line range, by text, or by insert/prepend/append. Provide exactly ONE locator.
     risk_level: medium
     irreversible: true
+    # Kept in sync with the runtime RegisterTool spec (module.go). Only `path` is
+    # required; old_string is NOT — start_line/end_line, insert_after/insert_before
+    # and prepend/append are alternative locators.
     params:
       - { name: path, type: string, required: true }
-      - { name: old_string, type: string, required: true }
-      - { name: new_string, type: string, required: true }
+      - { name: new_string, type: string }
+      - { name: old_string, type: string }
       - { name: replace_all, type: boolean }
+      - { name: occurrence, type: integer }
+      - { name: start_line, type: integer }
+      - { name: end_line, type: integer }
+      - { name: insert_after, type: string }
+      - { name: insert_before, type: string }
+      - { name: prepend, type: boolean }
+      - { name: append, type: boolean }
+      - { name: expect, type: string }
+      - { name: dry_run, type: boolean }
   - name: ls
     description: List directory entries (non-recursive).
     risk_level: low
@@ -44,12 +58,16 @@ tools:
     params:
       - { name: pattern, type: string, required: true }
   - name: grep
-    description: Search file contents matching a regular expression.
+    description: Search file contents by RE2 regex (trigram-indexed, gitignore-aware, call-graph enriched).
     risk_level: low
     params:
       - { name: pattern, type: string, required: true }
       - { name: path, type: string }
       - { name: include, type: string }
+      - { name: output_mode, type: string }
+      - { name: context, type: integer }
+      - { name: ignore_case, type: boolean }
+      - { name: multiline, type: boolean }
       - { name: max_results, type: integer }
   - { name: mkdir, description: Create a directory, risk_level: low, params: [{name: path, type: string, required: true}] }
   - { name: rm, description: Remove a file or empty directory, risk_level: high, irreversible: true, params: [{name: path, type: string, required: true}] }
