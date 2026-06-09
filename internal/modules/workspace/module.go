@@ -236,6 +236,11 @@ func (m *Module) changes(_ context.Context, raw json.RawMessage) (tool.Result, e
 	if err != nil {
 		return errResult(err.Error()), nil
 	}
+	// Ensure the baseline exists before listing changes: without it every file
+	// reads as untracked (the whole repo shows as "added"). The baseline is built
+	// in one pass and persists on disk, so this is a fast no-op after the first
+	// call. Best-effort — a baseline error still lets the raw status through.
+	_, _ = r.EnsureBaseline()
 	ch, err := r.Changes()
 	if err != nil {
 		return errResult(err.Error()), nil

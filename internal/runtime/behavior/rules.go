@@ -79,10 +79,17 @@ func defaultRuleDefinitions() []ruleDef {
 	return []ruleDef{
 		{
 			id: "read_before_edit", action: "warn", when: "pre_tool",
-			description: "ALWAYS Read a file before Edit - edit on unread files is flagged",
+			description: "ALWAYS Read a file before Edit - edit on unread files is flagged (enforced)",
 			trigger:     []string{"edit", "filesystem.edit", "filesystem__edit"},
-			condition:   map[string]any{"target_not_in_set": "read_files"},
-			message:     "You are editing '{target}' without reading it first. Read it before editing.",
+			condition: map[string]any{"all": []any{
+				map[string]any{"target_not_in_set": "read_files"},
+				// Skip the rule when the edit uses line-number locators
+				// (start_line/end_line) — the agent already knows the
+				// coordinates from a prior read; only text-based old_string
+				// truly needs the file content.
+				map[string]any{"not": map[string]any{"param_has_any": []string{"start_line", "end_line"}}},
+			}},
+			message: "You are editing '{target}' without reading it first. Read it before editing.",
 		},
 		{
 			id: "read_before_write_existing", action: "warn", when: "pre_tool",

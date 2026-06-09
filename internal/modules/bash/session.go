@@ -390,19 +390,19 @@ func splitStatements(command string) (parts, seps []string) {
 			continue
 		}
 		switch {
-		case c == '\'' || c == '"':
-			quote = c
-			cur.WriteByte(c)
-		case c == '(':
-			depth++
-			cur.WriteByte(c)
-		case c == ')':
-			if depth > 0 {
-				depth--
-			}
-			cur.WriteByte(c)
-		case depth == 0 && (c == ';' || c == '\n'):
-			flush(string(c))
+			case c == '\'' || c == '"':
+				quote = c
+				cur.WriteByte(c)
+			case c == '(' || c == '{':
+				depth++
+				cur.WriteByte(c)
+			case c == ')' || c == '}':
+				if depth > 0 {
+					depth--
+				}
+				cur.WriteByte(c)
+			case depth == 0 && (c == ';' || c == '\n'):
+				flush(string(c))
 		case depth == 0 && (c == '&' || c == '|') && i+1 < len(command) && command[i+1] == c:
 			flush(command[i : i+2])
 			i++

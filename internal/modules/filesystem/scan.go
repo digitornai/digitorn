@@ -421,10 +421,14 @@ func contentMatch(lines [][]byte, i, contextN int) grepMatch {
 // line. A match in a minified / generated file can be ONE multi-megabyte
 // "line"; returning it whole bloats the result, the LLM context, and can crash
 // a terminal client trying to render it.
-const maxMatchLineBytes = 512
+// maxMatchLineBytes caps one matched line so a minified / generated megabyte
+// "line" can't bloat the result — but it must be generous enough to show a real
+// code line in full (a long signature, a wrapped call, a string/JSON literal).
+// Aligned with read's per-line budget so grep and read clip at the same point.
+const maxMatchLineBytes = 2000
 
 // safeLine makes one matched line safe to return AND to display anywhere : it
-// truncates before any decoding (so a 5 MB line costs ~512 bytes of work) and
+// truncates before any decoding (so a 5 MB line costs only that many bytes of work) and
 // neutralises control bytes (ESC / NUL / CR / …) that would otherwise corrupt or
 // crash a terminal. Tabs survive; everything sub-space becomes a space. A grep
 // result must never be able to take down the client that renders it.

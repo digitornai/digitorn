@@ -8,12 +8,13 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// The shipped claude-code example apps must keep parsing — including the new
-// `context:` block — so a YAML typo there can't silently break the install.
+// The shipped Digitorn Code app must keep parsing — the canonical example AND the
+// embedded builtin the daemon auto-installs — including the `context:` block, so a
+// YAML typo there can't silently break the install.
 func TestExampleApps_Parse(t *testing.T) {
 	for _, rel := range []string{
 		"../../../examples/claude_code.yaml",
-		"../../../examples/claude-code/app.yaml",
+		"../../appmgr/builtins/digitorn-code/app.yaml",
 	} {
 		data, err := os.ReadFile(filepath.Clean(rel))
 		if err != nil {
@@ -23,7 +24,7 @@ func TestExampleApps_Parse(t *testing.T) {
 		if err := yaml.Unmarshal(data, &def); err != nil {
 			t.Fatalf("%s: yaml: %v", rel, err)
 		}
-		if def.App.AppID != "claude-code" {
+		if def.App.AppID != "digitorn-code" {
 			t.Errorf("%s: app_id = %q", rel, def.App.AppID)
 		}
 		if def.Context == nil || len(def.Context.Sections) == 0 {

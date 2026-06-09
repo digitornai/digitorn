@@ -4,7 +4,7 @@ import "github.com/mbathepaul/digitorn/internal/compiler/schema"
 
 // Doc defaults for runtime.context (docs-site language/06-context-management).
 const (
-	defaultCompressionTrigger = 0.75
+	defaultCompressionTrigger = 0.97
 	autoCompactHookID         = "_auto_compact"
 	autoCompactCooldownSecs   = 30.0
 )

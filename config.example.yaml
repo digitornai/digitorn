@@ -46,8 +46,53 @@ modules:
 runtime:
   max_turns: 200
   max_consecutive_failures: 8
-  tool_timeout: "60s"
+  tool_timeout: "4m"
   context_pressure_threshold: 0.75
+  streaming: true
+
+  # Safety watchdog: resets on every LLM round or tool batch completion.
+  # Increase for agents that run long tasks (builds, scans, deep research).
+  turn_idle_timeout: "10m"
+
+  # --- Turn pool (3 tiers) ---
+  # Zero on any tier = unbounded (acceptable for dev/test, never for production).
+  max_concurrent_turns_global: 4096
+  max_concurrent_turns_per_app: 1024  # raised from default 256
+  max_concurrent_turns_per_user: 128  # raised from default 32
+
+  # --- Multi-agent parallelism ---
+  # 0 = unbounded: every sub-agent calls the LLM concurrently.
+  # Set a positive value only to cap provider costs / rate-limit exposure.
+  max_concurrent_llm_calls: 0
+
+  # Delegation tree caps (anti fork-bomb).
+  max_agent_depth: 8
+  max_agents_per_session: 100000
+
+workers:
+  llm:
+    # count=1 is sufficient: the worker multiplexes all gRPC streams over HTTP/2.
+    # Raise to 2-3 only if you observe CPU saturation inside the worker process.
+    count: 1
+    concurrency: 512     # max concurrent provider calls inside the worker (default 256)
+    buffer_size: 32768   # streaming buffer per call in bytes (default 16384)
+    client_timeout: "120s"  # raised for long reasoning / thinking-mode calls
+    # Per-provider concurrency overrides (lower-case provider name).
+    # Tune to match your API plan tier (e.g. Anthropic tier-4 = 1000 RPM).
+    per_provider_concurrency:
+      anthropic: 512
+      openai: 512
+      deepseek: 128
+      ollama: 64
+
+  # Generic module worker pools — each entry spawns `count` subprocesses.
+  # Use transport: "unix" for tools that are called frequently (filesystem, bash):
+  # AF_UNIX sockets have ~2.8x lower round-trip latency than TCP loopback.
+  # pools:
+  #   - id: "fast-tools"
+  #     modules: ["filesystem", "bash"]
+  #     count: 2
+  #     transport: "unix"
 
 logging:
   level: "info"  # debug, info, warn, error

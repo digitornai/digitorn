@@ -463,11 +463,26 @@ func runLSPDiagnose(ctx context.Context, params map[string]any, p Payload, deps 
 	if err != nil {
 		return ActionEffects{}, err
 	}
-	// Inject the errors/warnings into the agent's context so it sees them
-	// WITHOUT having to ask — but stay silent on a clean file (no noise).
+	// Surface the errors/warnings to the agent WITHOUT a separate tool call or chat
+	// message — stay silent on a clean file (no noise).
 	msg := formatLSPDiagnostics(path, raw)
 	if msg == "" {
 		return ActionEffects{}, nil
+	}
+	// Fold the diagnostics straight into the edit/write tool's OWN result (the
+	// `text` surface a transform_result mutates), so the agent reads its errors
+	// inline as part of the edit it just made — exactly where it expects feedback.
+	// lsp_diagnose already runs synchronously on tool_end (see isSyncAction), so
+	// the mutation lands before the result reaches the LLM. Fall back to a message
+	// only if the result map is unavailable, so the diagnostics are never lost.
+	if p.ToolResult != nil {
+		prev, _ := p.ToolResult["text"].(string)
+		if strings.TrimSpace(prev) != "" {
+			p.ToolResult["text"] = prev + "\n\n" + msg
+		} else {
+			p.ToolResult["text"] = msg
+		}
+		return ActionEffects{Modified: true}, nil
 	}
 	return ActionEffects{Injects: []*MessageInjection{{Role: "user", Content: msg}}}, nil
 }

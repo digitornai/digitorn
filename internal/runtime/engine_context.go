@@ -36,7 +36,17 @@ func (e *Engine) contextSectionsText(in TurnInput, agent *schema.Agent, app *app
 			"id": app.Definition.App.AppID, "name": app.Definition.App.Name, "version": app.Definition.App.Version,
 		},
 		Session: sessionBag(snap),
-		Env:     map[string]any{"os": goruntime.GOOS, "arch": goruntime.GOARCH, "platform": goruntime.GOOS},
+		Env: map[string]any{
+			"os":       goruntime.GOOS,
+			"arch":     goruntime.GOARCH,
+			"platform": goruntime.GOOS,
+			"shell": func() string {
+				if goruntime.GOOS == "windows" {
+					return "powershell"
+				}
+				return "bash"
+			}(),
+		},
 		Now:     time.Now(),
 	}
 	if agent != nil {

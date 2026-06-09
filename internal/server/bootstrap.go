@@ -662,6 +662,12 @@ func (d *Daemon) buildEngine() {
 		Compactor: compactor,
 	})
 
+	// Auto-promote: a FOREGROUND bash run still going after the threshold is moved
+	// to a managed background task instead of blocking the turn or being killed.
+	// Wrap the dispatcher AFTER hooks captured the raw one, so only the LLM's tool
+	// calls auto-promote; hook-driven and meta sub-tool dispatches run directly.
+	eng.Dispatcher = background.NewPromotingDispatcher(eng.Dispatcher, bgMgr, background.DefaultPromoteThreshold)
+
 	d.engine = eng
 	d.lifecycle = eng // *runtime.Engine exposes FireLifecycle for session_end / pre_compact
 	d.logger.Info("daemon: runtime engine ready",

@@ -11,9 +11,8 @@ import (
 )
 
 // TestPromptSection_WindowsDialect verifies the agent is told, up front and
-// unambiguously, that it is on a bash shell (not cmd/PS/MSYS) with the path and
-// flag rules — so it stops faceplanting on `cd /d`, `/c/Users`, and unquoted
-// backslash paths instead of discovering them one failed command at a time.
+// unambiguously, that it is running PowerShell (not bash) on Windows — and
+// receives accurate Windows command guidance instead of Unix-only hints.
 func TestPromptSection_WindowsDialect(t *testing.T) {
 	m := New()
 	m.cfg.Workdir = t.TempDir()
@@ -26,11 +25,13 @@ func TestPromptSection_WindowsDialect(t *testing.T) {
 	}
 	body := secs[0].Content
 	for _, want := range []string{
-		"BASH-compatible",
-		"NEVER `cd /d`",
-		"/c/Users", // tells it MSYS paths don't work
-		"FORWARD slashes",
-		"taskkill /F /PID", // correct Windows process-kill, not lsof
+		"PowerShell",
+		"POWERSHELL COMMANDS",
+		"$env:VAR",
+		"Get-Process",
+		"Get-NetTCPConnection",
+		"Remove-Item -Recurse -Force",
+		"taskkill /F /PID",
 		"netstat -ano",
 	} {
 		if !strings.Contains(body, want) {
@@ -39,5 +40,8 @@ func TestPromptSection_WindowsDialect(t *testing.T) {
 	}
 	if strings.Contains(body, "lsof") {
 		t.Fatalf("stale Unix-only `lsof` hint still shown on Windows")
+	}
+	if strings.Contains(body, "BASH-compatible") {
+		t.Fatalf("stale 'BASH-compatible' claim still shown on Windows (default is PowerShell)")
 	}
 }

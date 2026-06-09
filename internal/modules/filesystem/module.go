@@ -12,6 +12,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -80,6 +81,13 @@ func New() *Module {
 		ToolPrompt: "Read before you edit or write — never edit a file blind. When you already know the symbol or region you need, read just that range (offset/limit) rather than the whole file; on a large or unfamiliar file run `outline: true` first to map it, then read the precise lines.\n" +
 			"Batch related files in ONE call via `paths` instead of many sequential reads — it is faster and keeps the picture coherent.\n" +
 			"The line numbers in the output are authoritative: cite locations as path:line and edit by those numbers.\n" +
+			"READ OUTPUT FORMAT: every content line is prefixed with its 1-based line number and a TAB. Example:\n" +
+			"  1\tpackage main\n" +
+			"  2\t\n" +
+			"  3\tfunc main() {\n" +
+			"  The line number and tab are PURE DISPLAY — they are NOT part of the actual file content.\n" +
+			"  When you call `edit` or `write`, NEVER include those line numbers or tabs in old_string / new_string / content.\n" +
+			"  Only use line numbers for start_line/end_line or offset/limit, never inside the text you write back.\n" +
 			"Do NOT re-read a file you just wrote or edited to confirm it worked — the write/edit tool already errors on failure, and the harness tracks the current content for you. Reading to verify is wasted effort.",
 		Params: []tool.ParamSpec{
 			{Name: "path", Type: "string", Description: "File path relative to the workspace.", Path: true},
@@ -95,9 +103,21 @@ func New() *Module {
 	m.RegisterTool(module.Tool{
 		Name:        "write",
 		Description: "Write content to a file, creating it if it does not exist (overwrites).",
-		ToolPrompt: "Use `write` for a NEW file or a deliberate full rewrite — it replaces the entire file. To change part of an existing file use `edit`/`multi_edit` instead: surgical edits preserve the rest and are far less likely to drop code than re-emitting the whole file from memory.\n" +
-			"If the file already exists, read it first so you don't clobber content you didn't mean to.\n" +
-			"Match the surrounding code's style and conventions. Never write credentials, API keys, or secrets into source.",
+		ToolPrompt: "Use `write` for a NEW file or a deliberate full rewrite — it replaces the entire file atomically (crash-safe). To change part of an existing file use `edit`/`multi_edit` instead: surgical edits are faster, safer, and never drop code by accident.\n" +
+			"If the file already exists, read it first — never clobber content you didn't mean to touch.\n" +
+			"\n" +
+			"CRITICAL — content encoding rules (violations corrupt the file silently):\n" +
+			"• `content` MUST be a plain JSON string — a single quoted value, never an array [], never an object {}.\n" +
+			"• Wrong: content: [{\"color\":\"red\"}]  ← array, will be mangled\n" +
+			"• Wrong: content: {\"body\":\"...\"}      ← object, will be mangled\n" +
+			"• Right: content: \"body { color: red; }\" ← plain string, always correct\n" +
+			"• CSS, TOML, YAML, JSX, JSON-inside-a-file: all go as a plain string. The { } : -- @ characters inside the string are fine — they are NOT JSON syntax once inside quotes.\n" +
+			"• Never pre-encode or escape the content yourself. Pass the raw file body as-is.\n" +
+			"\n" +
+			"Style rules:\n" +
+			"• Match the surrounding code's indentation, quotes, and conventions exactly.\n" +
+			"• Never write credentials, API keys, or secrets into source.\n" +
+			"• Preserve existing file encoding (UTF-8 unless the file is explicitly otherwise).",
 		Params: []tool.ParamSpec{
 			{Name: "path", Type: "string", Description: "File path relative to the workspace.", Required: true, Path: true},
 			{Name: "content", Type: "string", Description: "Full content to write.", Required: true},
@@ -115,6 +135,7 @@ func New() *Module {
 			"• By TEXT: `old_string` (exact match, with a forgiving whitespace/indentation fallback). If it occurs N times: add surrounding context, OR set `occurrence` to the Nth match, OR `replace_all`.\n" +
 			"Set `dry_run` to preview the unified diff without writing. `expect` (optional) is a snippet the target must still contain — if not, the edit is refused (guards against editing the wrong place after the file changed).",
 		ToolPrompt: "Always `read` the target first — the edit is anchored to text/lines you must have seen. Right after a read, line locators (start_line/end_line) are the cheapest and most unambiguous; switch to text/anchor locators (old_string, insert_after/before) once earlier edits may have shifted the line numbers.\n" +
+			"CRITICAL: when you pass `old_string`, give ONLY the file's code — never the line-number prefix from `read` (the \"  142\\t\" at the start of each read line). Including it is the #1 cause of a failed first edit. If you just read the lines, prefer start_line/end_line — no text to match, no way to mis-copy.\n" +
 			"`old_string` must uniquely identify the spot: if it matches more than once, add surrounding context, or set `occurrence` to the Nth match, or `replace_all` when you truly mean every one.\n" +
 			"When unsure, set `dry_run: true` and inspect the diff before committing. Use `expect` on a risky edit so it refuses if the file isn't what you think.\n" +
 			"Preserve surrounding indentation and style exactly; an edit that breaks indentation is a bug.",
@@ -191,13 +212,24 @@ func New() *Module {
 
 	m.RegisterTool(module.Tool{
 		Name:        "grep",
-		Description: "Search file contents matching a regular expression.",
-		ToolPrompt: "Your primary way to locate code by content — searching is almost always cheaper and more accurate than reading whole files or directories. Scope it: set `include` to a file glob (\"*.go\", \"*.{ts,tsx}\") and `path` to the relevant subtree so results stay sharp. Search for a distinctive token (a function name, error string, struct field), read the few hits, then act.\n" +
-			"For a broad, open-ended sweep across many angles or a large codebase, delegate to the explore sub-agent instead of running many greps yourself — it returns the conclusion without flooding your context.",
+		Description: "Search file contents by RE2 regular expression — fast (trigram-indexed), gitignore-aware, and enriched with the call graph. Supports context lines, output modes (matches / files / count), case-insensitive and multiline matching.",
+		ToolPrompt: "Your primary way to locate code by content — searching beats reading whole files. Work it like an engineer who knows the tool:\n" +
+			"• SCOPE it: set `include` to a glob (\"*.go\", \"*.{ts,tsx}\") and `path` to the relevant subtree so results stay sharp.\n" +
+			"• FIND, then READ: use output_mode \"files_with_matches\" to see WHICH files match (cheap), then narrow to see WHAT; output_mode \"count\" tallies hits per file. Default \"content\" returns the matching lines.\n" +
+			"• SEE the surroundings: set `context` (e.g. 3) to get the lines around each match — you understand the hit without a separate read.\n" +
+			"• FLAGS: `ignore_case` for case-insensitive; `multiline` to match across line boundaries; or use inline RE2 flags in the pattern — (?i) case, (?m) ^/$ per line, (?s) dot matches newline.\n" +
+			"• FOLLOW THE THREAD: each match comes back enriched with its enclosing symbol and that symbol's callers, so one search already hands you the next hop — chase the call graph (caller→callee) instead of guessing.\n" +
+			"Search a distinctive token (a function name, error string, struct field), read the few hits, then act. For a broad open-ended sweep across a large codebase, delegate to the explore sub-agent rather than running many greps yourself — it returns the conclusion without flooding your context.\n" +
+			"A literal that isn't valid regex (a call like `Foo(`, a slice `a[i]`, a path) is searched literally — you don't need to escape metacharacters.\n" +
+			"Note: RE2 has no lookbehind/backreferences (it can never catastrophically backtrack). For those rare cases, drop to bash + `rg -P`.",
 		Params: []tool.ParamSpec{
-			{Name: "pattern", Type: "string", Description: "Regular expression to search for.", Required: true},
-			{Name: "path", Type: "string", Description: "Directory to search under (default: workspace root).", Default: ".", Path: true},
-			{Name: "include", Type: "string", Description: "Optional glob to filter files, e.g. \"*.go\".", Default: ""},
+			{Name: "pattern", Type: "string", Description: "RE2 regular expression. Inline flags supported: (?i) case-insensitive, (?m) multiline ^/$, (?s) dot matches newline.", Required: true},
+			{Name: "path", Type: "string", Description: "Directory (or file) to search under (default: workspace root).", Default: ".", Path: true},
+			{Name: "include", Type: "string", Description: "Glob to scope files, e.g. \"*.go\" or \"*.{ts,tsx}\".", Default: ""},
+			{Name: "output_mode", Type: "string", Description: "\"content\" (matching lines, default), \"files_with_matches\" (just the paths — find WHERE fast), or \"count\" (match counts per file).", Default: "content"},
+			{Name: "context", Type: "integer", Description: "Lines of surrounding context shown around each match (0-20). Lets you read the hit in situ.", Default: 0},
+			{Name: "ignore_case", Type: "boolean", Description: "Case-insensitive match.", Default: false},
+			{Name: "multiline", Type: "boolean", Description: "Let the pattern match across line boundaries (a single match can span lines).", Default: false},
 			{Name: "max_results", Type: "integer", Description: "Cap on match count.", Default: 500},
 		},
 		RiskLevel: tool.RiskLow,
@@ -525,18 +557,54 @@ func readCapped(abs string, cap int64) (data []byte, overCap bool, err error) {
 }
 
 type writeParams struct {
-	Path     string `json:"path"`
-	FilePath string `json:"file_path"`
-	Filename string `json:"filename"`
-	File     string `json:"file"`
-	Content  string `json:"content"`
+	Path     string      `json:"path"`
+	FilePath string      `json:"file_path"`
+	Filename string      `json:"filename"`
+	File     string      `json:"file"`
+	Content  flexContent `json:"content"`
+}
+
+var reLineNumber = regexp.MustCompile(`^\s*\d+\t`)
+
+func stripLineNumbers(s string) string {
+	lines := strings.Split(s, "\n")
+	allNumbered := true
+	for _, l := range lines {
+		if l == "" {
+			continue
+		}
+		if !reLineNumber.MatchString(l) {
+			allNumbered = false
+			break
+		}
+	}
+	if !allNumbered {
+		return s
+	}
+	result := make([]string, len(lines))
+	for i, l := range lines {
+		result[i] = reLineNumber.ReplaceAllString(l, "")
+	}
+	return strings.Join(result, "\n")
 }
 
 func (m *Module) write(ctx context.Context, raw json.RawMessage) (tool.Result, error) {
-	var p writeParams
-	if err := json.Unmarshal(raw, &p); err != nil {
+	var intermediate map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &intermediate); err != nil {
 		return errResult(err), err
 	}
+	normalized, err := json.Marshal(intermediate)
+	if err != nil {
+		return errResult(err), err
+	}
+
+	var p writeParams
+	if err := json.Unmarshal(normalized, &p); err != nil {
+		return errResult(err), err
+	}
+
+	p.Content = flexContent(stripLineNumbers(string(p.Content)))
+
 	p.Path = effectivePath(p.Path, p.FilePath, p.Filename, p.File)
 	abs, err := m.resolveCtx(ctx, p.Path)
 	if err != nil {
@@ -550,9 +618,6 @@ func (m *Module) write(ctx context.Context, raw json.RawMessage) (tool.Result, e
 			return errResult(err), err
 		}
 		existed = true
-		// Read the old content for the diff only when it is small enough to be
-		// worth carrying (the diff layer caps it too — this avoids slurping a
-		// multi-MB file into memory just to throw it away).
 		if fi.Size() <= diffContentCap {
 			if b, e := os.ReadFile(abs); e == nil {
 				oldContent = string(b)
@@ -562,23 +627,21 @@ func (m *Module) write(ctx context.Context, raw json.RawMessage) (tool.Result, e
 	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
 		return errResult(err), err
 	}
-	// Atomic : a crash/power-loss leaves either the old file or the new one,
-	// never a truncated one. Preserves the existing file's permissions.
-	if err := atomicWrite(abs, []byte(p.Content), fileMode(abs, 0o644)); err != nil {
+	if err := atomicWrite(abs, []byte(string(p.Content)), fileMode(abs, 0o644)); err != nil {
 		return errResult(err), err
 	}
-	tindexes.markDirty(abs) // keep this file fresh against any trigram index
-	sindexes.markDirty(abs) // and against the ephemeral semantic index
-	repomap.MarkDirty(abs)  // and the ranked codebase map
-	notifyFileChange(ctx)   // live workspace push (non-blocking, best-effort)
+	tindexes.markDirty(abs)
+	sindexes.markDirty(abs)
+	repomap.MarkDirty(abs)
+	notifyFileChange(ctx)
 	action := "created"
 	if existed {
 		action = "overwrote"
 	}
 	return tool.Result{
 		Success: true,
-		Data:    map[string]any{"path": p.Path, "bytes": len(p.Content), "action": action},
-		Diff:    diffView(p.Path, oldContent, p.Content),
+		Data:    map[string]any{"path": p.Path, "bytes": len(string(p.Content)), "action": action},
+		Diff:    diffView(p.Path, oldContent, string(p.Content)),
 	}, nil
 }
 
@@ -632,6 +695,16 @@ func (e *editError) Error() string { return e.message }
 // / trailing-space / indentation) — never a risky similarity guess. Shared by
 // edit (single) and multi_edit (batch), so their matching semantics are identical.
 func applyEdit(content, oldStr, newStr string, replaceAll bool) (updated string, count int, strategy string, err error) {
+	return applyEditTry(content, oldStr, newStr, replaceAll, true)
+}
+
+// applyEditTry is applyEdit with one self-healing retry: on a TOTAL miss it
+// strips read's line-number prefixes ("  142\t…") from old_string — the single
+// most common reason a model's edit fails first-try is pasting numbered read
+// output verbatim — and tries once more. allowStrip is false on the retry so it
+// can never loop. The strip is conservative (every non-blank line must carry the
+// prefix), so a genuine edit is never mangled.
+func applyEditTry(content, oldStr, newStr string, replaceAll, allowStrip bool) (updated string, count int, strategy string, err error) {
 	if oldStr == "" {
 		return "", 0, "", &editError{kind: "empty", message: "old_string must not be empty"}
 	}
@@ -661,7 +734,12 @@ func applyEdit(content, oldStr, newStr string, replaceAll bool) (updated string,
 	}
 	spans, strat := locateFuzzy(content, oldStr)
 	if len(spans) == 0 {
-		return "", 0, "", &editError{kind: "not_found", message: "old_string not found", closest: closestMatches(content, oldStr, 3)}
+		if allowStrip {
+			if s := stripReadLineNumbers(oldStr); s != oldStr && s != "" {
+				return applyEditTry(content, s, newStr, replaceAll, false)
+			}
+		}
+		return "", 0, "", &editError{kind: "not_found", message: "old_string not found in the file. Likely causes: (1) you pasted the line-number prefix from `read` — give only the code; (2) the text drifted — re-read the file; (3) or edit by line number with start_line/end_line (no text to match). See closest_matches.", closest: closestMatches(content, oldStr, 3)}
 	}
 	if len(spans) > 1 && !replaceAll {
 		lines := make([]int, 0, len(spans))
@@ -934,6 +1012,100 @@ func (f *flexInt) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+// flexContent accepts the file body in whatever shape the model emits:
+//
+//   - a plain JSON string        → used as-is
+//   - an array of strings        → joined with "\n" (models often send lines this way)
+//   - an array of objects        → the first of "text"/"content"/"line"/"value" key
+//     found on each object is extracted, then joined
+//   - any other scalar (number…) → converted via fmt.Sprintf
+//
+// The extra flexibility prevents the whole write call from failing with
+// "cannot unmarshal array into … of type string" when an LLM structures
+// file content as a line array instead of a single string.
+type flexContent string
+
+func (f *flexContent) UnmarshalJSON(b []byte) error {
+	// 1. Explicit null
+	if string(b) == "null" {
+		*f = ""
+		return nil
+	}
+
+	// 2. Fast path : plain JSON string
+	var s string
+	if err := json.Unmarshal(b, &s); err == nil {
+		*f = flexContent(s)
+		return nil
+	}
+
+	// 3. Array path : []any — each element becomes a line
+	var arr []any
+	if err := json.Unmarshal(b, &arr); err == nil {
+		lines := make([]string, 0, len(arr))
+		for _, el := range arr {
+			switch v := el.(type) {
+			case string:
+				lines = append(lines, v)
+			case map[string]any:
+				found := false
+				for _, k := range []string{"text", "content", "line", "value", "code", "source", "snippet"} {
+					if sv, ok := v[k].(string); ok {
+						lines = append(lines, sv)
+						found = true
+						break
+					}
+				}
+				if !found {
+					b2, _ := json.Marshal(v)
+					lines = append(lines, string(b2))
+				}
+			default:
+				b2, _ := json.Marshal(el)
+				lines = append(lines, string(b2))
+			}
+		}
+		*f = flexContent(strings.Join(lines, "\n"))
+		return nil
+	}
+
+	// 3b. Garde-fou : si le contenu ressemble à du CSS/TOML/YAML mal quoté
+	// (le LLM a oublié les guillemets autour du contenu), on le stocke tel quel
+	// plutôt que de le parser comme un objet JSON et de le corrompre.
+	raw := strings.TrimSpace(string(b))
+	if strings.HasPrefix(raw, "{") {
+		inner := strings.ToLower(raw)
+		if strings.Contains(inner, "--") ||
+			strings.Contains(inner, "@import") ||
+			strings.Contains(inner, "@keyframes") ||
+			strings.Contains(inner, "@theme") ||
+			strings.Contains(inner, "@layer") ||
+			strings.Contains(inner, "@media") {
+			*f = flexContent(raw)
+			return nil
+		}
+	}
+
+	// 4. Object path
+	var obj map[string]any
+	if err := json.Unmarshal(b, &obj); err == nil {
+		for _, k := range []string{"content", "text", "body", "code", "source"} {
+			if sv, ok := obj[k].(string); ok {
+				*f = flexContent(sv)
+				return nil
+			}
+		}
+		// Fallback: serialize the object so the LLM sees its mistake
+		b2, _ := json.MarshalIndent(obj, "", "  ")
+		*f = flexContent(string(b2))
+		return nil
+	}
+
+	// 5. Scalar fallback (number, bool…)
+	*f = flexContent(strings.Trim(string(b), `"`))
+	return nil
+}
+
 // flexBool accepts a JSON bool, OR a string ("true"/"false"/"1"/"0"/"yes"/"no"),
 // OR a number (0/1), OR null — LLMs routinely send booleans as strings
 // (outline:"true"), which a plain bool rejects and fails the whole call.
@@ -1092,6 +1264,7 @@ type grepParams struct {
 	Context    flexInt `json:"context"`     // lines of context around each match (0-20)
 	OutputMode string  `json:"output_mode"` // "content" | "files_with_matches" | "count"
 	Multiline  bool    `json:"multiline"`   // match across line boundaries
+	IgnoreCase bool    `json:"ignore_case"` // case-insensitive match
 	Semantic   string  `json:"semantic"`    // "auto" (default) | "on" | "off" : fuse code-semantic matches
 }
 
@@ -1133,7 +1306,31 @@ func (m *Module) grep(ctx context.Context, raw json.RawMessage) (tool.Result, er
 	if rb, e := filepath.EvalSymlinks(base); e == nil {
 		base = rb
 	}
-	re, literal, err := compilePattern(p.Pattern, p.Multiline)
+	pat := p.Pattern
+	if p.IgnoreCase {
+		// (?i) forces the regexp path (no literal fast-path) and folds case for
+		// both literal and regex patterns — RE2-safe, no backtracking.
+		pat = "(?i)" + pat
+	}
+	re, literal, err := compilePattern(pat, p.Multiline)
+	literalFallback := false
+	if err != nil {
+		// The pattern isn't valid regex — almost always a LITERAL that happens to
+		// contain regex metacharacters: a call like `Foo(`, a slice index `a[i]`, a
+		// path. Match the ORIGINAL text literally (QuoteMeta escapes the metachars),
+		// keeping the case / multiline flags, so the search succeeds instead of
+		// dead-ending the agent on an unmatched paren or bracket.
+		flags := "m"
+		if p.Multiline {
+			flags += "s"
+		}
+		if p.IgnoreCase {
+			flags += "i"
+		}
+		re, err = regexp.Compile("(?" + flags + ")" + regexp.QuoteMeta(p.Pattern))
+		literal = nil
+		literalFallback = true
+	}
 	if err != nil {
 		return errResult(fmt.Errorf("invalid pattern: %w", err)), err
 	}
@@ -1211,6 +1408,9 @@ func (m *Module) grep(ctx context.Context, raw json.RawMessage) (tool.Result, er
 		return errResult(err), err
 	}
 	data := map[string]any{"truncated": res.Truncated, "scanned": res.Scanned}
+	if literalFallback {
+		data["note"] = "pattern wasn't valid regex (looks like literal text with metacharacters like '(' or '['); searched it as a literal string"
+	}
 	switch mode {
 	case grepFiles:
 		data["files"] = res.Files

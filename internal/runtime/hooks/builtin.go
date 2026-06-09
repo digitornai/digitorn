@@ -9,7 +9,10 @@ const BuiltinTaskCompletionGuardID = "digitorn.builtin.task_completion_guard"
 // taskCompletionReason is the directive injected when the guard fires. It is
 // templated against the stop payload : {{tasks.summary}} lists the open tasks
 // ("t2 (in_progress), t3 (pending)"). renderTemplate fills it at fire time.
-const taskCompletionReason = "You are trying to end your turn with unfinished tasks: {{tasks.summary}}. Do NOT stop now. The work is not done while a task is pending or in_progress. Resume immediately: for each open task either do the remaining work and call memory.task_update(task_id, status=\"completed\"), or — only if it genuinely cannot proceed — call memory.task_update(task_id, status=\"blocked\") with the reason. Respond with the next action that advances a task, not a closing summary. You may only end the turn once every task is completed or blocked."
+const taskCompletionReason = "You ended your turn with open tasks: {{tasks.summary}}. Two cases — pick the right one:\n" +
+	"1. If work still remains on a task, do NOT stop: take the next action that advances it, then call memory.task_update(task_id, status=\"completed\") (or status=\"blocked\" with a reason if it genuinely cannot proceed).\n" +
+	"2. If you are deliberately WAITING ON THE USER — a checkpoint after a finished task, a clarifying question, their go-ahead before continuing — you MUST ask via the ask_user tool. ask_user PAUSES the turn for a real reply; a question typed as plain text does NOT pause, which is exactly why you landed back here. Re-ask the same thing through ask_user now.\n" +
+	"Never stop silently with open tasks. End the turn only once every task is completed or blocked, OR you have called ask_user to wait for the user."
 
 // BuiltinHooks returns the runtime-default hooks every app gets for free,
 // merged ahead of the app's declared runtime.hooks[]. They are ordinary

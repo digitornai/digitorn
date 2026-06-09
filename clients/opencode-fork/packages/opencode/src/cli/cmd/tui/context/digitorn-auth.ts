@@ -5,12 +5,46 @@
 // the listener with the tokens in the query string. We persist them to
 // ~/.digitorn/credentials.json — the SAME file digitornConfig() already reads.
 import open from "open"
-import { writeFileSync, mkdirSync } from "node:fs"
+import { writeFileSync, mkdirSync, readFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
+import { createSignal } from "solid-js"
 
 export const AUTH_PROVIDERS = ["google", "microsoft", "azure"] as const
 export type AuthProvider = (typeof AUTH_PROVIDERS)[number]
+
+// Reactive auth "tick" : UI memos that read digitornAuthState() re-evaluate when
+// this bumps. refreshDigitornAuth() is called after a sign-in completes so the
+// "not signed in" indicators clear without a restart.
+const [authTick, setAuthTick] = createSignal(0)
+export function refreshDigitornAuth(): void {
+  setAuthTick((n) => n + 1)
+}
+
+export interface DigitornAuthState {
+  connected: boolean
+  email?: string
+  name?: string
+  expired: boolean
+}
+
+// digitornAuthState reports whether a usable digitorn session exists, from the same
+// source digitornConfig() reads : DIGITORN_TOKEN env override, else the cached
+// ~/.digitorn/credentials.json (honouring expires_at). Reactive — a memo calling
+// this re-runs after refreshDigitornAuth().
+export function digitornAuthState(): DigitornAuthState {
+  authTick()
+  if (process.env.DIGITORN_TOKEN) return { connected: true, expired: false }
+  try {
+    const c = JSON.parse(readFileSync(join(homedir(), ".digitorn", "credentials.json"), "utf8")) as DigitornCreds
+    if (!c.access_token) return { connected: false, expired: false }
+    const expired =
+      typeof c.expires_at === "number" && c.expires_at > 0 && c.expires_at <= Math.floor(Date.now() / 1000)
+    return { connected: !expired, email: c.email, name: c.name, expired }
+  } catch {
+    return { connected: false, expired: false }
+  }
+}
 
 const DEFAULT_ISSUER = "https://auth.digitorn.ai"
 
@@ -97,13 +131,24 @@ export function startDigitornLogin(opts: {
     () => reject(new Error("timed out waiting for the browser callback")),
     opts.timeoutMs ?? 180_000,
   )
-  const stop = () => {
+  // Tear the listener down AFTER the in-flight response has flushed. Forcing it
+  // (server.stop(true)) the instant `done` settles races the success-page write
+  // and resets the browser socket — the login still succeeds (the token was read
+  // before we returned), but the user sees "page unreachable" instead of the OK
+  // page. On success we wait a tick for the bytes to leave; on error/cancel there
+  // is no in-flight page, so we close immediately.
+  const stop = (delayMs: number) => {
     clearTimeout(timer)
-    try {
-      server.stop(true)
-    } catch {}
+    setTimeout(() => {
+      try {
+        server.stop(true)
+      } catch {}
+    }, delayMs)
   }
-  done.then(stop, stop)
+  done.then(
+    () => stop(500),
+    () => stop(0),
+  )
 
   return { url, done, cancel: () => reject(new Error("cancelled")) }
 }
@@ -135,7 +180,7 @@ function decodeJWTClaims(token: string): JWTClaims | undefined {
 
 const htmlHeaders = (status: number): ResponseInit => ({
   status,
-  headers: { "content-type": "text/html; charset=utf-8" },
+  headers: { "content-type": "text/html; charset=utf-8", connection: "close" },
 })
 
 const successHTML = (): string =>

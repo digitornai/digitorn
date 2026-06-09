@@ -249,7 +249,6 @@ const DIGITORN_HIDDEN_SLASH = new Set([
   "workspace.set",
   "variant.list",
   "mcp.list",
-  "provider.connect",
   "console.org.switch",
   "prompt.skills",
   // Session sharing is an opencode-HOSTED cloud feature (publishes the transcript

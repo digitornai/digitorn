@@ -1634,7 +1634,7 @@ func resolveAutoCompact(rt *schema.RuntimeBlock, brainCtx *schema.ContextConfig)
 		p.keep = brainCtx.KeepRecent
 	}
 	if p.threshold == 0 {
-		p.threshold = 0.75
+		p.threshold = 0.97
 	}
 	return p
 }

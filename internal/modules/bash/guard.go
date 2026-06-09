@@ -23,7 +23,7 @@ func backgroundAmpHint(command string) string {
 
 // foregroundServerPatterns match commands that NEVER return on their own — dev
 // servers, preview servers, watchers. Run in the foreground they pin the turn
-// until the timeout (default 120s) and then report a bogus failure when the kill
+// until the timeout (default 900s) and then report a bogus failure when the kill
 // finally lands; the cardinal rule is the loop is never blocked. They are
 // matched on a QUOTE-MASKED copy (so `echo "npm run dev"` / `bash -c "vite"` are
 // not flagged) and are deliberately conservative: nothing here matches a command

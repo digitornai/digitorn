@@ -447,6 +447,14 @@ func (s *Service) buildContext(parent context.Context, req *llm.ChatRequest) (*s
 	return bc, cancel, route
 }
 
+// missingReasoningPlaceholder is sent as reasoning_content for an assistant
+// message that carries tool_calls but for which no thinking-mode trace was
+// captured (an interrupted or trivial tool call). Reasoning providers (DeepSeek
+// thinking mode) require a non-empty reasoning_content on such messages or they
+// reject the next request; this keeps the field present and non-empty without
+// fabricating a real rationale.
+const missingReasoningPlaceholder = "(no reasoning trace recorded for this step)"
+
 func (s *Service) buildChatRequest(req *llm.ChatRequest) *schemas.BifrostChatRequest {
 	// Apply Anthropic-style prompt-cache breakpoints on the stable
 	// prefix BEFORE wire-format translation. Provider-agnostic: the
@@ -502,8 +510,21 @@ func (s *Service) buildChatRequest(req *llm.ChatRequest) *schemas.BifrostChatReq
 			if len(m.ToolCalls) > 0 {
 				am.ToolCalls = buildAssistantToolCalls(m.ToolCalls)
 			}
-			if m.ReasoningContent != "" {
+			switch {
+			case m.ReasoningContent != "":
 				rc := m.ReasoningContent
+				am.Reasoning = &rc
+			case len(m.ToolCalls) > 0:
+				// DeepSeek thinking mode REJECTS the next request unless every
+				// assistant message that carries tool_calls also carries a NON-EMPTY
+				// reasoning_content ("...must be passed back to the API") — even when
+				// no trace was captured for this turn (an interrupted/quick tool
+				// call). An empty string isn't enough (the provider — or a gateway
+				// in front of it — treats it as absent), so emit a minimal
+				// placeholder. A plain assistant message with no tool_calls and no
+				// reasoning keeps the field absent, so a strict provider never sees
+				// an empty key.
+				rc := missingReasoningPlaceholder
 				am.Reasoning = &rc
 			}
 			bm.ChatAssistantMessage = am
