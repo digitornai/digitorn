@@ -1,0 +1,56 @@
+[Unit]
+Description=Digitorn Go Daemon
+Documentation=https://github.com/mbathe/digitorn
+After=network-online.target redis-server.service postgresql.service
+Wants=network-online.target redis-server.service
+
+[Service]
+Type=simple
+User=digitorn
+Group=digitorn
+
+# /opt/digitorn-go/current is a symlink the deploy script flips to the new
+# release. The daemon finds its worker binaries alongside itself in this dir.
+WorkingDirectory=/opt/digitorn-go/current
+
+# Secrets + instance config (Postgres DSN, gateway URL, JWKS, Redis) live here
+# as DIGITORN_SECTION__KEY env vars that override the YAML. Missing file = boot
+# still attempts, but auth/DB will fail loud — preferable to a silent fallback.
+EnvironmentFile=-/etc/digitorn/digitorn-go.env
+
+ExecStart=/opt/digitorn-go/current/digitornd -config /etc/digitorn/digitorn-go.yaml
+
+# SIGINT triggers a graceful drain (flush sessions, close DB pools, stop workers).
+KillSignal=SIGINT
+TimeoutStopSec=30s
+
+Restart=on-failure
+RestartSec=5s
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=digitorn-go
+
+# Hardening. Loosen ONLY if a feature genuinely needs the access.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+# Runtime state lives in /home/digitorn/.digitorn (sessions, installed apps,
+# the MCP sidecar, the OAuth seal key). /opt/digitorn-go holds releases.
+ReadWritePaths=/opt/digitorn-go /home/digitorn /var/log/digitorn
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+
+CPUQuota=400%
+MemoryHigh=8G
+MemoryMax=12G
+TasksMax=4096
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

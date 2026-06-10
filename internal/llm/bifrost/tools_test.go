@@ -344,11 +344,40 @@ func TestBuildChatRequest_AttachesToolsAndAuto(t *testing.T) {
 	if br.Params.Temperature == nil || *br.Params.Temperature != 0.4 {
 		t.Errorf("temperature lost : %v", br.Params.Temperature)
 	}
-	if br.Params.MaxCompletionTokens == nil || *br.Params.MaxCompletionTokens != 200 {
-		t.Errorf("max_tokens lost : %v", br.Params.MaxCompletionTokens)
+	// Gateway mode (no BYOK) routes max_tokens through ExtraParams as the
+	// legacy `max_tokens` key — the digitorn LiteLLM gateway rejects the
+	// modern max_completion_tokens. (BYOK/direct mode uses MaxCompletionTokens;
+	// covered by TestBuildChatRequest_MaxTokensByokUsesCompletionField.)
+	if br.Params.MaxCompletionTokens != nil {
+		t.Errorf("gateway mode must not set max_completion_tokens, got %v", *br.Params.MaxCompletionTokens)
+	}
+	if got, ok := br.Params.ExtraParams["max_tokens"]; !ok || got != 200 {
+		t.Errorf("max_tokens lost from ExtraParams : %v (present=%v)", got, ok)
 	}
 	if br.Params.TopP == nil || *br.Params.TopP != 0.95 {
 		t.Errorf("top_p lost : %v", br.Params.TopP)
+	}
+}
+
+// BYOK / direct-provider mode carries max_tokens as the modern OpenAI
+// max_completion_tokens (Bifrost translates it per provider), NOT through the
+// gateway's legacy ExtraParams path.
+func TestBuildChatRequest_MaxTokensByokUsesCompletionField(t *testing.T) {
+	s := &Service{}
+	maxT := 200
+	req := &llm.ChatRequest{
+		Provider:  "openai",
+		Model:     "gpt-4o-mini",
+		BYOK:      true,
+		Messages:  []llm.ChatMessage{{Role: "user", Content: "hi"}},
+		MaxTokens: &maxT,
+	}
+	br := s.buildChatRequest(req)
+	if br.Params == nil || br.Params.MaxCompletionTokens == nil || *br.Params.MaxCompletionTokens != 200 {
+		t.Fatalf("BYOK max_tokens must map to max_completion_tokens, got %+v", br.Params)
+	}
+	if br.Params.ExtraParams["max_tokens"] != nil {
+		t.Errorf("BYOK mode must not duplicate into ExtraParams, got %v", br.Params.ExtraParams["max_tokens"])
 	}
 }
 

@@ -74,6 +74,7 @@ func New() *Module {
 			{Name: "knowledge_base", Type: "string", Description: "Target knowledge base.", Required: true},
 			{Name: "text", Type: "string", Description: "Raw text to ingest.", Required: true},
 			{Name: "source", Type: "string", Description: "Citation label for this text (title or filename)."},
+			{Name: "metadata", Type: "object", Description: "Optional tags stored with each chunk and usable as retrieval filters (e.g. team, doc_type)."},
 		},
 		RiskLevel: tool.RiskLow, Tags: []string{"rag", "ingest"}, CLILabel: "Ingest", CLIParam: "knowledge_base",
 		Handler: m.ingest,
@@ -221,10 +222,11 @@ func (m *Module) deleteKB(ctx context.Context, raw json.RawMessage) (tool.Result
 
 func (m *Module) ingest(ctx context.Context, raw json.RawMessage) (tool.Result, error) {
 	var p struct {
-		KnowledgeBase string `json:"knowledge_base"`
-		Name          string `json:"name"`
-		Text          string `json:"text"`
-		Source        string `json:"source"`
+		KnowledgeBase string         `json:"knowledge_base"`
+		Name          string         `json:"name"`
+		Text          string         `json:"text"`
+		Source        string         `json:"source"`
+		Metadata      map[string]any `json:"metadata"`
 	}
 	_ = json.Unmarshal(raw, &p)
 	kb := kbName(p.KnowledgeBase, p.Name)
@@ -235,7 +237,7 @@ func (m *Module) ingest(ctx context.Context, raw json.RawMessage) (tool.Result, 
 	if err != nil {
 		return fail(err.Error()), nil
 	}
-	n, err := eng.Ingest(ctx, kb, p.Text, p.Source)
+	n, err := eng.IngestWithMeta(ctx, kb, p.Text, p.Source, p.Metadata)
 	if err != nil {
 		return fail(err.Error()), nil
 	}

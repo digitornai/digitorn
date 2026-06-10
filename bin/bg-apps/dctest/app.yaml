@@ -1,0 +1,19 @@
+app:
+  app_id: chat
+
+tools:
+  modules:
+    channels:
+      config:
+        providers:
+          dc:
+            adapter: discord
+            enabled: true
+            config:
+              token: "{{secret.DISCORD_TOKEN}}"
+            activation:
+              # Mode A : one persistent session per Discord channel → the bot
+              # remembers the conversation across messages.
+              session: "dc-{{event.source}}"
+              message: "{{event.message}}"
+              reply: auto

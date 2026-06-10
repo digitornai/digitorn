@@ -61,6 +61,7 @@ func (d *Daemon) MountAPI() {
 			r.Use(jwtAuthMiddleware(d.jwtVerifier, d.cfg.Auth.DevMode))
 		}
 		r.Use(authMiddleware)
+		r.Use(d.actAsMiddleware) // trusted on-behalf-of (X-Act-As-User) → effective user
 
 		// ----- Sessions -----
 		r.Route("/api/apps/{app_id}/sessions", func(r chi.Router) {

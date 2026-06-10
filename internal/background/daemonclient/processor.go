@@ -21,7 +21,11 @@ type LaunchSpec struct {
 	// is appended). When empty, the processor derives a deterministic per-job id
 	// so a lease-expiry retry is idempotent (never a duplicate session/turn).
 	SessionID string `json:"session_id,omitempty"`
-	Message   string `json:"message"`
+	// OwnerUserID is the end-user the session belongs to. When set, the client
+	// sends X-Act-As-User so the daemon owns the session under that real user
+	// (the service must carry the impersonation grant). Empty → the service owns it.
+	OwnerUserID string `json:"owner_user_id,omitempty"`
+	Message     string `json:"message"`
 	Title     string `json:"title,omitempty"`
 	Workdir   string `json:"workdir,omitempty"`
 	Mode      string `json:"mode,omitempty"`
@@ -56,6 +60,9 @@ func (c *Client) Launch(ctx context.Context, spec LaunchSpec, perJobSessionID st
 	if spec.AppID == "" {
 		return LaunchResult{}, errors.New("daemonclient: empty app id")
 	}
+
+	// Own the session under the end-user (impersonation) for every sub-call.
+	ctx = withActAs(ctx, spec.OwnerUserID)
 
 	shared := spec.SessionID != ""
 	sid := spec.SessionID

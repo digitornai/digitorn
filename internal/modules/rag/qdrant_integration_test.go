@@ -48,7 +48,7 @@ func TestQdrant_Integration(t *testing.T) {
 		t.Fatalf("count = %d, err %v (want 2 — re-ingest must not duplicate)", count, err)
 	}
 
-	hits, err := be.Search(ctx, kb, []float32{1, 0, 0, 0}, 2)
+	hits, err := be.Search(ctx, kb, []float32{1, 0, 0, 0}, 2, Filter{})
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}

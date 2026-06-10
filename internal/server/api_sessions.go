@@ -165,6 +165,7 @@ func (d *Daemon) createSession(w http.ResponseWriter, r *http.Request) {
 			Workdir:      resolvedWD,
 			EntryAgent:   req.EntryAgent,
 			ContextExtra: req.Context,
+			Actor:        actorOf(r.Context()), // who launched, when owner ≠ caller (impersonation)
 		},
 	}
 	ctxApp, cancelApp := appendCtx(r.Context())

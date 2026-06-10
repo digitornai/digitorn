@@ -87,14 +87,23 @@ func (q *qdrantBackend) CountKB(ctx context.Context, kb string) (int, error) {
 func (q *qdrantBackend) Upsert(ctx context.Context, kb string, docs []Document) error {
 	points := make([]*qdrant.PointStruct, len(docs))
 	for i, d := range docs {
+		payload := map[string]*qdrant.Value{
+			"text":   qdrant.NewValueString(d.Text),
+			"source": qdrant.NewValueString(d.Source),
+			"chunk":  qdrant.NewValueInt(int64(d.Chunk)),
+		}
+		for k, v := range d.Meta {
+			if k == "text" || k == "source" || k == "chunk" {
+				continue
+			}
+			if pv := qdrantMetaValue(v); pv != nil {
+				payload[k] = pv
+			}
+		}
 		points[i] = &qdrant.PointStruct{
 			Id:      qdrant.NewID(d.ID),
 			Vectors: qdrant.NewVectors(d.Vector...),
-			Payload: map[string]*qdrant.Value{
-				"text":   qdrant.NewValueString(d.Text),
-				"source": qdrant.NewValueString(d.Source),
-				"chunk":  qdrant.NewValueInt(int64(d.Chunk)),
-			},
+			Payload: payload,
 		}
 	}
 	if _, err := q.cli.Upsert(ctx, &qdrant.UpsertPoints{
@@ -106,31 +115,101 @@ func (q *qdrantBackend) Upsert(ctx context.Context, kb string, docs []Document) 
 	return nil
 }
 
-func (q *qdrantBackend) Search(ctx context.Context, kb string, vector []float32, topK int) ([]SearchHit, error) {
+func (q *qdrantBackend) Search(ctx context.Context, kb string, vector []float32, topK int, filter Filter) ([]SearchHit, error) {
 	limit := uint64(topK)
-	pts, err := q.cli.Query(ctx, &qdrant.QueryPoints{
+	qp := &qdrant.QueryPoints{
 		CollectionName: kb,
 		Query:          qdrant.NewQuery(vector...),
 		Limit:          &limit,
 		WithPayload:    qdrant.NewWithPayload(true),
-	})
+	}
+	if f := qdrantFilter(filter); f != nil {
+		qp.Filter = f
+	}
+	pts, err := q.cli.Query(ctx, qp)
 	if err != nil {
 		return nil, fmt.Errorf("rag/qdrant: query %q: %w", kb, err)
 	}
 	hits := make([]SearchHit, 0, len(pts))
 	for _, p := range pts {
-		pl := p.GetPayload()
 		hits = append(hits, SearchHit{
-			Document: Document{
-				ID:     p.GetId().GetUuid(),
-				Text:   pl["text"].GetStringValue(),
-				Source: pl["source"].GetStringValue(),
-				Chunk:  int(pl["chunk"].GetIntegerValue()),
-			},
-			Score: p.GetScore(),
+			Document: docFromPayload(p.GetId().GetUuid(), p.GetPayload()),
+			Score:    p.GetScore(),
 		})
 	}
 	return hits, nil
+}
+
+func qdrantFilter(f Filter) *qdrant.Filter {
+	if f.Empty() {
+		return nil
+	}
+	var must []*qdrant.Condition
+	for field, vals := range f.Must {
+		if len(vals) == 0 {
+			continue
+		}
+		must = append(must, qdrant.NewMatchKeywords(field, vals...))
+	}
+	if len(must) == 0 {
+		return nil
+	}
+	return &qdrant.Filter{Must: must}
+}
+
+func qdrantMetaValue(v any) *qdrant.Value {
+	switch x := v.(type) {
+	case string:
+		return qdrant.NewValueString(x)
+	case []string:
+		items := make([]interface{}, len(x))
+		for i, s := range x {
+			items[i] = s
+		}
+		if lv, err := qdrant.NewListValue(items); err == nil {
+			return qdrant.NewValueList(lv)
+		}
+	case []interface{}:
+		if lv, err := qdrant.NewListValue(x); err == nil {
+			return qdrant.NewValueList(lv)
+		}
+	}
+	return nil
+}
+
+func docFromPayload(id string, pl map[string]*qdrant.Value) Document {
+	d := Document{
+		ID:     id,
+		Text:   pl["text"].GetStringValue(),
+		Source: pl["source"].GetStringValue(),
+		Chunk:  int(pl["chunk"].GetIntegerValue()),
+	}
+	for k, v := range pl {
+		if k == "text" || k == "source" || k == "chunk" {
+			continue
+		}
+		if mv := goMetaValue(v); mv != nil {
+			if d.Meta == nil {
+				d.Meta = map[string]any{}
+			}
+			d.Meta[k] = mv
+		}
+	}
+	return d
+}
+
+func goMetaValue(v *qdrant.Value) any {
+	if lv := v.GetListValue(); lv != nil {
+		out := make([]string, 0, len(lv.GetValues()))
+		for _, e := range lv.GetValues() {
+			out = append(out, e.GetStringValue())
+		}
+		return out
+	}
+	if _, ok := v.GetKind().(*qdrant.Value_StringValue); ok {
+		return v.GetStringValue()
+	}
+	return nil
 }
 
 func (q *qdrantBackend) DeleteBySource(ctx context.Context, kb, source string) error {
@@ -163,13 +242,7 @@ func (q *qdrantBackend) Scan(ctx context.Context, kb string) ([]Document, error)
 			return nil, fmt.Errorf("rag/qdrant: scan %q: %w", kb, err)
 		}
 		for _, p := range page {
-			pl := p.GetPayload()
-			out = append(out, Document{
-				ID:     p.GetId().GetUuid(),
-				Text:   pl["text"].GetStringValue(),
-				Source: pl["source"].GetStringValue(),
-				Chunk:  int(pl["chunk"].GetIntegerValue()),
-			})
+			out = append(out, docFromPayload(p.GetId().GetUuid(), p.GetPayload()))
 		}
 	}
 	return out, nil
