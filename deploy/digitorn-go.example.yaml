@@ -1,0 +1,50 @@
+# Production config for the Go daemon. Copy to /etc/digitorn/digitorn-go.yaml
+# on the box. Secrets and instance URLs (Postgres DSN, gateway, JWKS, Redis) are
+# NOT here — they come from /etc/digitorn/digitorn-go.env as DIGITORN_* env vars,
+# which override anything below.
+
+server:
+  host: "127.0.0.1"          # Caddy terminates TLS and proxies api.digitorn.ai here
+  port: 8000
+  read_timeout: "60s"
+  write_timeout: "120s"
+  shutdown_timeout: "30s"
+  auth_enabled: true
+  cors_origins:
+    - "https://app.digitorn.ai"
+    - "https://api.digitorn.ai"
+
+socketio:
+  ping_interval: "25s"
+  ping_timeout: "20s"
+  max_http_buffer_size: 1000000
+  # redis_url comes from DIGITORN_SOCKETIO__REDIS_URL (set in the env file).
+
+database:
+  driver: "postgres"
+  # dsn comes from DIGITORN_DATABASE__DSN (set in the env file — it holds the password).
+  max_open_conns: 25
+  max_idle_conns: 5
+  conn_max_lifetime: "5m"
+  log_level: "warn"
+
+auth:
+  # issuer / jwks_url come from DIGITORN_AUTH__ISSUER and DIGITORN_AUTH__JWKS_URL.
+  user_id_claim: "sub"
+
+runtime:
+  max_turns: 200
+  tool_timeout: "4m"
+  turn_idle_timeout: "10m"
+  streaming: true
+
+workers:
+  llm:
+    count: 1
+    concurrency: 512
+    client_timeout: "120s"
+    # gateway_url comes from DIGITORN_WORKERS__LLM__GATEWAY_URL.
+
+logging:
+  level: "info"
+  format: "json"

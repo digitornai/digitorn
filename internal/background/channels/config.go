@@ -33,7 +33,12 @@ type ProviderConfig struct {
 
 // ActivationConfig mirrors the Python ActivationConfig (module.py:90).
 type ActivationConfig struct {
-	Agent      string            `yaml:"agent"`
+	Agent string `yaml:"agent"`
+	// Owner is the end-user the launched session belongs to (a template over the
+	// event, e.g. "{{event.payload.from.id}}"). Empty → derived from the event's
+	// sender, namespaced by provider. The background service forwards it so the
+	// daemon owns the session under the real user (X-Act-As-User).
+	Owner      string            `yaml:"owner"`
 	Session    string            `yaml:"session"` // "" | per_event | shared | <template>
 	Message    string            `yaml:"message"`
 	Context    string            `yaml:"context"`

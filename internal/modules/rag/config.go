@@ -21,6 +21,7 @@ type Config struct {
 
 	Sources   []SourceConfig `json:"sources"`
 	AutoIndex AutoIndex      `json:"auto_index"`
+	ACL       ACL            `json:"acl"`
 
 	MaxKnowledgeBases int `json:"max_knowledge_bases"`
 	MaxDocuments      int `json:"max_documents"`
@@ -164,6 +165,14 @@ func (c *Config) applyDefaults() {
 	}
 	if c.MaxDocuments == 0 {
 		c.MaxDocuments = 100000
+	}
+	if c.ACL.Enabled {
+		if c.ACL.Field == "" {
+			c.ACL.Field = "owner"
+		}
+		if c.ACL.Scope == "" {
+			c.ACL.Scope = "user"
+		}
 	}
 	// reranker: true → default model ; reranker: "id" → that model.
 	if len(c.Reranker) > 0 {

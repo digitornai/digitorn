@@ -584,6 +584,11 @@ type MetaPayload struct {
 	// trigger) and are empty for ordinary sessions.
 	EntryAgent   string `json:"entry_agent,omitempty"`
 	ContextExtra string `json:"context,omitempty"`
+	// Actor is the real caller identity when the session was created on behalf of
+	// another user (a trusted service impersonating an end-user via X-Act-As-User).
+	// UserID is the OWNER (the end-user) ; Actor is WHO launched it. Empty for
+	// ordinary sessions where owner == caller.
+	Actor string `json:"actor,omitempty"`
 }
 
 type ErrorPayload struct {

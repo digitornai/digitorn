@@ -19,6 +19,7 @@ import (
 
 	"github.com/mbathepaul/digitorn/internal/background/adapter"
 	"github.com/mbathepaul/digitorn/internal/background/adapter/cron"
+	"github.com/mbathepaul/digitorn/internal/background/adapter/discord"
 	"github.com/mbathepaul/digitorn/internal/background/adapter/rss"
 	"github.com/mbathepaul/digitorn/internal/background/adapter/telegram"
 	"github.com/mbathepaul/digitorn/internal/background/adapter/webhook"
@@ -93,6 +94,7 @@ type Plan struct {
 	Feeds     []rss.Provider
 	Telegrams []telegram.Provider
 	WhatsApps []whatsapp.Provider
+	Discords  []discord.Provider
 	Warnings  []string // non-fatal per-provider issues (bad schedule, unknown adapter)
 }
 
@@ -132,8 +134,10 @@ func BuildPlan(apps []AppChannels, env func(string) string) Plan {
 				p.Telegrams = append(p.Telegrams, telegramProvider(app.AppID, name, pc.Config, env))
 			case "whatsapp":
 				p.WhatsApps = append(p.WhatsApps, whatsappProvider(name, pc.Config, env))
+			case "discord":
+				p.Discords = append(p.Discords, discordProvider(name, pc.Config, env))
 			default:
-				p.Warnings = append(p.Warnings, "provider "+name+": adapter "+pc.Adapter+" not wired (V1: webhook|cron|rss|telegram|whatsapp)")
+				p.Warnings = append(p.Warnings, "provider "+name+": adapter "+pc.Adapter+" not wired (V1: webhook|cron|rss|telegram|whatsapp|discord)")
 			}
 		}
 	}
@@ -191,6 +195,15 @@ func telegramProvider(appID, name string, cfg map[string]any, env func(string) s
 	}
 }
 
+func discordProvider(name string, cfg map[string]any, env func(string) string) discord.Provider {
+	return discord.Provider{
+		Name:    name,
+		Token:   cfgStr(cfg, "token", env),
+		Intents: int(cfgInt(cfg, "intents")),
+		APIBase: cfgStr(cfg, "api_base", env),
+	}
+}
+
 func whatsappProvider(name string, cfg map[string]any, env func(string) string) whatsapp.Provider {
 	return whatsapp.Provider{
 		Name:          name,
@@ -244,6 +257,9 @@ func Arm(ctx context.Context, st *store.Store, plan Plan, log *slog.Logger) (*pr
 	if len(plan.WhatsApps) > 0 {
 		reg.Register(whatsapp.New(plan.WhatsApps, log))
 	}
+	if len(plan.Discords) > 0 {
+		reg.Register(discord.New(plan.Discords, log))
+	}
 	mgr := processor.NewManager(st, reg)
 	for _, t := range plan.Triggers {
 		if _, err := mgr.Arm(ctx, t); err != nil {
@@ -256,7 +272,8 @@ func Arm(ctx context.Context, st *store.Store, plan Plan, log *slog.Logger) (*pr
 	log.Info("background: armed channels",
 		"apps_triggers", len(plan.Triggers), "webhooks", len(plan.Webhooks),
 		"crons", len(plan.Crons), "feeds", len(plan.Feeds),
-		"telegram", len(plan.Telegrams), "whatsapp", len(plan.WhatsApps))
+		"telegram", len(plan.Telegrams), "whatsapp", len(plan.WhatsApps),
+		"discord", len(plan.Discords))
 	return mgr, reg, nil
 }
 

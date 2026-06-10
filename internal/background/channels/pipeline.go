@@ -35,6 +35,7 @@ type Activation struct {
 	// deterministic per-delivery id → idempotent retries, the durable fix over
 	// Python's random-uuid double-fire).
 	SessionStrategy string
+	Owner           string // end-user the session belongs to (resolved); "" = launcher owns it
 	Message         string
 	Context         string // extra system-prompt context (rendered)
 	Reply           string // auto | none | explicit
@@ -85,19 +86,50 @@ func Process(ctx context.Context, ev Event, ac ActivationConfig, mod ModuleConfi
 		agent = mod.DefaultAgent
 	}
 
-	// 4. session strategy.
+	// 4. session strategy + owner (the end-user the session belongs to).
 	session, strat := resolveSession(ac.Session, ev, scope)
+	owner := resolveOwner(ac.Owner, ev, scope)
 
 	// 5. message + context.
 	return Activation{
 		Agent:           agent,
 		Session:         session,
 		SessionStrategy: strat,
+		Owner:           owner,
 		Message:         buildMessage(ac, ev, scope),
 		Context:         Render(ac.Context, scope),
 		Reply:           replyOr(ac.Reply),
 		ExposeData:      ac.ExposeData,
 	}, nil
+}
+
+// resolveOwner derives the end-user a launched session belongs to. Per-user
+// ownership is OPT-IN : an app declares an `owner` template (e.g.
+// "{{event.payload.from.id}}", or "{{event.provider}}:{{event.source}}" for the
+// channel's natural sender). When unset, "" is returned → the launcher (service)
+// owns the session, exactly as before (back-compat ; no impersonation grant needed).
+func resolveOwner(owner string, _ Event, scope map[string]any) string {
+	s := strings.TrimSpace(owner)
+	if s == "" {
+		return ""
+	}
+	return sanitizeOwner(Render(s, scope))
+}
+
+func sanitizeOwner(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if isAlnum(r) || r == '-' || r == '_' || r == '.' || r == ':' || r == '@' {
+			b.WriteRune(r)
+		} else {
+			b.WriteRune('-')
+		}
+	}
+	out := b.String()
+	if len(out) > 128 {
+		out = out[:128]
+	}
+	return out
 }
 
 func buildScope(ev Event) map[string]any {

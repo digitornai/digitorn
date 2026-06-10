@@ -267,6 +267,24 @@ func (c *Client) doJSON(ctx context.Context, method, path string, body, out any,
 	return nil
 }
 
+type actAsKey struct{}
+
+// withActAs marks a context so every request made under it carries X-Act-As-User :
+// the daemon then owns any session created / touched as that end-user (the service
+// JWT must carry the impersonation grant). One Launch = one owner, propagated to all
+// its sub-calls (exists / create / message / history).
+func withActAs(ctx context.Context, user string) context.Context {
+	if user == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, actAsKey{}, user)
+}
+
+func actAsFromCtx(ctx context.Context) string {
+	v, _ := ctx.Value(actAsKey{}).(string)
+	return v
+}
+
 // do executes a request, returning (status, body, error). A transport failure
 // returns a Status-0 *APIError (retryable).
 func (c *Client) do(ctx context.Context, method, path string, body io.Reader, headers map[string]string) (int, []byte, error) {
@@ -276,6 +294,9 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader, he
 	}
 	if c.jwt != "" {
 		req.Header.Set("Authorization", "Bearer "+c.jwt)
+	}
+	if u := actAsFromCtx(ctx); u != "" {
+		req.Header.Set("X-Act-As-User", u)
 	}
 	for k, v := range headers {
 		req.Header.Set(k, v)

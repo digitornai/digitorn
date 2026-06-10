@@ -38,7 +38,7 @@ type kbIndex struct {
 
 func (ix *kbIndex) add(d Document) {
 	ix.bm25.Add(d.ID, d.Text)
-	ix.docs[d.ID] = Document{ID: d.ID, Text: d.Text, Source: d.Source, Chunk: d.Chunk}
+	ix.docs[d.ID] = Document{ID: d.ID, Text: d.Text, Source: d.Source, Chunk: d.Chunk, Meta: d.Meta}
 }
 
 // NewEngine wires an engine from a parsed Config, a backend connector,
@@ -54,6 +54,13 @@ func NewEngine(cfg Config, backend VectorBackend, embed pkgmodule.Embedder, rera
 // Ingest chunks text, embeds the chunks as documents, ensures the KB
 // exists at the right dimension, and upserts. Returns the chunk count.
 func (e *Engine) Ingest(ctx context.Context, kb, text, source string) (int, error) {
+	return e.IngestWithMeta(ctx, kb, text, source, nil)
+}
+
+// IngestWithMeta is Ingest with author-supplied metadata attached to every
+// chunk. The ACL scope field is always overwritten from the caller, so an
+// author can never stamp a document with someone else's owner.
+func (e *Engine) IngestWithMeta(ctx context.Context, kb, text, source string, meta map[string]any) (int, error) {
 	if e.embed == nil {
 		return 0, fmt.Errorf("rag: embeddings unavailable (no gateway)")
 	}
@@ -78,6 +85,7 @@ func (e *Engine) Ingest(ctx context.Context, kb, text, source string) (int, erro
 	if source == "" {
 		source = "inline"
 	}
+	docMeta := e.docMeta(ctx, meta)
 	docs := make([]Document, len(chunks))
 	for i, c := range chunks {
 		docs[i] = Document{
@@ -86,6 +94,7 @@ func (e *Engine) Ingest(ctx context.Context, kb, text, source string) (int, erro
 			Text:   c.Text,
 			Source: source,
 			Chunk:  c.Index,
+			Meta:   docMeta,
 		}
 	}
 	if err := e.backend.Upsert(ctx, kb, docs); err != nil {
@@ -139,15 +148,17 @@ func (e *Engine) Query(ctx context.Context, kb, query string, topK int) ([]Searc
 		retrieveK = e.cfg.Pipeline.RerankTopN
 	}
 
+	filter := e.aclFilter(e.aclValue(ctx))
+
 	var hits []SearchHit
 	var err error
 	switch strings.ToLower(e.cfg.Pipeline.Retrieval) {
 	case "bm25":
-		hits, err = e.bm25Search(ctx, kb, query, retrieveK)
+		hits, err = e.bm25Search(ctx, kb, query, retrieveK, filter)
 	case "semantic":
-		hits, err = e.semanticSearch(ctx, kb, query, retrieveK)
+		hits, err = e.semanticSearch(ctx, kb, query, retrieveK, filter)
 	default:
-		hits, err = e.hybridSearch(ctx, kb, query, retrieveK)
+		hits, err = e.hybridSearch(ctx, kb, query, retrieveK, filter)
 	}
 	if err != nil {
 		return nil, err
@@ -179,7 +190,7 @@ func (e *Engine) rerankHits(ctx context.Context, query string, hits []SearchHit)
 	return hits
 }
 
-func (e *Engine) semanticSearch(ctx context.Context, kb, query string, topK int) ([]SearchHit, error) {
+func (e *Engine) semanticSearch(ctx context.Context, kb, query string, topK int, filter Filter) ([]SearchHit, error) {
 	if e.embed == nil {
 		return nil, fmt.Errorf("rag: embeddings unavailable (no gateway)")
 	}
@@ -190,29 +201,35 @@ func (e *Engine) semanticSearch(ctx context.Context, kb, query string, topK int)
 	if len(vecs) == 0 {
 		return nil, fmt.Errorf("rag: embed query returned no vector")
 	}
-	return e.backend.Search(ctx, kb, vecs[0], topK)
+	return e.backend.Search(ctx, kb, vecs[0], topK, filter)
 }
 
-func (e *Engine) bm25Search(ctx context.Context, kb, query string, topK int) ([]SearchHit, error) {
+func (e *Engine) bm25Search(ctx context.Context, kb, query string, topK int, filter Filter) ([]SearchHit, error) {
 	ix, err := e.ensureIndex(ctx, kb)
 	if err != nil {
 		return nil, err
 	}
-	hits := ix.bm25.Search(query, topK)
+	hits := ix.bm25.Search(query, topK*4)
 	out := make([]SearchHit, 0, len(hits))
 	for _, h := range hits {
 		d := ix.docs[h.ID]
+		if !filter.Empty() && !metaMatches(d.Meta, filter) {
+			continue
+		}
 		out = append(out, SearchHit{Document: d, Score: float32(h.Score)})
+		if len(out) >= topK {
+			break
+		}
 	}
 	return out, nil
 }
 
-func (e *Engine) hybridSearch(ctx context.Context, kb, query string, topK int) ([]SearchHit, error) {
+func (e *Engine) hybridSearch(ctx context.Context, kb, query string, topK int, filter Filter) ([]SearchHit, error) {
 	candN := topK * 4
 	if candN < 20 {
 		candN = 20
 	}
-	sem, err := e.semanticSearch(ctx, kb, query, candN)
+	sem, err := e.semanticSearch(ctx, kb, query, candN, filter)
 	if err != nil {
 		return nil, err
 	}
@@ -235,12 +252,17 @@ func (e *Engine) hybridSearch(ctx context.Context, kb, query string, topK int) (
 		semIDs[i] = h.ID
 		docByID[h.ID] = h.Document
 	}
-	bmIDs := make([]string, len(bm))
-	for i, h := range bm {
-		bmIDs[i] = h.ID
-		if _, ok := docByID[h.ID]; !ok {
-			docByID[h.ID] = ix.docs[h.ID]
+	bmIDs := make([]string, 0, len(bm))
+	for _, h := range bm {
+		d, ok := docByID[h.ID]
+		if !ok {
+			d = ix.docs[h.ID]
 		}
+		if !filter.Empty() && !metaMatches(d.Meta, filter) {
+			continue
+		}
+		bmIDs = append(bmIDs, h.ID)
+		docByID[h.ID] = d
 	}
 
 	fused := rrfFuse([][]string{semIDs, bmIDs},

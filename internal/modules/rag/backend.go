@@ -39,8 +39,10 @@ type VectorBackend interface {
 	// DeleteBySource removes every chunk whose payload source == source,
 	// enabling a clean re-sync of one document/file.
 	DeleteBySource(ctx context.Context, kb, source string) error
-	// Search returns the topK nearest documents to vector in a collection.
-	Search(ctx context.Context, kb string, vector []float32, topK int) ([]SearchHit, error)
+	// Search returns the topK nearest documents to vector in a collection,
+	// constrained to documents whose metadata satisfies filter (applied AT
+	// the vector layer — ACL filter-first). An empty filter matches all.
+	Search(ctx context.Context, kb string, vector []float32, topK int, filter Filter) ([]SearchHit, error)
 	// Scan returns every document (text + citation metadata, no vector) in a
 	// collection — used to rebuild the in-memory keyword index on cold start.
 	Scan(ctx context.Context, kb string) ([]Document, error)

@@ -81,9 +81,12 @@ func (b *fakeBackend) Upsert(_ context.Context, kb string, docs []Document) erro
 	}
 	return nil
 }
-func (b *fakeBackend) Search(_ context.Context, kb string, vec []float32, topK int) ([]SearchHit, error) {
+func (b *fakeBackend) Search(_ context.Context, kb string, vec []float32, topK int, filter Filter) ([]SearchHit, error) {
 	var hits []SearchHit
 	for _, d := range b.docs[kb] {
+		if !filter.Empty() && !metaMatches(d.Meta, filter) {
+			continue
+		}
 		hits = append(hits, SearchHit{Document: d, Score: cosf(vec, d.Vector)})
 	}
 	sort.Slice(hits, func(i, j int) bool { return hits[i].Score > hits[j].Score })
@@ -105,7 +108,7 @@ func (b *fakeBackend) DeleteBySource(_ context.Context, kb, source string) error
 func (b *fakeBackend) Scan(_ context.Context, kb string) ([]Document, error) {
 	out := make([]Document, 0, len(b.docs[kb]))
 	for _, d := range b.docs[kb] {
-		out = append(out, Document{ID: d.ID, Text: d.Text, Source: d.Source, Chunk: d.Chunk})
+		out = append(out, Document{ID: d.ID, Text: d.Text, Source: d.Source, Chunk: d.Chunk, Meta: d.Meta})
 	}
 	return out, nil
 }
