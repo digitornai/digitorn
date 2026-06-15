@@ -50,6 +50,7 @@ workers:
     start_timeout: 15s
     # Local digitorn-gateway. Frozen here so no env override is needed.
     gateway_url: http://127.0.0.1:8002/v1
+    #gateway_url: https://gateway.digitorn.ai
   embeddings:
     # Real semantic search : ONNX paraphrase-multilingual-MiniLM-L12-v2.
     # onnxruntime.dll sits next to the worker in bin/ ; the model is
