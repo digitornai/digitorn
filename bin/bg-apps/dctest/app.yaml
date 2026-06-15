@@ -14,6 +14,7 @@ tools:
             activation:
               # Mode A : one persistent session per Discord channel → the bot
               # remembers the conversation across messages.
-              session: "dc-{{event.source}}"
+              session: "dckimi-{{event.source}}"
               message: "{{event.message}}"
+              model: "moonshotai/kimi-k2.6"
               reply: auto

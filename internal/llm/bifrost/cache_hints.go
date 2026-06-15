@@ -28,8 +28,22 @@
 package bifrost
 
 import (
+	"strings"
+
 	"github.com/mbathepaul/digitorn/internal/llm"
 )
+
+// recapSentinel marks a compaction handoff system message (the runtime wraps the
+// recap in <recap>…</recap>). Such a message is VOLATILE — it changes on every
+// compaction, so a cache breakpoint on it never hits — and marking it cacheable
+// forces the richer content-block form, which some providers treat differently
+// and then stop surfacing to the user. So the system cache breakpoint skips it
+// and anchors on the stable prefix instead.
+const recapSentinel = "<recap>"
+
+func isVolatileRecap(m *llm.ChatMessage) bool {
+	return m.Role == "system" && strings.Contains(m.Content, recapSentinel)
+}
 
 // ephemeralCC is the singleton "ephemeral" marker. Pointer reused
 // everywhere — zero per-call allocation. The pointer is read-only from
@@ -69,7 +83,7 @@ func markStablePrefixCacheable(req *llm.ChatRequest) int {
 	// cache transitivity (the prefix is everything up to that point).
 	lastSysIdx := -1
 	for i := range req.Messages {
-		if req.Messages[i].Role == "system" {
+		if req.Messages[i].Role == "system" && !isVolatileRecap(&req.Messages[i]) {
 			lastSysIdx = i
 		}
 	}
@@ -134,7 +148,7 @@ func markStablePrefixCacheable(req *llm.ChatRequest) int {
 //  1. Parts non-empty → mark LAST block of Parts
 //  2. Otherwise → mark on the message
 func markMessageCacheable(m *llm.ChatMessage) {
-	if m == nil {
+	if m == nil || isVolatileRecap(m) {
 		return
 	}
 	if n := len(m.Parts); n > 0 {

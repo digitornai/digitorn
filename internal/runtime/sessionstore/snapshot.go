@@ -43,6 +43,7 @@ type SessionSnapshot struct {
 	Errors                []ErrorEntry              `json:"errors,omitempty"`
 	Compactions           []CompactionEntry         `json:"compactions,omitempty"`
 	ContextCompaction     *ContextCompactionState   `json:"context_compaction,omitempty"`
+	PreparedSummary       *PreparedSummaryState     `json:"prepared_summary,omitempty"`
 	CompactionInflight    bool                      `json:"compaction_inflight,omitempty"`
 	ContextTokens         int                       `json:"context_tokens,omitempty"`
 	ContextSystemTokens   int                       `json:"context_system_tokens,omitempty"`

@@ -11,6 +11,7 @@ import (
 	"sync"
 	"unicode/utf8"
 
+	"github.com/mbathepaul/digitorn/internal/codeast"
 	"github.com/mbathepaul/digitorn/internal/runtime/context/repomap"
 )
 
@@ -62,7 +63,7 @@ func extractRepoGraph(root string, maxBytes int64) repomap.Graph {
 			}
 			return nil
 		}
-		if _, ok := langForExt(filepath.Ext(path)); !ok {
+		if !codeast.Supported(filepath.Ext(path)) {
 			return nil
 		}
 		if info, e := d.Info(); e != nil || (maxBytes > 0 && info.Size() > maxBytes) {
@@ -77,7 +78,7 @@ func extractRepoGraph(root string, maxBytes int64) repomap.Graph {
 
 	type result struct {
 		rel string
-		fp  fileParse
+		fp  codeast.FileParse
 	}
 	workers := runtime.NumCPU()
 	if workers > len(paths) {
@@ -101,7 +102,7 @@ func extractRepoGraph(root string, maxBytes int64) repomap.Graph {
 				}
 				rel, _ := filepath.Rel(root, path)
 				rel = filepath.ToSlash(rel)
-				if fp, ok := parseFile(rel, b); ok {
+				if fp, ok := codeast.ParseFile(rel, b); ok {
 					results <- result{rel: rel, fp: fp}
 				}
 			}
@@ -110,7 +111,7 @@ func extractRepoGraph(root string, maxBytes int64) repomap.Graph {
 	go func() { wg.Wait(); close(results) }()
 
 	for r := range results {
-		for _, s := range r.fp.syms {
+		for _, s := range r.fp.Syms {
 			key := r.rel + "#" + s.Name + "#" + strconv.Itoa(s.Start)
 			g.Syms = append(g.Syms, repomap.Sym{
 				Key: key, Name: s.Name, Kind: s.Kind, File: r.rel,

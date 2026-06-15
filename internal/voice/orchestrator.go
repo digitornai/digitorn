@@ -20,6 +20,15 @@ func NewOrchestrator(engine Engine) *Orchestrator {
 	return &Orchestrator{Engine: engine, NewVAD: func() VAD { return NewEnergyVAD() }}
 }
 
+// PlaybackClearer is an OPTIONAL Call capability : transports with a remote
+// playback buffer (Twilio Media Streams buffers outbound audio on Twilio's side)
+// implement it so a barge-in also flushes what the caller would otherwise keep
+// hearing. Transports without such a buffer (raw WS, AudioSocket) simply don't
+// implement it — the orchestrator probes with a type assertion.
+type PlaybackClearer interface {
+	ClearPlayback()
+}
+
 // Handle runs one call to completion (Call.In closes or ctx ends).
 func (o *Orchestrator) Handle(ctx context.Context, call Call, opts SessionOpts) error {
 	sess, err := o.Engine.Session(ctx, opts)
@@ -71,8 +80,14 @@ func (o *Orchestrator) Handle(ctx context.Context, call Call, opts SessionOpts) 
 			}
 			speech, endpoint := vad.Push(f)
 			// Barge-in: rising edge of caller speech while the agent is talking.
+			// Cancel the engine's response AND flush the transport's remote
+			// playback buffer (when it has one) so the caller stops hearing the
+			// stale reply immediately.
 			if speech && !prevSpeech && agentSpeaking.Load() {
 				sess.Cancel()
+				if pc, ok := call.(PlaybackClearer); ok {
+					pc.ClearPlayback()
+				}
 			}
 			prevSpeech = speech
 			if endpoint {

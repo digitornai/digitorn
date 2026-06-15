@@ -58,6 +58,54 @@ func (c *Client) CountTotal(ctx context.Context, texts []string, provider, model
 	return total, nil
 }
 
+// CountEach returns the per-text token counts in the SAME order as texts,
+// chunking above MaxBatchSize. It lets a caller count several buckets in one
+// pass and split the result by bucket boundaries, instead of one RPC per bucket.
+// Empty input → nil, no RPC.
+func (c *Client) CountEach(ctx context.Context, texts []string, provider, model string) ([]int, error) {
+	if len(texts) == 0 {
+		return nil, nil
+	}
+	if c == nil || c.mgr == nil {
+		return nil, errors.New("tokenizer: no worker manager")
+	}
+	out := make([]int, 0, len(texts))
+	for start := 0; start < len(texts); start += MaxBatchSize {
+		end := min(start+MaxBatchSize, len(texts))
+		counts, err := c.countChunkEach(ctx, texts[start:end], provider, model)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, counts...)
+	}
+	return out, nil
+}
+
+func (c *Client) countChunkEach(ctx context.Context, texts []string, provider, model string) ([]int, error) {
+	conn, err := c.mgr.Pick(ctx, c.kind)
+	if err != nil {
+		return nil, fmt.Errorf("tokenizer: pick worker: %w", err)
+	}
+	if c.timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, c.timeout)
+		defer cancel()
+	}
+	req := &CountRequest{Texts: texts, Provider: provider, Model: model}
+	var resp CountResponse
+	if err := conn.GRPC().Invoke(ctx,
+		"/"+ServiceName+"/"+MethodCount,
+		req, &resp,
+		grpc.CallContentSubtype(CodecName),
+	); err != nil {
+		return nil, fmt.Errorf("tokenizer: rpc: %w", err)
+	}
+	if len(resp.Counts) != len(texts) {
+		return nil, fmt.Errorf("tokenizer: per-text count mismatch (got %d, want %d)", len(resp.Counts), len(texts))
+	}
+	return resp.Counts, nil
+}
+
 func (c *Client) countChunk(ctx context.Context, texts []string, provider, model string) (int, error) {
 	conn, err := c.mgr.Pick(ctx, c.kind)
 	if err != nil {

@@ -152,6 +152,7 @@ func ClaimsOf(ctx context.Context) *VerifierClaims {
 
 const (
 	permImpersonate = "sessions:impersonate"
+	permWildcard    = "*" // superuser : carries every permission, impersonation included
 	roleService     = "service"
 	actAsHeader     = "X-Act-As-User"
 )
@@ -176,7 +177,7 @@ func callerCanImpersonate(c *VerifierClaims) bool {
 		return false
 	}
 	for _, p := range c.Permissions {
-		if p == permImpersonate {
+		if p == permImpersonate || p == permWildcard {
 			return true
 		}
 	}

@@ -1,0 +1,60 @@
+schema_version: 2
+
+app:
+  app_id: bg-log-probe-mimo
+  name: Background-Log Probe (mimo via gateway)
+  version: "0.1.0"
+  description: "Live LLM E2E proving background_run returns the live tail to the agent. The agent launches a streaming shell task, polls its status with tail_lines, and reports what it saw in the live log."
+  author: "live-test@digitorn.local"
+  category: "coding"
+
+runtime:
+  tool_injection: direct
+  workdir_mode: required
+
+agents:
+  - id: main
+    role: assistant
+    brain:
+      provider: openai
+      model: mimo-v2.5
+      temperature: 0.1
+      max_tokens: 1024
+      config:
+        api_key: "{{env.OPENAI_API_KEY}}"
+    system_prompt: |
+      You are a shell automation agent. Your task proves that background_run
+      surfaces the LIVE LOG of a running task to you in real time. Do EXACTLY
+      these steps in order, then stop.
+
+      STEP 1 — Launch a streaming task:
+        background_run with:
+          name: "bash.run"
+          params: {"command": "for i in 1 2 3 4 5; do echo \"PROOF_LINE_$i\"; sleep 1; done"}
+          settle_seconds: 0
+        Remember the task_id it returns.
+
+      STEP 2 — Wait for the task to finish AND fetch its full live log:
+        background_run with:
+          task_id: "<id from step 1>"
+          wait: true
+          timeout: 12
+          tail_lines: 50
+
+      STEP 3 — Reply with ONE line exactly, no extra text, no markdown:
+        RESULT: state=<state> first=<the first PROOF_LINE_* line you saw, verbatim> last=<the last PROOF_LINE_* line you saw, verbatim>
+
+      Both `first` and `last` MUST come from the `log` field of the response —
+      never invent them. If `log` is empty, reply: RESULT: state=<state> first=<MISSING> last=<MISSING>.
+
+tools:
+  modules:
+    bash: {}
+    context_builder: {}
+  capabilities:
+    default_policy: auto
+    grant:
+      - module: bash
+        tools: [run]
+      - module: context_builder
+        tools: [background_run]

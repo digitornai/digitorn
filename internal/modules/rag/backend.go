@@ -20,6 +20,14 @@ type SearchHit struct {
 	Score float32
 }
 
+// KBStats describes an existing collection : its vector dimension and how
+// many documents it holds. Exists is false when the collection is absent.
+type KBStats struct {
+	Exists bool
+	Dim    int
+	Count  int
+}
+
 // VectorBackend is the app's vector store behind a uniform interface, so
 // the connector is swappable (Qdrant now ; pgvector/chroma/pinecone/…
 // later) without touching the engine. A knowledge base maps to one named
@@ -34,6 +42,11 @@ type VectorBackend interface {
 	ListKBs(ctx context.Context) ([]string, error)
 	// CountKB returns how many vectors a collection holds.
 	CountKB(ctx context.Context, kb string) (int, error)
+	// KBInfo describes a collection that may already exist in the backend —
+	// a pre-built index the app did not create here — reporting its vector
+	// dimension and document count so a KB can be discovered and queried
+	// without reindexing. Exists is false when the collection is absent.
+	KBInfo(ctx context.Context, kb string) (KBStats, error)
 	// Upsert writes documents (by ID) into a collection.
 	Upsert(ctx context.Context, kb string, docs []Document) error
 	// DeleteBySource removes every chunk whose payload source == source,
@@ -48,4 +61,13 @@ type VectorBackend interface {
 	Scan(ctx context.Context, kb string) ([]Document, error)
 	// Close releases any held connection.
 	Close() error
+}
+
+// KeywordSearcher is an optional backend capability : keyword (BM25) search run
+// server-side, so the engine need not pin an in-memory keyword index of the
+// whole corpus in RAM. Backends with native full-text search (Elasticsearch)
+// implement it ; others fall back to the in-process BM25. Hits must carry their
+// Document + score and already satisfy filter.
+type KeywordSearcher interface {
+	KeywordSearch(ctx context.Context, kb, query string, topK int, filter Filter) ([]SearchHit, error)
 }

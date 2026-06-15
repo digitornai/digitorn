@@ -1,0 +1,15 @@
+id: mcp
+version: 1.0.0
+description: Model Context Protocol client (call tools on connected MCP servers).
+config_schema:
+  servers: { type: object }
+tools:
+  - { name: call_tool, description: Call a tool on an MCP server., risk_level: medium, params: [{name: server, type: string, required: true}, {name: tool, type: string, required: true}, {name: arguments, type: object}] }
+  - { name: list_tools, description: List tools on an MCP server., risk_level: low, params: [{name: server, type: string, required: true}] }
+  - { name: list_resources, description: List resources on an MCP server., risk_level: low, params: [{name: server, type: string, required: true}] }
+  - { name: read_resource, description: Read an MCP resource., risk_level: low, params: [{name: server, type: string, required: true}, {name: uri, type: string, required: true}] }
+  - { name: list_prompts, description: List prompts on an MCP server., risk_level: low, params: [{name: server, type: string, required: true}] }
+  - { name: get_prompt, description: Get a prompt template., risk_level: low, params: [{name: server, type: string, required: true}, {name: name, type: string, required: true}] }
+  - { name: health_check, description: Check MCP server health., risk_level: low, params: [{name: server, type: string, required: true}] }
+  - { name: connect, description: Connect to an MCP server., risk_level: medium, params: [{name: server, type: string, required: true}] }
+  - { name: disconnect, description: Disconnect from an MCP server., risk_level: low, params: [{name: server, type: string, required: true}] }

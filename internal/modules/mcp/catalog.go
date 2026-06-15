@@ -43,9 +43,14 @@ type catalogEntry struct {
 	OAuthEnvTokenVar string
 	OAuthScopes      []string
 	OAuthStyle       string
-	SmitherySlug     string
-	BinaryName       string
-	Timeout          float64
+	// google_keyfile style: the env vars the server reads for its OAuth client
+	// keyfile + credentials file, and the credentials filename it writes.
+	OAuthKeyfileEnv          string
+	OAuthCredentialsEnv      string
+	OAuthCredentialsFilename string
+	SmitherySlug             string
+	BinaryName               string
+	Timeout                  float64
 }
 
 func catalogLookup(id string) (catalogEntry, bool) {
@@ -96,13 +101,17 @@ var catalog = map[string]catalogEntry{
 		Command: "npx", Args: []string{"-y", "@modelcontextprotocol/server-gdrive"},
 		Package:       "@modelcontextprotocol/server-gdrive",
 		OAuthProvider: "google", OAuthStyle: "google_keyfile",
-		OAuthScopes: []string{"https://www.googleapis.com/auth/drive.readonly"},
+		OAuthKeyfileEnv: "GDRIVE_OAUTH_PATH", OAuthCredentialsEnv: "GDRIVE_CREDENTIALS_PATH",
+		OAuthCredentialsFilename: ".gdrive-server-credentials.json",
+		OAuthScopes:              []string{"https://www.googleapis.com/auth/drive.readonly"},
 	},
 	"google_calendar": {
 		DisplayName: "Google Calendar", Description: "Google Calendar events and scheduling",
 		Command: "npx", Args: []string{"-y", "@modelcontextprotocol/server-google-calendar"},
 		Package:       "@modelcontextprotocol/server-google-calendar",
 		OAuthProvider: "google", OAuthStyle: "google_keyfile",
+		OAuthKeyfileEnv: "GDRIVE_OAUTH_PATH", OAuthCredentialsEnv: "GDRIVE_CREDENTIALS_PATH",
+		OAuthCredentialsFilename: ".gdrive-server-credentials.json",
 		OAuthScopes: []string{
 			"https://www.googleapis.com/auth/calendar.readonly",
 			"https://www.googleapis.com/auth/calendar.events",
@@ -113,6 +122,8 @@ var catalog = map[string]catalogEntry{
 		Command: "npx", Args: []string{"-y", "@gongrzhe/server-gmail-autoauth-mcp"},
 		Package: "@gongrzhe/server-gmail-autoauth-mcp", BinaryName: "gmail-mcp",
 		OAuthProvider: "google", OAuthStyle: "google_keyfile",
+		OAuthKeyfileEnv: "GMAIL_OAUTH_PATH", OAuthCredentialsEnv: "GMAIL_CREDENTIALS_PATH",
+		OAuthCredentialsFilename: "credentials.json",
 		OAuthScopes: []string{
 			"https://www.googleapis.com/auth/gmail.readonly",
 			"https://www.googleapis.com/auth/gmail.send",

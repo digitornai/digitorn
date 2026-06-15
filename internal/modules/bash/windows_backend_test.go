@@ -8,21 +8,26 @@ import (
 	"testing"
 )
 
-// TestWindows_DefaultsToGoShell locks in the decision: on Windows the agent's
-// shell is our self-contained goshell, NOT whatever Git Bash happens to be
-// installed — so the MSYS argument-rewriting footguns (`taskkill /F` → `F:/`)
-// can never come back, and behaviour doesn't drift per machine.
-func TestWindows_DefaultsToGoShell(t *testing.T) {
+// TestWindows_DefaultsToPowerShell locks in the decision: on Windows the
+// agent's shell is the system PowerShell (5.1 → pwsh → mvdan fallback). Git
+// Bash is NOT picked up automatically — its MSYS layer rewrites native flags
+// (`taskkill /F` becomes `F:/`) and isn't guaranteed installed. PowerShell is
+// always present on Windows 10+, and the module's translation layer handles
+// the common bash idioms (psChain/psEnv/psNulSink/warmupCmd).
+func TestWindows_DefaultsToPowerShell(t *testing.T) {
 	m := New()
 	m.cfg.Workdir = t.TempDir()
 	if err := m.Init(context.Background(), nil); err != nil {
 		t.Fatalf("init: %v", err)
 	}
-	if !m.useGoShell {
-		t.Fatalf("Windows default must be goshell, not a host shell")
+	if m.useGoShell {
+		t.Fatalf("Windows default must NOT be goshell — that path is opt-in only")
 	}
-	if m.path != "" {
-		t.Fatalf("must not bind a host shell path on Windows, got %q", m.path)
+	if m.kind != "powershell" && m.kind != "pwsh" {
+		t.Fatalf("Windows default must be powershell/pwsh, got kind=%q useMvdan=%v", m.kind, m.useMvdanSh)
+	}
+	if m.path == "" {
+		t.Fatalf("Windows powershell default must bind a host shell path, got empty")
 	}
 }
 

@@ -15,6 +15,8 @@ func (a Activation) ToLaunchSpec(appID string) daemonclient.LaunchSpec {
 		Message:      a.Message,
 		EntryAgent:   a.Agent,
 		Context:      a.Context,
+		Model:        a.Model,
 		WaitForReply: a.Reply == ReplyAuto,
+		StreamReply:  a.Reply == ReplyStream,
 	}
 }

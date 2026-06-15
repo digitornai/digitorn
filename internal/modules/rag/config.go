@@ -22,6 +22,18 @@ type Config struct {
 	Sources   []SourceConfig `json:"sources"`
 	AutoIndex AutoIndex      `json:"auto_index"`
 	ACL       ACL            `json:"acl"`
+	Cache     CacheConfig    `json:"cache"`
+
+	// DefaultKnowledgeBase is the KB a query routes to when the caller does
+	// not name one. Empty → the engine searches every KB the app's sources
+	// declare (auto-routing : the agent need not know the index name).
+	DefaultKnowledgeBase string `json:"default_knowledge_base"`
+
+	// CursorDSN places this app's indexer sync-state (Walk hashes, CDC LSN,
+	// distributed lease) in the app's OWN database — set it, or leave empty to
+	// reuse the pgvector backend DSN, so a client can keep everything (index +
+	// state) on their infra with nothing local. See indexer.PgStore.
+	CursorDSN string `json:"cursor_dsn"`
 
 	MaxKnowledgeBases int `json:"max_knowledge_bases"`
 	MaxDocuments      int `json:"max_documents"`
@@ -35,12 +47,58 @@ type Config struct {
 // Internal / config-driven — never an agent tool. Keys match the old
 // Python sources schema.
 type SourceConfig struct {
-	Type          string   `json:"type"` // "file" (database/web later)
+	Name          string   `json:"name"`
+	Type          string   `json:"type"` // "file" | "database" | "web"
 	Path          string   `json:"path"`
 	Extensions    []string `json:"extensions"`
 	Recursive     *bool    `json:"recursive"`
 	MaxFiles      int      `json:"max_files"`
 	KnowledgeBase string   `json:"knowledge_base"`
+
+	// Per-source triggers (when to (re)sync). Empty → falls back to the
+	// app-global auto_index (backward compat). See indexer/DESIGN.md.
+	Triggers []TriggerConfig `json:"triggers"`
+
+	// Database source (type: "database"). Walk = Query ; CDC (trigger
+	// type: cdc) streams CDCTable's WAL in real time.
+	DSN            string   `json:"dsn"`
+	Query          string   `json:"query"`
+	IDColumn       string   `json:"id_column"`
+	TextColumns    []string `json:"text_columns"`
+	CDCTable       string   `json:"cdc_table"`
+	CDCSlot        string   `json:"cdc_slot"`
+	CDCPublication string   `json:"cdc_publication"`
+
+	// Kafka source (type: "kafka", continuous stream).
+	Brokers    []string `json:"brokers"`
+	Topic      string   `json:"topic"`
+	GroupID    string   `json:"group_id"`
+	IDField    string   `json:"id_field"`
+	TextFields []string `json:"text_fields"`
+
+	// Web source (type: "web"). URL is the seed; the rest mirror the crawler.
+	URL           string   `json:"url"`
+	MaxPages      int      `json:"max_pages"`
+	MaxDepth      int      `json:"max_depth"`
+	SameDomain    *bool    `json:"same_domain"`
+	Sitemap       *bool    `json:"sitemap"`
+	RespectRobots *bool    `json:"respect_robots"`
+	AllowPrivate  *bool    `json:"allow_private"`
+	RateLimit     string   `json:"rate_limit"`
+	Parallelism   int      `json:"parallelism"`
+	Include       []string `json:"include"`
+	Exclude       []string `json:"exclude"`
+
+	// Codebase source (type: "codebase"). Path = repo root.
+	SymbolChunks *bool `json:"symbol_chunks"`
+}
+
+// TriggerConfig is one YAML trigger : {type, every, cron}. type ∈
+// on_start | interval | cron | cdc | watch | manual.
+type TriggerConfig struct {
+	Type  string `json:"type"`
+	Every string `json:"every"` // Go duration for interval
+	Cron  string `json:"cron"`
 }
 
 // AutoIndex controls when sources are synced (Python parity).
@@ -172,6 +230,14 @@ func (c *Config) applyDefaults() {
 		}
 		if c.ACL.Scope == "" {
 			c.ACL.Scope = "user"
+		}
+	}
+	if c.Cache.Enabled {
+		if c.Cache.Threshold == 0 {
+			c.Cache.Threshold = 0.97
+		}
+		if c.Cache.MaxEntries == 0 {
+			c.Cache.MaxEntries = 512
 		}
 	}
 	// reranker: true → default model ; reranker: "id" → that model.

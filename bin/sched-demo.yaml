@@ -1,0 +1,38 @@
+schema_version: 2
+
+app:
+  app_id: scheddemo
+  name: Scheduler Demo
+  version: "0.1.0"
+  description: "Agent that schedules recurring wake-ups of its session via the scheduler tool."
+  author: "live-test@digitorn.local"
+  category: "assistant"
+
+agents:
+  - id: main
+    role: worker
+    brain:
+      provider: openai
+      model: moonshotai/Kimi-K2.6
+      temperature: 0.1
+      max_tokens: 400
+      config:
+        api_key: "{{env.OPENAI_API_KEY}}"
+    system_prompt: |
+      You schedule recurring tasks. When the user asks for something on a schedule,
+      you MUST call the scheduler.schedule tool with a 5-field cron expression and
+      the instruction to run. Examples: "every minute" -> "* * * * *"; "every day at
+      9am" -> "0 9 * * *". Always call the tool; then confirm the next run in one line.
+    modules:
+      - scheduler
+
+tools:
+  modules:
+    scheduler:
+      config:
+        default_reply: none
+  capabilities:
+    default_policy: auto
+    grant:
+      - module: scheduler
+        tools: [schedule]

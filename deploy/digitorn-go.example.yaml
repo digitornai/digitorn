@@ -12,7 +12,13 @@ server:
   auth_enabled: true
   cors_origins:
     - "https://app.digitorn.ai"
+    - "https://digitorn.ai"
+    - "https://www.digitorn.ai"
     - "https://api.digitorn.ai"
+    - "http://localhost:3000"
+    - "http://127.0.0.1:3000"
+    - "http://localhost:5173"
+    - "http://127.0.0.1:5173"
 
 socketio:
   ping_interval: "25s"

@@ -1,0 +1,69 @@
+schema_version: 2
+
+app:
+  app_id: lsp-crossfile
+  name: LSP Cross-File Probe
+  version: "0.1.0"
+  description: "Proves the LSP module sees the WHOLE project, not just the edited file. The agent creates two Go files in the workspace; gopls must resolve the cross-file import. The lsp_diagnose hook surfaces import-resolution failures inline."
+  author: "live-test@digitorn.local"
+  category: "coding"
+
+runtime:
+  tool_injection: direct
+  workdir_mode: required
+  # No app-declared hook here: LSPDiagnoseHooks() is auto-installed for any app
+  # granting the lsp module. The diagnostics are folded into the edit tool's
+  # OWN result.text, so the agent sees them inline.
+
+agents:
+  - id: main
+    role: assistant
+    brain:
+      provider: openai
+      model: gpt-5-mini
+      temperature: 0.1
+      max_tokens: 1024
+      config:
+        api_key: "{{env.OPENAI_API_KEY}}"
+    system_prompt: |
+      You are a Go coding agent. The workspace is a fresh Go module. Do EXACTLY:
+
+      1. filesystem.write path="go.mod" content="module probe\n\ngo 1.21\n"
+      2. filesystem.write path="helper.go" content=
+         package main
+
+         func Add(a, b int) int { return a + b }
+      3. filesystem.write path="main.go" content=
+         package main
+
+         import "fmt"
+
+         func main() {
+             fmt.Println(Add(1, 2))
+         }
+         After this write the [lsp] line in the tool result should report 0 errors:
+         the cross-file call Add(...) resolves because gopls sees helper.go.
+      4. filesystem.write path="main.go" content=
+         package main
+
+         import "fmt"
+
+         func main() {
+             fmt.Println(Subtract(1, 2))   // not defined anywhere
+         }
+         After this write the [lsp] line must report an "undefined: Subtract"
+         error — proving gopls is operating WITH project context, not single-file.
+      5. Reply with ONE line exactly:
+         RESULT: stage3_clean=<true|false> stage4_unresolved=<true|false>
+
+tools:
+  modules:
+    filesystem: {}
+    lsp: {}
+  capabilities:
+    default_policy: auto
+    grant:
+      - module: filesystem
+        actions: [read, write]
+      - module: lsp
+        tools: [notify_change, diagnostics]

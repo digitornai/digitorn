@@ -3,7 +3,6 @@
 package filesystem
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -12,181 +11,24 @@ import (
 	"time"
 	"unicode/utf8"
 
-	sitter "github.com/smacker/go-tree-sitter"
-	"github.com/smacker/go-tree-sitter/golang"
-	"github.com/smacker/go-tree-sitter/javascript"
-	"github.com/smacker/go-tree-sitter/python"
-	tsts "github.com/smacker/go-tree-sitter/typescript/typescript"
+	"github.com/mbathepaul/digitorn/internal/codeast"
 )
 
-// cgraph.go : AST-aware code parsing + a per-workdir dependency graph
-// (tree-sitter). Definitions become symbol-level chunks (astChunks) AND
-// nodes of a graph whose edges are calls (caller→callee), imports and
-// enclosing-symbol — the "total comprehension" layer that lets grep tell
-// the agent "this hit is in func X, defined here, called by Y, file
-// imports Z". Ephemeral per workdir (LRU+TTL, async build), CGO, gated by
-// the `treesitter` tag (default build uses the no-op stub).
+// cgraph.go : the per-workdir dependency graph (callers / imports /
+// enclosing-symbol) + the AST chunk adapter, both built on the shared
+// codeast tree-sitter layer. Ephemeral per workdir (LRU+TTL, async build),
+// CGO, gated by the `treesitter` tag (default build uses the no-op stub).
 
-type langSpec struct {
-	lang        *sitter.Language
-	defKinds    map[string]string
-	callTypes   map[string]bool
-	importTypes map[string]bool
-}
-
-func langForExt(ext string) (langSpec, bool) {
-	switch strings.ToLower(ext) {
-	case ".go":
-		return langSpec{golang.GetLanguage(),
-			map[string]string{"function_declaration": "func", "method_declaration": "method", "type_spec": "type"},
-			map[string]bool{"call_expression": true},
-			map[string]bool{"import_spec": true}}, true
-	case ".py":
-		return langSpec{python.GetLanguage(),
-			map[string]string{"function_definition": "func", "class_definition": "class"},
-			map[string]bool{"call": true},
-			map[string]bool{"import_statement": true, "import_from_statement": true}}, true
-	case ".js", ".jsx", ".mjs", ".cjs":
-		return langSpec{javascript.GetLanguage(),
-			map[string]string{"function_declaration": "func", "class_declaration": "class", "method_definition": "method"},
-			map[string]bool{"call_expression": true},
-			map[string]bool{"import_statement": true}}, true
-	case ".ts", ".tsx":
-		return langSpec{tsts.GetLanguage(),
-			map[string]string{"function_declaration": "func", "class_declaration": "class", "method_definition": "method", "interface_declaration": "interface", "type_alias_declaration": "type"},
-			map[string]bool{"call_expression": true},
-			map[string]bool{"import_statement": true}}, true
-	}
-	return langSpec{}, false
-}
-
-type symFull struct {
-	Name  string
-	Kind  string
-	Start int
-	End   int
-	Body  string
-	Calls []string
-}
-
-type fileParse struct {
-	syms    []symFull
-	imports []string
-}
-
-// parseFile extracts a file's definitions (with their callee names) and
-// imports via one AST walk, tracking the enclosing-definition stack so
-// each call attributes to the innermost definition.
-func parseFile(path string, src []byte) (fileParse, bool) {
-	spec, ok := langForExt(filepath.Ext(path))
-	if !ok {
-		return fileParse{}, false
-	}
-	p := sitter.NewParser()
-	p.SetLanguage(spec.lang)
-	tree, err := p.ParseCtx(context.Background(), nil, src)
-	if err != nil || tree == nil {
-		return fileParse{}, false
-	}
-	defer tree.Close()
-
-	var fp fileParse
-	syms := []symFull{}
-	var stack []int
-	var visit func(n *sitter.Node)
-	visit = func(n *sitter.Node) {
-		typ := n.Type()
-		isDef := false
-		if kind, ok := spec.defKinds[typ]; ok {
-			isDef = true
-			syms = append(syms, symFull{
-				Name: symbolName(n, src), Kind: kind,
-				Start: int(n.StartPoint().Row) + 1, End: int(n.EndPoint().Row) + 1,
-				Body: n.Content(src),
-			})
-			stack = append(stack, len(syms)-1)
-		}
-		if spec.importTypes[typ] {
-			if imp := importName(n, src); imp != "" {
-				fp.imports = append(fp.imports, imp)
-			}
-		}
-		if spec.callTypes[typ] && len(stack) > 0 {
-			if callee := calleeName(n, src); callee != "" {
-				idx := stack[len(stack)-1]
-				syms[idx].Calls = append(syms[idx].Calls, callee)
-			}
-		}
-		for i := 0; i < int(n.NamedChildCount()); i++ {
-			visit(n.NamedChild(i))
-		}
-		if isDef {
-			stack = stack[:len(stack)-1]
-		}
-	}
-	visit(tree.RootNode())
-	fp.syms = syms
-	return fp, true
-}
-
-func symbolName(n *sitter.Node, src []byte) string {
-	if f := n.ChildByFieldName("name"); f != nil {
-		return f.Content(src)
-	}
-	return trailingIdent(n, src)
-}
-
-func calleeName(n *sitter.Node, src []byte) string {
-	f := n.ChildByFieldName("function")
-	if f == nil && n.NamedChildCount() > 0 {
-		f = n.NamedChild(0)
-	}
-	if f == nil {
-		return ""
-	}
-	return trailingIdent(f, src)
-}
-
-// trailingIdent returns an identifier node's text, or the last identifier
-// of a selector/member/attribute expression (so a.b.Call → "Call").
-func trailingIdent(n *sitter.Node, src []byte) string {
-	switch n.Type() {
-	case "identifier", "field_identifier", "property_identifier", "type_identifier":
-		return n.Content(src)
-	}
-	for i := int(n.NamedChildCount()) - 1; i >= 0; i-- {
-		c := n.NamedChild(i)
-		switch c.Type() {
-		case "identifier", "field_identifier", "property_identifier", "type_identifier":
-			return c.Content(src)
-		}
-	}
-	return ""
-}
-
-func importName(n *sitter.Node, src []byte) string {
-	t := strings.TrimSpace(n.Content(src))
-	if i := strings.IndexByte(t, '\n'); i >= 0 {
-		t = t[:i]
-	}
-	return strings.Trim(t, "\"'`")
-}
-
-// astChunks turns a recognised file into symbol-level chunks (definition
-// bodies tagged with "kind name"). nil for unknown languages.
+// astChunks adapts codeast's symbol-level chunks to sindex's sChunk. nil for
+// unknown languages, so sindex falls back to line-window chunking.
 func astChunks(path string, src []byte) []sChunk {
-	fp, ok := parseFile(path, src)
-	if !ok || len(fp.syms) == 0 {
+	chs := codeast.Chunks(path, src)
+	if len(chs) == 0 {
 		return nil
 	}
-	out := make([]sChunk, 0, len(fp.syms))
-	for _, s := range fp.syms {
-		text := strings.TrimSpace(s.Body)
-		if text == "" {
-			continue
-		}
-		label := strings.TrimSpace(s.Kind + " " + s.Name)
-		out = append(out, sChunk{path: path, line: s.Start, text: label + "\n" + text, sym: label})
+	out := make([]sChunk, 0, len(chs))
+	for _, c := range chs {
+		out = append(out, sChunk{path: c.Path, line: c.Line, text: c.Text, sym: c.Symbol})
 	}
 	return out
 }
@@ -324,10 +166,10 @@ func (e *cgEntry) context(path string, line int) symContext {
 	return e.g.context(path, line)
 }
 
-// buildGraph parses every recognised source file under root and assembles
-// the dependency graph. Parsing (tree-sitter, CPU-bound) runs on a pool of
-// NumCPU workers — one parser per goroutine — while the graph itself is
-// merged on a single goroutine, so no lock guards the maps.
+// buildGraph parses every recognised source file under root (via codeast)
+// and assembles the dependency graph. Parsing (tree-sitter, CPU-bound) runs
+// on a pool of NumCPU workers ; the graph is merged on one goroutine, so no
+// lock guards the maps.
 func buildGraph(root string, maxBytes int64) *codeGraph {
 	g := &codeGraph{byFile: map[string][]defLoc{}, callers: map[string][]string{}, imports: map[string][]string{}}
 
@@ -342,7 +184,7 @@ func buildGraph(root string, maxBytes int64) *codeGraph {
 			}
 			return nil
 		}
-		if _, ok := langForExt(filepath.Ext(path)); !ok {
+		if !codeast.Supported(filepath.Ext(path)) {
 			return nil
 		}
 		if info, e := d.Info(); e != nil || (maxBytes > 0 && info.Size() > maxBytes) {
@@ -357,7 +199,7 @@ func buildGraph(root string, maxBytes int64) *codeGraph {
 
 	type result struct {
 		rel string
-		fp  fileParse
+		fp  codeast.FileParse
 	}
 	workers := runtime.NumCPU()
 	if workers > len(paths) {
@@ -381,7 +223,7 @@ func buildGraph(root string, maxBytes int64) *codeGraph {
 				}
 				rel, _ := filepath.Rel(root, path)
 				rel = filepath.ToSlash(rel)
-				if fp, ok := parseFile(rel, b); ok {
+				if fp, ok := codeast.ParseFile(rel, b); ok {
 					results <- result{rel: rel, fp: fp}
 				}
 			}
@@ -390,10 +232,10 @@ func buildGraph(root string, maxBytes int64) *codeGraph {
 	go func() { wg.Wait(); close(results) }()
 
 	for r := range results {
-		if len(r.fp.imports) > 0 {
-			g.imports[r.rel] = r.fp.imports
+		if len(r.fp.Imports) > 0 {
+			g.imports[r.rel] = r.fp.Imports
 		}
-		for _, s := range r.fp.syms {
+		for _, s := range r.fp.Syms {
 			g.byFile[r.rel] = append(g.byFile[r.rel], defLoc{Name: s.Name, Kind: s.Kind, Path: r.rel, Start: s.Start, End: s.End})
 			label := strings.TrimSpace(s.Kind + " " + s.Name + " @" + r.rel)
 			for _, callee := range s.Calls {

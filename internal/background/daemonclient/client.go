@@ -22,6 +22,11 @@ import (
 	"time"
 )
 
+// streamStartGrace bounds how long StreamReplies waits for the (async) turn to
+// actually start before giving up — so a posted message whose turn never fires
+// doesn't hang the relay forever.
+const streamStartGrace = 30 * time.Second
+
 // Client invokes the daemon's public HTTP API.
 type Client struct {
 	baseURL string
@@ -68,14 +73,24 @@ func New(baseURL, jwt string, opts ...Option) *Client {
 // CreateSessionRequest is the body of POST /api/apps/{app_id}/sessions. Setting
 // Message creates the session AND starts the first turn in one round-trip.
 type CreateSessionRequest struct {
-	Title           string `json:"title,omitempty"`
-	Workdir         string `json:"workdir,omitempty"`
-	SessionID       string `json:"session_id,omitempty"`
-	Message         string `json:"message,omitempty"`
-	ClientMessageID string `json:"client_message_id,omitempty"`
-	Mode            string `json:"mode,omitempty"`
-	EntryAgent      string `json:"entry_agent,omitempty"`
-	Context         string `json:"context,omitempty"`
+	Title           string    `json:"title,omitempty"`
+	Workdir         string    `json:"workdir,omitempty"`
+	SessionID       string    `json:"session_id,omitempty"`
+	Message         string    `json:"message,omitempty"`
+	ClientMessageID string    `json:"client_message_id,omitempty"`
+	Mode            string    `json:"mode,omitempty"`
+	EntryAgent      string    `json:"entry_agent,omitempty"`
+	Context         string    `json:"context,omitempty"`
+	Model           string    `json:"model,omitempty"`
+	Attachments     []BlobRef `json:"attachments,omitempty"`
+}
+
+// BlobRef references a stored blob by content hash — the daemon's BlobRef wire shape.
+// A message attaches these and the daemon resolves them into vision/audio content.
+type BlobRef struct {
+	Hash string `json:"hash"`
+	Mime string `json:"mime"`
+	Size int64  `json:"size"`
 }
 
 // CreateSessionResponse is the daemon's reply to a create call.
@@ -92,10 +107,11 @@ type CreateSessionResponse struct {
 
 // PostMessageRequest is the body of POST .../messages.
 type PostMessageRequest struct {
-	Message         string `json:"message,omitempty"`
-	Role            string `json:"role,omitempty"`
-	ClientMessageID string `json:"client_message_id,omitempty"`
-	Mode            string `json:"mode,omitempty"`
+	Message         string    `json:"message,omitempty"`
+	Role            string    `json:"role,omitempty"`
+	ClientMessageID string    `json:"client_message_id,omitempty"`
+	Mode            string    `json:"mode,omitempty"`
+	Attachments     []BlobRef `json:"attachments,omitempty"`
 }
 
 // PostMessageResponse is the daemon's reply to a posted message.
@@ -113,7 +129,31 @@ type Message struct {
 }
 
 type historyResponse struct {
-	Messages []Message `json:"messages"`
+	Messages   []Message      `json:"messages"`
+	Events     []historyEvent `json:"events"`
+	TurnActive bool           `json:"turn_active"`
+}
+
+// historyEvent is one entry of the session's seq-ordered event stream (the subset
+// we relay): assistant messages and tool results. Used by StreamReplies to surface
+// the full agentic loop in a channel, not just the final answer.
+type historyEvent struct {
+	Seq     uint64 `json:"seq"`
+	Type    string `json:"type"`
+	Payload struct {
+		Content    string `json:"content"`
+		Name       string `json:"name"`
+		Status     string `json:"status"`
+		DurationMs int64  `json:"duration_ms"`
+	} `json:"payload"`
+}
+
+// StreamItem is one piece of an agentic turn to surface in the channel: an assistant
+// message (Kind "message") or a finished tool call (Kind "tool").
+type StreamItem struct {
+	Seq  uint64
+	Kind string
+	Text string
 }
 
 // ── Errors ────────────────────────────────────────────────────────────────
@@ -184,6 +224,33 @@ func (c *Client) CreateSession(ctx context.Context, appID string, req CreateSess
 	return out, nil
 }
 
+// SetModel overrides a session's entry-agent model (PUT .../model). Idempotent —
+// safe to call on every launch so a SHARED/existing session also picks up the
+// trigger's configured model (the create path sets it inline for new sessions).
+func (c *Client) SetModel(ctx context.Context, appID, sessionID, model string) error {
+	path := fmt.Sprintf("/api/apps/%s/sessions/%s/model", url(appID), url(sessionID))
+	return c.doJSON(ctx, http.MethodPut, path, map[string]string{"model": model}, nil, "set_model")
+}
+
+// UploadBlob streams bytes (with their mime type) to the session's blob store and
+// returns the BlobRef a message can attach. The daemon resolves the ref into
+// vision/audio content for the model.
+func (c *Client) UploadBlob(ctx context.Context, appID, mime string, data []byte) (BlobRef, error) {
+	path := fmt.Sprintf("/api/apps/%s/blobs", url(appID))
+	status, raw, err := c.do(ctx, http.MethodPost, path, bytes.NewReader(data), map[string]string{"Content-Type": mime})
+	if err != nil {
+		return BlobRef{}, err
+	}
+	if status < 200 || status >= 300 {
+		return BlobRef{}, &APIError{Op: "upload_blob", Status: status, Code: codeOf(raw), Message: messageOf(raw)}
+	}
+	var out BlobRef
+	if e := json.Unmarshal(raw, &out); e != nil {
+		return BlobRef{}, &APIError{Op: "upload_blob", Status: status, Message: "decode: " + e.Error()}
+	}
+	return out, nil
+}
+
 // PostMessage appends a message to an existing session, triggering a turn.
 func (c *Client) PostMessage(ctx context.Context, appID, sessionID string, req PostMessageRequest) (PostMessageResponse, error) {
 	var out PostMessageResponse
@@ -211,34 +278,213 @@ func (c *Client) History(ctx context.Context, appID, sessionID string, since uin
 	return out.Messages, nil
 }
 
-// WaitForReply polls history until an assistant message with seq > afterSeq and
-// non-empty content appears, or ctx ends (→ ErrReplyTimeout). The caller bounds
-// the wait via ctx's deadline.
+// WaitForReply polls history until the agentic turn ENDS (durable turn_ended event)
+// and returns the LAST non-empty assistant message it produced. Waiting for the whole
+// turn — not the first assistant message — is what makes a tool-using turn deliver its
+// FINAL answer to the channel ("here are the files") instead of a mid-loop preamble
+// ("let me look…").
+//
+// Completion is keyed on the turn_ended event, NOT turn_active: for an async
+// background-driven turn, turn_active in /history reads false the whole time, so
+// gating on !turn_active would return the first preamble before the tools even run
+// (the same trap that StreamReplies hit). The reply text is read from assistant_message
+// EVENTS rather than the projected Messages slice so a lagging projection can't make us
+// deliver stale or empty content at turn_ended. A startup grace bounds the wait if the
+// async turn never starts. Transient read errors are retried; a permanent 4xx aborts;
+// ctx end returns whatever final reply we have, else ErrReplyTimeout.
 func (c *Client) WaitForReply(ctx context.Context, appID, sessionID string, afterSeq uint64) (Message, error) {
 	t := time.NewTicker(c.pollEvery)
 	defer t.Stop()
+	path := fmt.Sprintf("/api/apps/%s/sessions/%s/history?since=%d", url(appID), url(sessionID), afterSeq)
+	var last Message
+	have := false
+	started := false
+	startDeadline := time.Now().Add(streamStartGrace)
 	for {
-		msgs, err := c.History(ctx, appID, sessionID, afterSeq)
+		var resp historyResponse
+		err := c.doJSON(ctx, http.MethodGet, path, nil, &resp, "history")
 		if err != nil {
-			// A transient read failure shouldn't abort the wait; keep polling
-			// until ctx ends. A permanent one (4xx) does abort.
 			if ae, ok := err.(*APIError); ok && !ae.Retryable() {
 				return Message{}, err
 			}
 		} else {
-			for i := len(msgs) - 1; i >= 0; i-- {
-				m := msgs[i]
-				if m.Seq > afterSeq && m.Role == "assistant" && strings.TrimSpace(m.Content) != "" {
-					return m, nil
+			done := false
+			for _, e := range resp.Events {
+				if e.Seq <= afterSeq {
+					continue
 				}
+				switch e.Type {
+				case "assistant_message":
+					started = true
+					if txt := strings.TrimSpace(e.Payload.Content); txt != "" {
+						last, have = Message{Seq: e.Seq, Role: "assistant", Content: txt}, true
+					}
+				case "tool_call", "tool_result", "assistant_delta", "turn_started", "turn_phase_changed":
+					// The turn is producing — but session_started / user_message /
+					// model_changed must NOT count, or we'd conclude "done" before it runs.
+					started = true
+				case "turn_ended":
+					started, done = true, true
+				}
+			}
+			if done {
+				if have {
+					return last, nil
+				}
+				return Message{}, &ErrReplyTimeout{AfterSeq: afterSeq} // turn ended with no assistant text
+			}
+			if !started && time.Now().After(startDeadline) {
+				return Message{}, &ErrReplyTimeout{AfterSeq: afterSeq} // the turn never started
 			}
 		}
 		select {
 		case <-ctx.Done():
+			if have {
+				return last, nil // deadline mid-turn: deliver the best reply we have
+			}
 			return Message{}, &ErrReplyTimeout{AfterSeq: afterSeq}
 		case <-t.C:
 		}
 	}
+}
+
+// Approval is one pending human-in-the-loop decision the daemon is blocked on: a
+// gated tool awaiting approval (Kind=="tool_call") or an ask_user question
+// (Kind=="question"). It mirrors the daemon's projected ApprovalState (subset).
+// For a tool_call, ToolName/ToolParams/RiskLevel describe what the agent wants to
+// run; for a question, Reason is the question text and Payload carries the shape
+// (choices/allow_custom/placeholder/multiline).
+type Approval struct {
+	ApprovalID string         `json:"id"`
+	Kind       string         `json:"kind"`
+	Status     string         `json:"status"`
+	Reason     string         `json:"reason,omitempty"`
+	AgentID    string         `json:"agent_id,omitempty"`
+	ToolName   string         `json:"tool_name,omitempty"`
+	ToolParams map[string]any `json:"tool_params,omitempty"`
+	RiskLevel  string         `json:"risk_level,omitempty"`
+	Payload    map[string]any `json:"payload,omitempty"`
+}
+
+// stateApprovals decodes just the approvals map out of GET /state's SessionSnapshot.
+type stateApprovals struct {
+	Approvals map[string]Approval `json:"approvals"`
+}
+
+// PendingApprovals returns the session's currently-pending approvals (full detail),
+// read from the session snapshot. HTTP-only: an out-of-process client (the
+// background service) learns what the blocked turn is asking for without a socket.
+func (c *Client) PendingApprovals(ctx context.Context, appID, sessionID string) ([]Approval, error) {
+	path := fmt.Sprintf("/api/apps/%s/sessions/%s/state", url(appID), url(sessionID))
+	var snap stateApprovals
+	if err := c.doJSON(ctx, http.MethodGet, path, nil, &snap, "state"); err != nil {
+		return nil, err
+	}
+	out := make([]Approval, 0, len(snap.Approvals))
+	for id, ap := range snap.Approvals {
+		if ap.Status != "" && ap.Status != "pending" {
+			continue
+		}
+		if ap.ApprovalID == "" {
+			ap.ApprovalID = id
+		}
+		out = append(out, ap)
+	}
+	return out, nil
+}
+
+// ResolveApproval resolves a pending approval: action is "grant" (approve / answer)
+// or "deny" (reject); reason carries an ask_user answer or a refusal note. This is
+// the daemon's POST /approve — it unblocks the parked turn via the approval registry.
+func (c *Client) ResolveApproval(ctx context.Context, appID, sessionID, approvalID, action, reason string) error {
+	path := fmt.Sprintf("/api/apps/%s/approve", url(appID))
+	body := map[string]string{
+		"session_id":  sessionID,
+		"approval_id": approvalID,
+		"action":      action,
+		"reason":      reason,
+	}
+	return c.doJSON(ctx, http.MethodPost, path, body, nil, "approve")
+}
+
+// StreamReplies surfaces the FULL agentic turn live: it polls the session's event
+// stream and hands each new assistant message and finished tool call to onItem, in
+// seq order, until the turn settles (turn_active=false). This is what lets a channel
+// show "I'll analyze… → 🔧 filesystem.glob → here's the report" instead of only the
+// final answer. Transient read errors are retried; a permanent 4xx aborts; ctx end
+// stops the stream.
+func (c *Client) StreamReplies(ctx context.Context, appID, sessionID string, afterSeq uint64, onItem func(StreamItem)) error {
+	t := time.NewTicker(c.pollEvery)
+	defer t.Stop()
+	since := afterSeq
+	// The turn is triggered ASYNC after the message is posted, so the first poll may
+	// catch turn_active=false BEFORE the turn starts. Only conclude the turn is done
+	// once we've actually seen it active (or produced events) — else a startup grace
+	// expires so we never hang if the turn truly never starts.
+	started := false
+	startDeadline := time.Now().Add(streamStartGrace)
+	for {
+		path := fmt.Sprintf("/api/apps/%s/sessions/%s/history?since=%d", url(appID), url(sessionID), since)
+		var resp historyResponse
+		err := c.doJSON(ctx, http.MethodGet, path, nil, &resp, "history")
+		if err != nil {
+			if ae, ok := err.(*APIError); ok && !ae.Retryable() {
+				return err
+			}
+		} else {
+			done := false
+			for _, e := range resp.Events {
+				if e.Seq <= since {
+					continue
+				}
+				since = e.Seq
+				switch e.Type {
+				case "assistant_message":
+					started = true
+					if txt := strings.TrimSpace(e.Payload.Content); txt != "" {
+						onItem(StreamItem{Seq: e.Seq, Kind: "message", Text: txt})
+					}
+				case "tool_result":
+					started = true
+					onItem(StreamItem{Seq: e.Seq, Kind: "tool", Text: toolLine(e.Payload.Name, e.Payload.Status)})
+				case "tool_call", "assistant_delta", "turn_started", "turn_phase_changed":
+					// The turn is producing — but session_started / user_message /
+					// model_changed (pre-existing on a since=0 scan) must NOT count, or
+					// we'd conclude "done" before the turn even runs.
+					started = true
+				case "turn_ended":
+					started = true
+					done = true
+				}
+			}
+			// Completion is the durable turn_ended event. turn_active in /history is NOT
+			// a reliable "running" signal for an async background turn (it can read false
+			// the whole time), so relying on it ends the stream before the reply lands.
+			if done {
+				return nil
+			}
+			if !started && time.Now().After(startDeadline) {
+				return nil // the turn never started within the grace window
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-t.C:
+		}
+	}
+}
+
+// toolLine renders a compact one-line tool-activity marker for the channel.
+func toolLine(name, status string) string {
+	if name == "" {
+		name = "tool"
+	}
+	mark := "✓"
+	if status != "completed" && status != "" {
+		mark = "✗"
+	}
+	return "🔧 " + name + " " + mark
 }
 
 // ── HTTP plumbing ───────────────────────────────────────────────────────────
@@ -266,6 +512,12 @@ func (c *Client) doJSON(ctx context.Context, method, path string, body, out any,
 	}
 	return nil
 }
+
+// WithActAs returns a context that makes the client impersonate the given end-user
+// (X-Act-As-User) on EVERY request under it — for callers that must touch a
+// user-owned session across several calls (e.g. polling/resolving approvals while a
+// turn runs). Empty user → ctx unchanged (the service owns the session).
+func WithActAs(ctx context.Context, user string) context.Context { return withActAs(ctx, user) }
 
 type actAsKey struct{}
 

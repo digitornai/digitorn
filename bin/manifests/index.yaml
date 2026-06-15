@@ -1,0 +1,9 @@
+id: index
+version: 1.0.0
+description: Semantic workspace indexing.
+tools:
+  - { name: index_workspace, description: (Re)index the workspace., risk_level: medium, params: [{name: path, type: string}] }
+  - { name: search, description: Search the index., risk_level: low, params: [{name: query, type: string, required: true}] }
+  - { name: get_document, description: Get an indexed document., risk_level: low, params: [{name: id, type: string, required: true}] }
+  - { name: reindex, description: Force a full reindex., risk_level: medium, params: [] }
+  - { name: stats, description: Index statistics., risk_level: low, params: [] }

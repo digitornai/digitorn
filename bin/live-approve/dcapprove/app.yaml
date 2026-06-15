@@ -1,0 +1,43 @@
+schema_version: 2
+
+app:
+  app_id: dcapprove
+  name: Discord Approval Demo
+  version: "0.1.1"
+  description: "Single agent whose filesystem.write is gated on approval — proves an SG-5 approval surfaced as Discord buttons."
+  author: "live-test@digitorn.local"
+  category: "coding"
+
+agents:
+  - id: main
+    role: worker
+    brain:
+      provider: openai
+      model: moonshotai/Kimi-K2.6
+      temperature: 0.3
+      max_tokens: 1024
+      config:
+        api_key: "{{env.OPENAI_API_KEY}}"
+    system_prompt: |
+      You are a concise assistant with filesystem access on Discord.
+      When the user asks to create or write a file, call filesystem.write with
+      the path and content. Use filesystem.read/glob/grep to look things up.
+      Report the result in one short line. No emoji, no preamble.
+    modules:
+      - filesystem
+
+tools:
+  modules:
+    filesystem:
+      config:
+        workspace: "."
+        max_file_bytes: 1048576
+  capabilities:
+    default_policy: auto
+    grant:
+      - module: filesystem
+        tools: [read, glob, grep]
+    approve:
+      - module: filesystem
+        tools: [write]
+        reason: "Writing a file changes the workspace — confirm before it happens."

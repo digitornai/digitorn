@@ -35,7 +35,7 @@ auth:
   # Values matched to the actual token : iss="digitorn", user id in the "sub" claim,
   # no "aud" claim (audience left empty → audience check skipped).
   enabled: true
-  dev_mode: false
+  dev_mode: true
   issuer: digitorn
   jwks_url: https://auth.digitorn.ai/.well-known/jwks.json
   user_id_claim: sub
@@ -58,9 +58,9 @@ workers:
     # (non-ONNX) digitorn-worker-embeddings.exe no longer blocks startup — it
     # just crash-loops harmlessly in the background and semantic search stays
     # off. Set count: 0 to silence it, or rebuild the worker with -tags onnx.
-    count: 0
+    count: 1
     backend: onnx
-    start_timeout: 90s
+    start_timeout: 120s
     client_timeout: 30s
   tokenizer:
     # EXACT context-token counting in the background (CTX-7). Pure-Go, no
@@ -72,6 +72,16 @@ workers:
     count: 1
     start_timeout: 15s
     client_timeout: 5s
+  ocr:
+    # OCR fallback for scanned documents (no text layer). 100% config-driven:
+    # backend + model + endpoint are NEVER hardcoded. "none" = disabled (default;
+    # a scanned doc then keeps its file block — fully graceful). To enable, point
+    # the "http" backend at any OCR service (the model lives there):
+    #   backend: http
+    #   endpoint: http://127.0.0.1:8771/ocr
+    #   model: paddle-v4
+    #   languages: [eng, fra]
+    backend: none
   pools:
     # Generic worker pools (workers.pools). The workspace git module runs in its
     # OWN subprocess so the shadow-git work (status/diff/commit + the live preview
@@ -82,10 +92,22 @@ workers:
     - id: workspace
       modules: [workspace]
       count: 1
-    # RAG pool disabled : the `rag` module isn't compiled into digitorn-worker
-    # (needs `import _ internal/modules/rag` + `-tags onnx`), so enabling it just
-    # spams startup-timeout restarts. Re-add { id: rag, modules: [rag], count: 1 }
-    # once the worker binary bundles the module.
+    - id: rag
+      modules: [rag]
+      count: 1
+    # MCP runs in its OWN worker: it spawns external server subprocesses (npx/uvx)
+    # and resolves per-user OAuth, so isolating it keeps that off the daemon and
+    # enables the daemon-resolves/worker-injects auth path. count: 1 (one pool of
+    # connections, per-user keyed inside). Set count: 0 to fall back to in-proc.
+    - id: mcp
+      modules: [mcp]
+      count: 1
+
+# User-scoped automations surface (/api/automations/*) : the daemon relays to
+# the background service's ops API server-side, enforcing per-user ownership.
+background:
+  ops_url: http://127.0.0.1:8091
+  # ops_token: set when the bg sets DIGITORN_BG_OPS_TOKEN
 
 logging:
   level: info

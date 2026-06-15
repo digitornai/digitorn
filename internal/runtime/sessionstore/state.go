@@ -51,6 +51,11 @@ type SessionState struct {
 	Errors          []ErrorEntry
 	Compactions     []CompactionEntry
 
+	// SeenClientMsgIDs maps each user message's client_message_id → its seq, so a
+	// re-delivery with the same id (a background-job retry, a client resend) is an
+	// idempotent no-op rather than a duplicate message + a spurious extra turn.
+	SeenClientMsgIDs map[string]uint64
+
 	// Tools is the toolset exposed to the session (name + schema), surfaced in
 	// the history response so a client can render what the agent could call.
 	Tools []ToolSpec
@@ -92,6 +97,14 @@ type SessionState struct {
 	// per-session tokenizer→provider calibration ratio so the displayed gauge
 	// tracks the real provider count, not the raw tiktoken estimate.
 	ContextProviderTokens int
+
+	// PreparedSummary is the LATEST high-fidelity LLM summary of the aged region
+	// (CTX-8), produced PROACTIVELY off the turn loop by the summary maintainer
+	// and set by EventContextSummaryPrepared. It is a CANDIDATE only — it does
+	// NOT change the model's view; the compaction gate applies it instantly when
+	// pressure trips, so the loop never blocks on a summary LLM call. Cleared
+	// once consumed (an EventContextCompacted whose cutoff reaches CoversSeq).
+	PreparedSummary *PreparedSummaryState
 
 	TokensIn  int64
 	TokensOut int64
@@ -300,6 +313,24 @@ func cloneContextCompaction(c *ContextCompactionState) *ContextCompactionState {
 	return &cp
 }
 
+// PreparedSummaryState is a background-prepared LLM summary candidate (CTX-8).
+// CoversSeq : the Seq up to which Summary accounts. The compaction gate applies
+// it as an EventContextCompacted at this cutoff — it never blocks the turn.
+type PreparedSummaryState struct {
+	Summary    string `json:"summary"`
+	CoversSeq  uint64 `json:"covers_seq"`
+	AtSeq      uint64 `json:"at_seq,omitempty"`
+	TsUnixNano int64  `json:"ts,omitempty"`
+}
+
+func clonePreparedSummary(p *PreparedSummaryState) *PreparedSummaryState {
+	if p == nil {
+		return nil
+	}
+	cp := *p
+	return &cp
+}
+
 func NewSessionState(sessionID string) *SessionState {
 	return &SessionState{
 		SessionID:      sessionID,
@@ -316,6 +347,19 @@ func NewSessionState(sessionID string) *SessionState {
 // with a deferred RUnlock(). Use for short, allocation-free reads only.
 func (s *SessionState) RLock()   { s.mu.RLock() }
 func (s *SessionState) RUnlock() { s.mu.RUnlock() }
+
+// SeenClientMessage reports whether a user message with this client_message_id has
+// already been recorded, and its seq. Empty id → never seen. The append path uses it
+// to make a re-delivery (retry / resend) idempotent instead of a duplicate.
+func (s *SessionState) SeenClientMessage(id string) (uint64, bool) {
+	if id == "" {
+		return 0, false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	seq, ok := s.SeenClientMsgIDs[id]
+	return seq, ok
+}
 
 func (s *SessionState) Snapshot() SessionSnapshot {
 	s.mu.RLock()
@@ -345,6 +389,7 @@ func (s *SessionState) Snapshot() SessionSnapshot {
 		Errors:                   append([]ErrorEntry(nil), s.Errors...),
 		Compactions:              append([]CompactionEntry(nil), s.Compactions...),
 		ContextCompaction:        cloneContextCompaction(s.ContextCompaction),
+		PreparedSummary:          clonePreparedSummary(s.PreparedSummary),
 		CompactionInflight:       s.CompactionInflight,
 		ContextTokens:            s.ContextTokens,
 		ContextSystemTokens:      s.ContextSystemTokens,

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/mbathepaul/digitorn/internal/safego"
 )
@@ -33,6 +34,13 @@ type client struct {
 	closed  bool
 
 	onNotify func(method string, params json.RawMessage)
+
+	// replyGate caps the number of in-flight replyNull goroutines. Server-initiated
+	// requests answered from the read loop must NEVER block the loop on a stdin
+	// write (a misbehaving / slow server would freeze every in-flight call). The
+	// reply is dispatched to a short-lived goroutine; a bounded gate prevents an
+	// unbounded goroutine pile-up if a server floods the client with requests.
+	replyGate chan struct{}
 
 	done chan struct{} // closed when the read loop exits
 }
@@ -87,10 +95,11 @@ func startClient(ctx context.Context, argv []string, cwd string, onNotify func(m
 // pipe, so the framing/correlation logic is exercised without spawning.
 func newClientConn(stdin io.WriteCloser, stdout io.Reader, onNotify func(method string, params json.RawMessage)) *client {
 	c := &client{
-		stdin:    stdin,
-		pending:  make(map[int64]chan rpcResult),
-		onNotify: onNotify,
-		done:     make(chan struct{}),
+		stdin:     stdin,
+		pending:   make(map[int64]chan rpcResult),
+		onNotify:  onNotify,
+		replyGate: make(chan struct{}, 64),
+		done:      make(chan struct{}),
 	}
 	go c.readLoop(stdout)
 	return c
@@ -188,7 +197,21 @@ func (c *client) readLoop(stdout io.Reader) {
 			case msg.ID != nil && msg.Method != "":
 				// Server-initiated request. We expose no capabilities that need a
 				// real answer, so reply null to avoid the server blocking on us.
-				c.replyNull(*msg.ID)
+				// The write is dispatched to a goroutine so a slow / full stdin
+				// pipe can never freeze the read loop (which would dead-lock every
+				// outstanding call awaiting its response).
+				idCopy := append(json.RawMessage(nil), *msg.ID...)
+				select {
+				case c.replyGate <- struct{}{}:
+					safego.Go("lsp.replyNull", func() {
+						defer func() { <-c.replyGate }()
+						c.replyNull(idCopy)
+					})
+				default:
+					// Backlog ceiling reached: server is flooding us with requests
+					// faster than we can answer. Drop this reply — the server will
+					// time out on its own; the loop stays responsive.
+				}
 			case msg.Method != "":
 				if c.onNotify != nil {
 					c.onNotify(msg.Method, msg.Params)
@@ -236,17 +259,59 @@ func (c *client) failPending(err error) {
 }
 
 // close best-effort shuts the server down (shutdown/exit), then kills it.
+// Every step is bounded by ctx so a misbehaving server can never wedge the
+// daemon shutdown — a stuck shutdown call, a wedged Wait(), or a frozen read
+// loop are all detached and the function returns within the deadline.
 func (c *client) close(ctx context.Context) {
-	_, _ = c.call(ctx, "shutdown", nil)
-	_ = c.notify("exit", nil)
-	_ = c.stdin.Close()
-	if c.cmd != nil {
-		if c.cmd.Process != nil {
-			_ = c.cmd.Process.Kill()
-		}
-		_ = c.cmd.Wait()
+	// Cap the entire teardown at 3s when the caller did not bring a deadline,
+	// so callers that just pass context.Background() (the common shutdown path)
+	// still get bounded behavior.
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
 	}
-	<-c.done
+
+	// Step 1: polite shutdown handshake on a side goroutine so that a wedged
+	// stdin write (server not reading) cannot freeze us — we wait at most up
+	// to ctx and move on. The goroutine self-terminates once we force-close
+	// the underlying stdin / kill the process below.
+	politeDone := make(chan struct{})
+	go func() {
+		defer close(politeDone)
+		_, _ = c.call(ctx, "shutdown", nil)
+		_ = c.notify("exit", nil)
+	}()
+	select {
+	case <-politeDone:
+	case <-ctx.Done():
+	}
+
+	// Step 2: force-cleanup. Closing stdin unblocks any in-flight write in the
+	// polite goroutine; killing the process tears down the OS pipe so the read
+	// loop drains.
+	_ = c.stdin.Close()
+	if c.cmd != nil && c.cmd.Process != nil {
+		_ = c.cmd.Process.Kill()
+	}
+
+	// Step 3: bounded waits for the subprocess and the read loop. Both run in
+	// detached goroutines so a stuck Wait()/read cannot block this function.
+	if c.cmd != nil {
+		waitDone := make(chan struct{})
+		go func() {
+			defer close(waitDone)
+			_ = c.cmd.Wait()
+		}()
+		select {
+		case <-waitDone:
+		case <-ctx.Done():
+		}
+	}
+	select {
+	case <-c.done:
+	case <-ctx.Done():
+	}
 }
 
 // readFrame reads one LSP-framed message: header lines terminated by a blank

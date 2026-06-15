@@ -38,8 +38,19 @@ type Activation struct {
 	Owner           string // end-user the session belongs to (resolved); "" = launcher owns it
 	Message         string
 	Context         string // extra system-prompt context (rendered)
+	Model           string // per-session model override for the entry agent; "" = app default
 	Reply           string // auto | none | explicit
 	ExposeData      bool
+	// Deliver is the resolved proactive-push destination (nil = reactive: reply to
+	// the inbound originator). When set, the processor delivers the result here.
+	Deliver *Destination
+}
+
+// Destination is a resolved, transport-agnostic channel address for delivery: the
+// adapter name + the transport handle (the same map an adapter's Send consumes).
+type Destination struct {
+	Adapter string
+	Ref     map[string]any
 }
 
 // PrepareInvoker runs a prepare step's "module.action" and returns its result.
@@ -90,7 +101,7 @@ func Process(ctx context.Context, ev Event, ac ActivationConfig, mod ModuleConfi
 	session, strat := resolveSession(ac.Session, ev, scope)
 	owner := resolveOwner(ac.Owner, ev, scope)
 
-	// 5. message + context.
+	// 5. message + context + delivery destination.
 	return Activation{
 		Agent:           agent,
 		Session:         session,
@@ -98,9 +109,28 @@ func Process(ctx context.Context, ev Event, ac ActivationConfig, mod ModuleConfi
 		Owner:           owner,
 		Message:         buildMessage(ac, ev, scope),
 		Context:         Render(ac.Context, scope),
+		Model:           strings.TrimSpace(Render(ac.Model, scope)),
 		Reply:           replyOr(ac.Reply),
 		ExposeData:      ac.ExposeData,
+		Deliver:         resolveDeliver(ac.Deliver, scope),
 	}, nil
+}
+
+// resolveDeliver renders a configured push destination over the event scope (so a
+// webhook/cron payload can target a specific channel). Returns nil when unset.
+func resolveDeliver(dc *DeliverConfig, scope map[string]any) *Destination {
+	if dc == nil {
+		return nil
+	}
+	adapter := strings.TrimSpace(Render(dc.Adapter, scope))
+	if adapter == "" {
+		return nil
+	}
+	ref := make(map[string]any, len(dc.Ref))
+	for k, v := range dc.Ref {
+		ref[k] = Render(v, scope)
+	}
+	return &Destination{Adapter: adapter, Ref: ref}
 }
 
 // resolveOwner derives the end-user a launched session belongs to. Per-user

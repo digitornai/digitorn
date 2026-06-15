@@ -1,0 +1,52 @@
+schema_version: 2
+app:
+  app_id: mcp-disco
+  name: MCP Discovery-Mode E2E
+  version: "0.1.0"
+  description: "Proves MCP tools work via the discovery meta-path (search_tools/get_tool/execute_tool)."
+  author: "paul@digitorn.ai"
+  category: "coding"
+
+agents:
+  - id: main
+    role: worker
+    max_tool_iterations: 14
+    brain:
+      provider: openai
+      model: moonshotai/kimi-k2.6
+      temperature: 0.1
+      max_tokens: 2048
+      config:
+        api_key: "{{env.OPENAI_API_KEY}}"
+      context:
+        # Small-ish window: enough for the system prompt + meta-tools, but the ~18
+        # everything tools' full schemas don't fit → planner switches to
+        # compact/discovery, forcing the meta-tool path (without pathological
+        # over-budget compaction that destabilises the model).
+        max_tokens: 6000
+    system_prompt: |
+      You are a test agent. Your tools are not all shown up-front: use search_tools to
+      discover a tool, get_tool to read its parameters, then execute_tool to call it.
+      Never fabricate a result. Report verbatim what the tool returned. No emoji.
+    modules:
+      - mcp
+      - context_builder
+
+tools:
+  modules:
+    mcp:
+      config:
+        servers:
+          everything:
+            transport: stdio
+            command: npx
+            args: ["-y", "@modelcontextprotocol/server-everything"]
+            sandbox:
+              permissions: [process.exec, net.http]
+    context_builder: {}
+  capabilities:
+    default_policy: auto
+    grant:
+      - module: mcp
+      - module: context_builder
+        tools: [search_tools, get_tool, execute_tool]

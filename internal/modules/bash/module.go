@@ -81,14 +81,25 @@ func New() *Module {
 }
 
 func (m *Module) registerRunTool() {
-	desc := runDescCore + " " + runDescStateless + " " + runDescTail
+	// Branch the tool description on the actual backend so the LLM is told the
+	// truth about its shell — bash idioms documented for a POSIX backend, native
+	// PowerShell idioms documented when PowerShell is live. Without this split
+	// the model writes bash-only syntax on Windows, trips the bashismHint, and
+	// loops re-writing the same command.
+	tail := runDescTail
+	prompt := runToolPrompt
+	if m.kind == "powershell" || m.kind == "pwsh" {
+		tail = runDescTailPowerShell
+		prompt = runToolPromptPowerShell
+	}
+	desc := runDescCore + " " + runDescStateless + " " + tail
 	if m.envInfo != "" {
 		desc += "\n\nThis host: " + m.envInfo + "."
 	}
 	m.RegisterTool(module.Tool{
 		Name:         "run",
 		Description:  desc,
-		ToolPrompt:   runToolPrompt,
+		ToolPrompt:   prompt,
 		Params:       runToolParams,
 		Permissions:  []string{"bash.run"},
 		RiskLevel:    tool.RiskHigh,
@@ -103,7 +114,9 @@ const (
 
 	runDescStateless = "Each command is a fresh one-shot process starting at the workspace root: shell state (cd, export, venv activation, functions) does NOT persist between calls — chain setup and execution in ONE command (e.g. `cd proj && npm install`, `source venv/bin/activate && pytest`)."
 
-	runDescTail = "The shell is mvdan/sh: a full POSIX + bash-compatible interpreter that spawns real OS processes (node, npm, git, python, go, docker, curl…) natively. It runs identically on Windows, Linux, and macOS — no MSYS path rewriting, no PowerShell, no Git Bash quirks. Supports pipelines, redirections (>, >>, 2>&1, 2>/dev/null), here-docs, arrays, [[ ]], $(...), &&/||/;. Commands that never return on their own (dev servers, watchers, tail -f, REPLs) MUST use background_run — never run them in the foreground (they freeze the turn until timeout) and never append a trailing &. Each result reports cwd, duration, files changed, and git branch/dirty status."
+	runDescTail = "The shell is mvdan/sh: a full POSIX + bash-compatible interpreter that spawns real OS processes (node, npm, git, python, go, docker, curl…) natively. It runs identically on Linux and macOS — no MSYS path rewriting, no Git Bash quirks. Supports pipelines, redirections (>, >>, 2>&1, 2>/dev/null), here-docs, arrays, [[ ]], $(...), &&/||/;. Commands that never return on their own (dev servers, watchers, tail -f, REPLs) MUST use background_run — never run them in the foreground (they freeze the turn until timeout) and never append a trailing &. Each result reports cwd, duration, files changed, and git branch/dirty status."
+
+	runDescTailPowerShell = "The shell is the system PowerShell on Windows — a real REPL where state (cd, $variables, modules, functions) PERSISTS across calls within the session. Write PowerShell natively: cmdlets, pipeline objects, parameter binding. Bash idioms (&&, ||, /dev/null, `export VAR=…`, `VAR=… cmd`) are translated transparently so existing muscle memory keeps working — but you get the most power by speaking PowerShell directly. Native Windows commands (git, npm, node, python, docker, gh, taskkill, tasklist, netstat) work with their normal flags. Commands that never return on their own (dev servers, watchers, REPLs) MUST use background_run. Each result reports cwd, duration, files changed, and git branch/dirty status."
 )
 
 var runToolPrompt = "GOLDEN RULE: use dedicated tools for file operations — `read` instead of cat/head/tail, " +
@@ -159,6 +172,85 @@ var runToolPrompt = "GOLDEN RULE: use dedicated tools for file operations — `r
 	"• Never exfiltrate secrets or pipe credentials to the network\n" +
 	"• Prefer explicit paths over relying on cwd drift between calls"
 
+// runToolPromptPowerShell is the Windows / PowerShell counterpart to
+// runToolPrompt. It states the truth — the shell IS PowerShell — and pushes
+// the agent toward native cmdlets and pipeline objects. The translation layer
+// (psChain/psEnv/psNulSink/warmupCmd) silently accepts the common bash idioms
+// the model knows from training, but the agent gets a real productivity bump
+// the moment it speaks PowerShell directly.
+var runToolPromptPowerShell = "GOLDEN RULE: use dedicated tools for file operations — `read` instead of cat/Get-Content, " +
+	"`grep` instead of grep/Select-String, `glob` instead of Get-ChildItem -Recurse, `edit`/`write` instead of Set-Content/Add-Content. " +
+	"They render better, integrate with the UI, and never corrupt files. " +
+	"Use the shell exclusively for running programs and driving the system.\n" +
+	"\n" +
+	"THIS SHELL IS POWERSHELL (Windows native). Cmdlets, pipeline OBJECTS (not text), parameter binding, " +
+	"and the .NET surface are all directly available. Bash idioms below ARE translated transparently, but " +
+	"native PowerShell unlocks the full power of the host — prefer it.\n" +
+	"\n" +
+	"USE THE SHELL FOR:\n" +
+	"• Build / test / install: `npm install`, `npm run build`, `go build ./...`, `pytest`, `cargo test`\n" +
+	"• Git: `git status`, `git add -A; git commit -m 'msg'`, `git diff HEAD`, `git log --oneline -10`\n" +
+	"• Running CLIs: curl, docker, kubectl, ffmpeg, jq, openssl, npx, pip, poetry, yarn, gh, az…\n" +
+	"• System inspection: ports, processes, services, env vars, disk, network\n" +
+	"• Anything that produces output you need to act on\n" +
+	"\n" +
+	"NATIVE POWERSHELL — the most powerful surface:\n" +
+	"• Chaining:        `cmd1 -and cmd2` is NOT a thing — use `; if ($?) { cmd2 }` OR rely on `cmd1 && cmd2` (we translate it)\n" +
+	"• Pipeline objects: `Get-ChildItem | Where-Object Name -like '*.go' | ForEach-Object { $_.FullName }`\n" +
+	"• Filter / map:    `… | Where-Object { $_.Size -gt 1MB }` · `… | Select-Object -First 10`\n" +
+	"• Sort / group:    `… | Sort-Object LastWriteTime -Descending` · `… | Group-Object Extension`\n" +
+	"• Format / table:  `… | Format-Table Name,Length -AutoSize` (output only — for capture stay as objects)\n" +
+	"• String ops:      `'foo bar' -split ' '` · `'foo' -replace 'o','0'` · `'abc' -match '^a'`\n" +
+	"• Env vars:        `$env:VAR = 'value'` · `$env:PATH -split ';'`\n" +
+	"• Test files:      `Test-Path file` · `Test-Path file -PathType Leaf`\n" +
+	"• Read JSON:       `Get-Content file.json | ConvertFrom-Json`\n" +
+	"• Write JSON:      `$obj | ConvertTo-Json -Depth 10 | Set-Content out.json`\n" +
+	"• HTTP:            `Invoke-RestMethod -Uri https://api.example.com/foo -Method GET -Headers @{Authorization='Bearer x'}`\n" +
+	"• Try / catch:     `try { … } catch { Write-Error $_; exit 1 }`\n" +
+	"• Strict mode:     `Set-StrictMode -Version Latest; $ErrorActionPreference = 'Stop'`\n" +
+	"\n" +
+	"BASH IDIOMS THAT WORK HERE (translated for you):\n" +
+	"• `cmd1 && cmd2`  → runs cmd2 only if cmd1 succeeded\n" +
+	"• `cmd1 || cmd2`  → runs cmd2 only if cmd1 failed\n" +
+	"• `>/dev/null`    → silence stdout · `2>/dev/null` silences stderr · `>/dev/null 2>&1` silences both\n" +
+	"• `export VAR=v`  → sets `$env:VAR` for the session\n" +
+	"• `VAR=v cmd`     → inline env (one-shot)\n" +
+	"\n" +
+	"WHERE POWERSHELL DIFFERS FROM BASH (use the right side):\n" +
+	"• Conditionals:    `if (Test-Path foo) { … } elseif (…) { … } else { … }`  (NOT `if [[ … ]]; then; fi`)\n" +
+	"• Loops:           `foreach ($f in Get-ChildItem *.go) { Write-Output $f.Name }`\n" +
+	"• Arrays:          `$arr = @('a','b','c'); $arr[0]; $arr.Count`\n" +
+	"• Here-strings:    `$text = @'\\n…\\n'@`  (single-quoted = literal, no $ expansion)\n" +
+	"• Backticks:       `` ` `` is the LINE-CONTINUATION character, NOT command substitution. Use `$(cmd)` for substitution\n" +
+	"• Subshell:        `& { …; … }` (child scope) or `. { …; … }` (current scope, keeps state)\n" +
+	"\n" +
+	"WINDOWS-NATIVE TIPS:\n" +
+	"• Ports:           `Get-NetTCPConnection -State Listen | Where-Object LocalPort -eq 3000` then `Stop-Process -Id $_.OwningProcess -Force`\n" +
+	"• Processes:       `Get-Process node` · `Stop-Process -Name node -Force`\n" +
+	"• Services:        `Get-Service` · `Restart-Service -Name <name>`\n" +
+	"• Paths:           prefer forward slashes (`C:/Users/you/proj`) — PowerShell and every modern Windows CLI accept them\n" +
+	"• Quoting:         single quotes are literal; double quotes interpolate `$vars` — use single quotes whenever you don't need expansion\n" +
+	"\n" +
+	"BACKGROUND TASKS — background_run is MANDATORY for anything that never exits:\n" +
+	"• Dev servers:  `npm run dev`, `next dev`, `vite`, `flask run`, `uvicorn`, `rails s`\n" +
+	"• Watchers:     `tsc --watch`, `nodemon`, `cargo watch`\n" +
+	"• Tails:        `Get-Content -Wait logfile` / `tail -f`\n" +
+	"• REPLs:        `node`, `python`, `pwsh`\n" +
+	"NEVER run these in the foreground (freezes the turn until timeout).\n" +
+	"NEVER append & (orphans the process, untracked, no notification).\n" +
+	"Check status:  background_run {task_id: \"…\"}\n" +
+	"List all:      background_run {list_tasks: true}\n" +
+	"Cancel:        background_run {task_id: \"…\", cancel: true}\n" +
+	"Do NOT claim a server is running until the startup window passed cleanly or a status check confirms it.\n" +
+	"\n" +
+	"RELIABILITY RULES:\n" +
+	"• Quote paths with spaces: `cd 'My Project'; npm install`\n" +
+	"• Chain dependent steps:   `npm ci && npm run build && npm test` (translated to ; with $? checks)\n" +
+	"• Non-interactive flags:   `npm install --yes`, `pip install --quiet`, `winget install -h`\n" +
+	"• Check before destroying: state what `Remove-Item -Recurse -Force`, `git reset --hard`, `git push --force` will do\n" +
+	"• Never exfiltrate secrets or pipe credentials to the network\n" +
+	"• Prefer explicit paths over relying on cwd drift between calls"
+
 var runToolParams = []tool.ParamSpec{
 	{Name: "command", Type: "string", Description: "The shell command line to execute.", Required: true},
 	{Name: "timeout_seconds", Type: "integer", Description: "Per-call timeout in seconds; the running command's process tree is killed on expiry. 0 = module default (900s).", Default: 0},
@@ -166,6 +258,11 @@ var runToolParams = []tool.ParamSpec{
 }
 
 func (m *Module) HasShell() bool { return m.path != "" }
+
+// Kind returns the resolved shell kind ("bash" / "sh" / "powershell" / "pwsh"
+// / ""). Used by integration tests to pick a shell-appropriate command for
+// streaming proofs.
+func (m *Module) Kind() string { return m.kind }
 
 func (m *Module) Init(ctx context.Context, cfg map[string]any) error {
 	if cfg != nil {

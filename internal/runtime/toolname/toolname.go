@@ -160,3 +160,43 @@ func QualifyBareName(name string, knownFQNs []string) string {
 	}
 	return name
 }
+
+// flattenKey reduces a tool name to a separator-insensitive comparison key:
+// the FQN dot and any "__"/"_" separators collapse to a single "_". So the
+// canonical "mcp_notion.notion-search", its sanitized wire form
+// "mcp_notion__notion-search", and a model's mangled "mcp_notion_notion-search"
+// all map to the same key.
+func flattenKey(s string) string {
+	s = strings.ReplaceAll(s, "__", "_")
+	s = strings.ReplaceAll(s, ".", "_")
+	return s
+}
+
+// ResolveMangled maps a model-mangled tool name (dot/single-underscore/
+// double-underscore variants of an FQN) back to a known canonical FQN by
+// comparing separator-insensitive keys. Real models — especially on MCP names
+// like mcp_<server>.<tool> — freely swap "." and "_", which Canonicalize alone
+// can't undo (it can't know the module boundary). Returns the FQN on a unique
+// match, else the input unchanged (so an ambiguous or unknown name is left for
+// the gate to report honestly). Apply after Canonicalize + QualifyBareName when
+// the name still carries no ".".
+func ResolveMangled(name string, knownFQNs []string) string {
+	if name == "" || strings.Contains(name, ".") {
+		return name
+	}
+	key := flattenKey(name)
+	match := ""
+	for _, fqn := range knownFQNs {
+		if flattenKey(fqn) != key {
+			continue
+		}
+		if match != "" && match != fqn {
+			return name // two FQNs collapse to the same key — ambiguous, leave as-is
+		}
+		match = fqn
+	}
+	if match != "" {
+		return match
+	}
+	return name
+}

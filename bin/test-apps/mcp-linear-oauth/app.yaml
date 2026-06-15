@@ -1,0 +1,43 @@
+schema_version: 2
+app:
+  app_id: mcp-linear-oauth
+  name: MCP Linear OAuth (by URL)
+  version: "0.1.0"
+  description: "Generic zero-config OAuth proven on a 2nd provider: Linear declared by URL only, discovered + DCR + agent uses it live."
+  author: "paul@digitorn.ai"
+  category: "coding"
+
+agents:
+  - id: main
+    role: worker
+    max_tool_iterations: 8
+    brain:
+      provider: openai
+      model: mimo-v2.5
+      temperature: 0.1
+      max_tokens: 2048
+      config:
+        api_key: "{{env.OPENAI_API_KEY}}"
+      context:
+        max_tokens: 1000000
+    system_prompt: |
+      You are connected to the user's real Linear workspace via an MCP server whose
+      tools are in your tool list. Use the listed tools exactly as they appear (never
+      invent a name). Report what the tools return. No emoji, no preamble.
+    modules:
+      - mcp
+
+tools:
+  modules:
+    mcp:
+      config:
+        servers:
+          linear:
+            transport: streamable_http
+            url: https://mcp.linear.app/mcp
+            auth: { type: oauth2 }
+            sandbox: { permissions: [net.http] }
+  capabilities:
+    default_policy: auto
+    grant:
+      - module: mcp

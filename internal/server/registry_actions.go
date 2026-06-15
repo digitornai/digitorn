@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"strings"
 
 	"github.com/mbathepaul/digitorn/internal/appmgr"
 	domainmodule "github.com/mbathepaul/digitorn/internal/domain/module"
@@ -80,7 +81,64 @@ func (a registryActions) ForApp(appID string) []policy.AvailableAction {
 			})
 		}
 	}
-	out = append(out, a.MCP.forApp(appID)...) // forApp self-gates on the mcp config block
+	// MCP virtual tools. Apply the per-app allowed_servers allow-list HERE so a
+	// disallowed server's tools never enter the universe → never reach the index
+	// or the LLM (the same build-time filtering gate 1a gives native modules).
+	// Gate 1c re-checks at dispatch, so this is defense-in-depth, not the only
+	// guard. nil allow-set = no restriction.
+	mcpActions := a.MCP.forApp(appID) // forApp self-gates on the mcp config block
+	if allowed := a.mcpAllowedServers(appID); allowed != nil {
+		mcpActions = filterMCPByServer(mcpActions, allowed)
+	}
+	out = append(out, mcpActions...)
+	return out
+}
+
+// mcpAllowedServers reads tools.modules.mcp.constraints.allowed_servers as a
+// set. nil = the constraint is absent (no restriction). A present-but-empty list
+// yields a non-nil empty set (no MCP server allowed).
+func (a registryActions) mcpAllowedServers(appID string) map[string]struct{} {
+	if a.Apps == nil || appID == "" {
+		return nil
+	}
+	rt, err := a.Apps.Get(context.Background(), appID)
+	if err != nil || rt == nil || rt.Definition == nil || rt.Definition.Tools == nil {
+		return nil
+	}
+	mb, ok := rt.Definition.Tools.Modules["mcp"]
+	if !ok || mb.Constraints == nil {
+		return nil
+	}
+	raw, ok := mb.Constraints["allowed_servers"]
+	if !ok {
+		return nil
+	}
+	set := map[string]struct{}{}
+	switch v := raw.(type) {
+	case []string:
+		for _, s := range v {
+			set[s] = struct{}{}
+		}
+	case []any:
+		for _, e := range v {
+			if s, ok := e.(string); ok {
+				set[s] = struct{}{}
+			}
+		}
+	}
+	return set
+}
+
+// filterMCPByServer keeps only the MCP actions whose mcp_<server> module is in
+// the allowed set. Returns a NEW slice (never mutates the catalog's cache).
+func filterMCPByServer(actions []policy.AvailableAction, allowed map[string]struct{}) []policy.AvailableAction {
+	out := make([]policy.AvailableAction, 0, len(actions))
+	for _, act := range actions {
+		server := strings.TrimPrefix(act.Module, "mcp_")
+		if _, ok := allowed[server]; ok {
+			out = append(out, act)
+		}
+	}
 	return out
 }
 
@@ -186,6 +244,21 @@ func (r registryToolSpecs) LookupToolSpec(moduleID, action string) *tool.Spec {
 	if r.MCP != nil && isMCPModule(moduleID) {
 		if s := r.MCP.lookupSpec(moduleID, action); s != nil {
 			return s
+		}
+	}
+	// ap_<piece> tools are runtime-discovered from the pieces bridge.
+	// Reconstruct the canonical wire name and look it up via the pieces LiveTooler.
+	if r.Registry != nil && strings.HasPrefix(moduleID, "ap_") {
+		if mod, err := r.Registry.Get("pieces"); err == nil {
+			if lt, ok := mod.(domainmodule.LiveTooler); ok {
+				wireName := moduleID + "__" + action
+				for _, spec := range lt.LiveTools(context.Background()) {
+					if spec.Name == wireName {
+						s := spec
+						return &s
+					}
+				}
+			}
 		}
 	}
 	if r.Registry == nil {

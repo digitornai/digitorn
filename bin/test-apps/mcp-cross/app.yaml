@@ -1,0 +1,49 @@
+schema_version: 2
+app:
+  app_id: mcp-cross
+  name: MCP Cross-Server Orchestration
+  version: "0.1.0"
+  description: "Ultra-advanced: one agent reads from Linear AND writes to Notion in a single autonomous task, both via generic OAuth."
+  author: "paul@digitorn.ai"
+  category: "coding"
+
+agents:
+  - id: main
+    role: worker
+    max_tool_iterations: 30
+    brain:
+      provider: openai
+      model: mimo-v2.5
+      temperature: 0.1
+      max_tokens: 4096
+      config:
+        api_key: "{{env.OPENAI_API_KEY}}"
+      context:
+        max_tokens: 1000000
+    system_prompt: |
+      You orchestrate the user's real Linear and Notion workspaces via MCP servers.
+      Both servers' tools are in your tool list (Linear tools and Notion tools). Use
+      the tools exactly as they appear; never invent a tool name. Work autonomously:
+      read from one service, then write the result into the other. No emoji.
+    modules:
+      - mcp
+
+tools:
+  modules:
+    mcp:
+      config:
+        servers:
+          linear:
+            transport: streamable_http
+            url: https://mcp.linear.app/mcp
+            auth: { type: oauth2 }
+            sandbox: { permissions: [net.http] }
+          notion:
+            transport: streamable_http
+            url: https://mcp.notion.com/mcp
+            auth: { type: oauth2 }
+            sandbox: { permissions: [net.http] }
+  capabilities:
+    default_policy: auto
+    grant:
+      - module: mcp

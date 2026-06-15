@@ -36,6 +36,17 @@ type Config struct {
 	Logging       Logging       `koanf:"logging"`
 	LLM           LLM           `koanf:"llm"`
 	Observability Observability `koanf:"observability"`
+	Background    Background    `koanf:"background"`
+}
+
+// Background locates the background service's ops API so the daemon can expose
+// a USER-SCOPED automations surface (/api/automations/*) to clients : the
+// browser talks only to the daemon (JWT auth + ownership enforcement here) and
+// the daemon relays server-side with the admin ops token, which therefore never
+// reaches a client. Empty OpsURL disables the surface (404s) — fully graceful.
+type Background struct {
+	OpsURL   string `koanf:"ops_url"`   // e.g. http://127.0.0.1:8091 ("" = disabled)
+	OpsToken string `koanf:"ops_token"` // bearer for /ops (DIGITORN_BG_OPS_TOKEN twin)
 }
 
 // Apps holds the install location for apps and the hub client settings.
@@ -73,7 +84,27 @@ type Workers struct {
 	LLM        WorkerLLM        `koanf:"llm"`
 	Embeddings WorkerEmbeddings `koanf:"embeddings"`
 	Tokenizer  WorkerTokenizer  `koanf:"tokenizer"`
+	OCR        OCR              `koanf:"ocr"`
 	Pools      []WorkerPool     `koanf:"pools"`
+}
+
+// OCR configures the OPTIONAL OCR fallback used when a document has no text layer
+// (a scanned PDF, an image). The engine is fully PLUGGABLE — NOTHING is hardcoded:
+// `backend` picks the implementation and every backend-specific knob (model,
+// endpoint, languages, …) is config, so the OCR model is never frozen. Backend ""
+// / "none" disables OCR (the document keeps its file block — fully graceful). OCR
+// runs OFF the turn loop (async, content-addressed-cached) so it never blocks the
+// daemon. The "http" backend points at ANY OCR service (a local microservice, a
+// cloud API, a sidecar); richer in-process engines plug in behind the same seam.
+type OCR struct {
+	Backend   string            `koanf:"backend"`   // "" | "none" | "http"
+	Model     string            `koanf:"model"`     // engine-specific model id (never hardcoded)
+	Endpoint  string            `koanf:"endpoint"`  // http backend: OCR service URL
+	APIKey    string            `koanf:"api_key"`   // http backend: bearer credential
+	Languages []string          `koanf:"languages"` // language hints, e.g. ["eng","fra"]
+	MaxPages  int               `koanf:"max_pages"` // cap pages OCR'd (0 = default 20)
+	Timeout   time.Duration     `koanf:"timeout"`   // per-document OCR timeout (0 = default 60s)
+	Headers   map[string]string `koanf:"headers"`   // http backend: extra request headers
 }
 
 // WorkerTokenizer holds the tokenizer worker subprocess configuration

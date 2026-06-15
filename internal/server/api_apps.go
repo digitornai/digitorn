@@ -49,6 +49,12 @@ func (d *Daemon) installApp(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "source required")
 		return
 	}
+	// Rebuild the module catalog from the live registry : worker-hosted module
+	// manifests arrive asynchronously after boot, so a catalog cached during
+	// startup can miss them and wrongly reject an app as "unknown module".
+	if d.appCompiler != nil {
+		d.appCompiler.InvalidateCatalog()
+	}
 	app, err := d.appMgr.Install(r.Context(), req.Source, bearerToken(r))
 	if err != nil {
 		writeError(w, appMgrErrStatus(err), "install_failed", err.Error())

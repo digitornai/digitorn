@@ -1,0 +1,58 @@
+schema_version: 2
+
+app:
+  app_id: voicedesk
+  name: Voice Desk
+  version: "0.1.0"
+  description: "Inbound phone-support agent: each call wakes a session, the agent answers, and writes a call summary report."
+  author: "live-test@digitorn.local"
+  category: "support"
+  icon: "📞"
+  color: "#6d5efc"
+
+runtime:
+  mode: background
+
+agents:
+  - id: main
+    role: worker
+    brain:
+      provider: openai
+      model: mimo-v2.5
+      temperature: 0.2
+      max_tokens: 400
+      config:
+        api_key: "{{env.OPENAI_API_KEY}}"
+    system_prompt: |
+      You are a phone-support agent. You take a caller's request, answer it
+      concisely and politely, and when the call ends you write a short call
+      summary (caller intent, what you did, follow-up) to the run's report
+      folder using filesystem.write (e.g. <that-folder>/call.md). Keep spoken
+      replies short and natural. No emoji.
+    modules:
+      - filesystem
+
+tools:
+  modules:
+    channels:
+      config:
+        providers:
+          # Inbound phone line over Twilio Media Streams. Declared but DISABLED:
+          # the call-center surface renders from this channel, while no real
+          # Twilio connection is attempted until credentials + the voice server
+          # are wired and it is enabled.
+          phone_line:
+            adapter: voice_twilio
+            enabled: false
+            config:
+              account_sid: "{{secret.TWILIO_ACCOUNT_SID}}"
+              auth_token: "{{secret.TWILIO_AUTH_TOKEN}}"
+              phone_number: "+15551234567"
+              voice_server_url: "ws://127.0.0.1:8003/v1/realtime"
+            activation:
+              session: "call-{{event.source}}"
+              message: "{{event.message}}"
+              reply: auto
+              reports: true
+  capabilities:
+    default_policy: auto

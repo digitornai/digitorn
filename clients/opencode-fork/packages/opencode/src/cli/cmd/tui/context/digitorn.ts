@@ -553,7 +553,7 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
     source: "custom",
     env: [] as string[],
     options: {},
-    models: { build: dgModel },
+    models: { build: dgModel } as Record<string, typeof dgModel>,
   }
   const dgDefault = { digitorn: "build" }
 
@@ -643,6 +643,9 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
 
   // Gateway catalog grouped by kind. The hard 6s deadline is load-bearing: it is
   // what stops a slow/unreachable gateway from freezing the models dialog.
+  // model id → real context window (max_context_tokens), filled as the catalog
+  // loads; the footer gauge denominator reads this for the SELECTED model.
+  const modelCtxWindow = new Map<string, number>()
   type CatModel = { id: string; context: number; cat: string }
   const loadGatewayCatalog = async (): Promise<{ groups: { category: string; models: CatModel[] }[]; error?: string }> => {
     const build = async () => {
@@ -658,6 +661,7 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
         if (!id) continue
         const kind = String(m?.kind ?? "").trim() || "text"
         const context = Number(m?.max_context_tokens ?? 0)
+        if (context > 0) modelCtxWindow.set(id, context)
         const cats = Array.isArray(m?.categories) ? m.categories.map(String).filter(Boolean) : []
         if (!byKind.has(kind)) byKind.set(kind, [])
         byKind.get(kind)!.push({ id, context, cat: cats.join(" · ") })
@@ -679,6 +683,32 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
     }
   }
 
+  // Register the REAL gateway models in the synthetic "digitorn" provider, each with
+  // its own name + documented window (limit.context). This is what lets the prompt
+  // footer show the SELECTED model's name and window natively : local.model.set only
+  // accepts a model that exists in the provider (isModelValid), and parsed() reads its
+  // name from there. Built once from the catalog (kept "build" as the default), best-
+  // effort : if the gateway is unreachable the provider stays single-model.
+  let providerModelsBuilt = false
+  const ensureProviderModels = async () => {
+    if (providerModelsBuilt) return
+    const { groups } = await loadGatewayCatalog()
+    if (!groups.length) return
+    const models: Record<string, typeof dgModel> = { build: dgModel }
+    for (const g of groups)
+      for (const m of g.models) {
+        if (!m.id || m.id === "build") continue
+        models[m.id] = {
+          ...dgModel,
+          id: m.id,
+          name: m.id,
+          limit: { context: m.context > 0 ? m.context : dgModel.limit.context, output: dgModel.limit.output },
+        }
+      }
+    dgProvider.models = models
+    providerModelsBuilt = true
+  }
+
   // ── ÉTAPE 3 : live chat plumbing ──────────────────────────────────────────
   // ONE Socket.IO to our daemon, fanned out to every open /event SSE stream,
   // translating each Envelope into opencode GlobalEvents. Per-session turn state
@@ -690,6 +720,17 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
   // turn that was in-flight during a daemon drop catches up instead of hanging.
   let lastJoined = ""
   const lastSeqOf = new Map<string, number>()
+  // Aborts issued while the daemon was unreachable : ESC stops the UI instantly, and
+  // we re-send the abort on reconnect so the REAL turn is stopped server-side too.
+  // sid → the encoded app the session belongs to (captured at abort time).
+  const pendingAbort = new Map<string, string>()
+  // sid → the session's effective entry-agent model (override or brain default),
+  // stamped on the user message so opencode restores the right model on reopen.
+  const selModel = new Map<string, string>()
+  // The modelID to stamp on a user message : the session's effective model once the
+  // provider catalog is registered (so local.model.set accepts it on reopen), else the
+  // "build" default — never stamp a model opencode would reject with a toast.
+  const msgModelID = (sid: string) => (providerModelsBuilt && selModel.get(sid)) || "build"
   let lastEventAt = 0 // wall-clock of the last envelope received (any, incl. replayed)
   // The dead-turn watchdog must distinguish HISTORICAL replayed events (which the
   // daemon re-emits on reconnect to fill the gap) from genuine LIVE progress. A
@@ -714,15 +755,20 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
   // the sidebar Context panel via the pushed digitorn.context event (the panel
   // reads a one-shot snapshot on mount, then lives off the push); kept here too
   // so a freshly-opened event stream can be replayed the current state.
-  const ctxBySession = new Map<string, { used: number; window: number }>()
+  const ctxBySession = new Map<string, { used: number; window: number; selWindow: number }>()
   const ctxFor = (sid: string) => {
     let v = ctxBySession.get(sid)
     if (!v) {
-      v = { used: 0, window: 0 }
+      v = { used: 0, window: 0, selWindow: 0 }
       ctxBySession.set(sid, v)
     }
     return v
   }
+  // The daemon's `window` is the brain-static window (configured max_tokens else a
+  // documented-window table on the brain's model). It tracks neither the model in
+  // use nor the one the user SELECTED. selWindow is the selected model's real
+  // gateway window (max_context_tokens); prefer it when known.
+  const effWindow = (c: { window: number; selWindow: number }) => (c.selWindow > 0 ? c.selWindow : c.window)
   // Per-turn WORK state, mirroring the Go CLI's renderShimmer counters : the live
   // OUTPUT-token count (banked across rounds so a multi-round/tool turn never
   // resets mid-turn), an `exact` flag (true once the provider's token_usage lands,
@@ -816,10 +862,50 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
   const broadcastConn = () => emit(wrap({ type: "digitorn.connection", properties: connProps() }))
   const ctxProps = (sid: string) => {
     const c = ctxFor(sid)
-    const percent = c.window > 0 ? Math.round((c.used / c.window) * 100) : 0
-    return { session: sid, tokens: c.used, window: c.window, percent }
+    const w = effWindow(c)
+    const percent = w > 0 ? Math.round((c.used / w) * 100) : 0
+    return { session: sid, tokens: c.used, window: w, percent }
   }
   const broadcastCtx = (sid: string) => emit(wrap({ type: "digitorn.context", properties: ctxProps(sid) }))
+  // Resolve the entry agent's effective (override-or-default) model and map it to
+  // its real gateway window. Cache on the session and re-broadcast so the footer
+  // gauge denominator follows the SELECTED model, not the brain-static window.
+  const selWindowInflight = new Set<string>()
+  const resolveSelectedWindow = async (sid: string): Promise<number> => {
+    try {
+      const state = await daemonFetch<any>(
+        cfg,
+        `/api/apps/${encodeURIComponent(currentApp)}/sessions/${encodeURIComponent(sid)}/model`,
+      )
+      const agents = Array.isArray(state?.agents) ? state.agents : []
+      const entry = agents.find((a: any) => a?.entry) ?? agents[0]
+      const model = String(entry?.model ?? "")
+      if (!model) return 0
+      // Remember the effective model so the user message can carry it (→ opencode
+      // restores it on reopen) and the "build" default also reads it.
+      selModel.set(sid, model)
+      dgModel.name = model
+      if (modelCtxWindow.size === 0) await loadGatewayCatalog()
+      return modelCtxWindow.get(model) ?? 0
+    } catch {
+      return 0
+    }
+  }
+  const ensureSelWindow = async (sid: string, force = false) => {
+    if (!sid) return
+    const c = ctxFor(sid)
+    if (!force && (c.selWindow > 0 || selWindowInflight.has(sid))) return
+    selWindowInflight.add(sid)
+    try {
+      const w = await resolveSelectedWindow(sid)
+      if (w > 0 && w !== c.selWindow) {
+        c.selWindow = w
+        broadcastCtx(sid)
+      }
+    } finally {
+      selWindowInflight.delete(sid)
+    }
+  }
   // The ACTIVE digitorn app, pushed to the home active-app indicator whenever it
   // changes (the picker POSTs /digitorn/app). Same push pattern as conn/context.
   const broadcastApp = async () => {
@@ -1048,7 +1134,7 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
             type: "message.updated",
             properties: {
               sessionID: sid,
-              info: { id, sessionID: sid, role: "user", time: { created: t }, agent: "build", model: { providerID: "digitorn", modelID: "build" } },
+              info: { id, sessionID: sid, role: "user", time: { created: t }, agent: "build", model: { providerID: "digitorn", modelID: msgModelID(sid) } },
             },
           }),
         )
@@ -1490,7 +1576,8 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
         const c = ctxFor(sid)
         if (typeof p.total === "number") c.used = p.total
         if (typeof p.window === "number" && p.window > 0) c.window = p.window
-        if (DBG) dlog(`context_tokens sid=${sid} used=${c.used} window=${c.window}`)
+        void ensureSelWindow(sid)
+        if (DBG) dlog(`context_tokens sid=${sid} used=${c.used} window=${effWindow(c)}`)
         broadcastCtx(sid)
         break
       }
@@ -1583,6 +1670,17 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
       connState = "connected"
       broadcastConn()
       dlog(`socket CONNECTED id=${socket?.id} reconnect=${reconnect}`)
+      // Flush aborts that couldn't reach the daemon while we were disconnected : the
+      // user hit ESC, the UI already stopped, now stop the real turn server-side too.
+      if (pendingAbort.size > 0) {
+        for (const [sid, encApp] of [...pendingAbort]) {
+          pendingAbort.delete(sid)
+          void daemonFetch(cfg, `/api/apps/${encApp}/sessions/${encodeURIComponent(sid)}/abort`, {
+            method: "POST",
+            signal: AbortSignal.timeout(4000),
+          }).catch(() => {})
+        }
+      }
       // RECONNECT recovery : the daemon dropped our room memberships when the
       // socket died, and any events emitted while we were gone never arrived — so
       // an in-flight turn (and its sub-agents) would spin forever. Re-join the
@@ -1653,6 +1751,9 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
   const joinSession = (sid: string) => {
     ensureSocket()
     lastJoined = sid // active session → re-joined on reconnect
+    // Resolve the selected model early so dgModel.name (the footer model name) is the
+    // per-session override before the prompt's model-init effect reads it on open.
+    void ensureSelWindow(sid)
     if (joined.has(sid)) return
     joined.add(sid)
     dlog(`joinSession ${sid.slice(0, 8)} (connected=${socket?.connected})`)
@@ -1746,6 +1847,7 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
     // fed by the daemon's context_tokens / cost_update events.
     if (path === "/digitorn/context" && method === "GET") {
       const sid = new URL(req.url).searchParams.get("session") ?? ""
+      await ensureSelWindow(sid)
       return jsonRes(ctxProps(sid))
     }
     // Gateway model catalog for the /models dialog, grouped DYNAMICALLY by the
@@ -1802,6 +1904,7 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
           },
         )
         const txt = await r.text()
+        if (r.ok) await ensureSelWindow(sid, true)
         return new Response(txt || "{}", { status: r.status, headers: { "content-type": "application/json" } })
       } catch (e: any) {
         return jsonRes({ error: String(e?.message ?? e) }, 502)
@@ -1954,8 +2057,10 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
       const sid = new URL(req.url).searchParams.get("session") ?? ""
       const apps = await loadApps().catch(() => [] as Awaited<ReturnType<typeof loadApps>>)
       const cur = apps.find((a) => a.id === currentApp)
+      await ensureSelWindow(sid)
       const c = ctxFor(sid)
-      const percent = c.window > 0 ? Math.round((c.used / c.window) * 100) : 0
+      const w = effWindow(c)
+      const percent = w > 0 ? Math.round((c.used / w) * 100) : 0
       let version = ""
       let model = ""
       const modules = new Set<string>()
@@ -1977,7 +2082,7 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
       return jsonRes({
         app: { id: currentApp, name: cur?.name ?? currentApp, version, color: cur?.color ?? "" },
         daemon: { state: connState, url: cfg.url },
-        context: { tokens: c.used, window: c.window, percent },
+        context: { tokens: c.used, window: w, percent },
         model,
         modules: [...modules],
       })
@@ -2085,7 +2190,7 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
                 role: "user",
                 time: { created: Date.now() },
                 agent: "build",
-                model: { providerID: "digitorn", modelID: "build" },
+                model: { providerID: "digitorn", modelID: msgModelID(sid) },
               },
             },
           }),
@@ -2118,9 +2223,16 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
     const abortPost = path.match(/^\/session\/([^/]+)\/abort$/)
     if (abortPost && method === "POST") {
       const sid = decodeURIComponent(abortPost[1])
-      try {
-        await daemonFetch(cfg, `/api/apps/${app}/sessions/${encodeURIComponent(sid)}/abort`, { method: "POST" })
-      } catch {}
+      // ESC must ALWAYS cancel the turn, even with the daemon unreachable : stop the UI
+      // now (interruptTurn is idempotent), fire the daemon abort best-effort, and if it
+      // can't be reached queue it to re-send on reconnect so the real turn is stopped
+      // server-side too. The bare daemonFetch used to no-op on a dropped connection,
+      // leaving the spinner running forever — that's the bug this fixes.
+      interruptTurn(sid)
+      void daemonFetch(cfg, `/api/apps/${app}/sessions/${encodeURIComponent(sid)}/abort`, {
+        method: "POST",
+        signal: AbortSignal.timeout(4000),
+      }).catch(() => pendingAbort.set(sid, app))
       return jsonRes({})
     }
     // opencode's DialogForkFromTimeline → sdk.client.session.fork → POST
@@ -2246,6 +2358,10 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
       const sid = decodeURIComponent(msgList[1])
       joinSession(sid) // opening a session joins its room so live events stream
       emitSessionDiff(sid) // seed the files panel with existing pending changes
+      // Resolve the session's effective model BEFORE building history so the last user
+      // message carries it (→ opencode restores the right model in the footer on open).
+      await ensureProviderModels()
+      if (!selModel.has(sid)) await resolveSelectedWindow(sid)
       try {
         const r = await daemonFetch<{ messages?: Record<string, any>[] }>(
           cfg,
@@ -2261,7 +2377,7 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
         lastSeqOf.set(sid, maxSeq)
         socket?.emit("replay", { session_id: sid, since: maxSeq })
         dlog(`open-replay ${sid.slice(0, 8)} since=${maxSeq}`)
-        return jsonRes(toOcMessages(sid, msgs, dir))
+        return jsonRes(toOcMessages(sid, msgs, dir, msgModelID(sid)))
       } catch {
         return jsonRes([])
       }
@@ -2332,6 +2448,7 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
           return jsonRes({ consoleManagedProviders: [], switchableOrgCount: 0 })
         case "/config/providers": // populates data.provider + provider_default
           await applyAppModel()
+          await ensureProviderModels()
           return jsonRes({ providers: [dgProvider], default: dgDefault })
         case "/path":
           return jsonRes({ home: dir, state: dir, config: dir, worktree: dir, directory: dir })
@@ -2346,6 +2463,7 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
           })
         case "/provider": // provider.list → provider_next shape {all,default,connected}
           await applyAppModel()
+          await ensureProviderModels()
           return jsonRes({ all: [dgProvider], default: dgDefault, connected: ["digitorn"] })
         case "/provider/auth":
           return jsonRes({})
@@ -2435,6 +2553,7 @@ function toOcMessages(
   sessionID: string,
   msgs: Record<string, any>[],
   dir: string,
+  userModelID: string,
 ): Array<{ info: Record<string, unknown>; parts: Record<string, unknown>[] }> {
   const out: Array<{ info: Record<string, unknown>; parts: Record<string, unknown>[] }> = []
   let lastUserID = ""
@@ -2500,7 +2619,7 @@ function toOcMessages(
           role: "user",
           time: { created },
           agent: "build",
-          model: { providerID: "digitorn", modelID: "build" },
+          model: { providerID: "digitorn", modelID: userModelID },
         },
         parts,
       })

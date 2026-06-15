@@ -59,9 +59,10 @@ func agentBrainByID(def *schema.AppDefinition, id string) *schema.Brain {
 
 // --- gateway model catalog (id → kind), cached briefly for switch validation ---
 var gwCatalog struct {
-	mu    sync.Mutex
-	at    time.Time
-	kinds map[string]string
+	mu      sync.Mutex
+	at      time.Time
+	kinds   map[string]string
+	windows map[string]int
 }
 
 // gatewayModelKinds fetches the gateway's /models and returns id→kind, cached 30s.
@@ -100,21 +101,39 @@ func (d *Daemon) gatewayModelKinds(ctx context.Context, bearer string) (map[stri
 	}
 	var body struct {
 		Data []struct {
-			ID   string `json:"id"`
-			Kind string `json:"kind"`
+			ID               string `json:"id"`
+			Kind             string `json:"kind"`
+			MaxContextTokens int    `json:"max_context_tokens"`
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		return nil, err
 	}
 	kinds := make(map[string]string, len(body.Data))
+	windows := make(map[string]int, len(body.Data))
 	for _, m := range body.Data {
 		kinds[m.ID] = m.Kind
+		if m.MaxContextTokens > 0 {
+			windows[m.ID] = m.MaxContextTokens
+		}
 	}
 	gwCatalog.mu.Lock()
-	gwCatalog.kinds, gwCatalog.at = kinds, time.Now()
+	gwCatalog.kinds, gwCatalog.windows, gwCatalog.at = kinds, windows, time.Now()
 	gwCatalog.mu.Unlock()
 	return kinds, nil
+}
+
+// gatewayModelWindow returns the gateway's documented context window for a model
+// (max_context_tokens), or 0 when unknown — the cache is filled by the session-model
+// endpoints' authenticated gatewayModelKinds calls (the daemon has no service token
+// of its own). 0 lets the caller fall back to the app's configured window.
+func (d *Daemon) gatewayModelWindow(model string) int {
+	if model == "" {
+		return 0
+	}
+	gwCatalog.mu.Lock()
+	defer gwCatalog.mu.Unlock()
+	return gwCatalog.windows[model]
 }
 
 // getSessionModel lists, per agent, the effective model + declared default /
@@ -132,6 +151,12 @@ func (d *Daemon) getSessionModel(w http.ResponseWriter, r *http.Request) {
 	overrides := make(map[string]string, len(state.ModelOverrides))
 	maps.Copy(overrides, state.ModelOverrides)
 	state.RUnlock()
+
+	// Warm the gateway window cache while we hold a user token, so the background
+	// recount can resolve the SELECTED model's real window without a token of its own.
+	if bearer := extractBearer(r); bearer != "" {
+		go func() { _, _ = d.gatewayModelKinds(context.Background(), bearer) }()
+	}
 
 	def, err := d.appMgr.GetManifest(r.Context(), appID)
 	if err != nil {

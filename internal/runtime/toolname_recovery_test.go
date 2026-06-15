@@ -43,3 +43,32 @@ func TestCanonicalize_BareActionRecovery(t *testing.T) {
 		}
 	}
 }
+
+// MCP virtual tools ship a short wire alias ("echo") to the model; the inbound
+// canonicalizer must map it back to the canonical "mcp_<server>.<tool>" via the
+// spec's Canonical field, so the gates / dispatcher see the real FQN. The alias
+// hit is authoritative and wins over the bare-action heuristics; native tools
+// offered alongside still canonicalise normally.
+func TestCanonicalize_MCPWireAlias(t *testing.T) {
+	offered := []llm.ToolSpec{
+		{Name: "filesystem__read"},
+		{Name: "echo", Canonical: "mcp_everything.echo"},
+		{Name: "sequentialthinking", Canonical: "mcp_sequential_thinking.sequentialthinking"},
+	}
+	cases := []struct{ in, want string }{
+		{"echo", "mcp_everything.echo"},                                   // alias → canonical FQN
+		{"sequentialthinking", "mcp_sequential_thinking.sequentialthinking"}, // alias with underscore server
+		{"filesystem__read", "filesystem.read"},                           // native wire form still canonicalises
+		{"read", "filesystem.read"},                                       // bare native recovered, not shadowed
+	}
+	calls := make([]llm.ChatToolCall, len(cases))
+	for i, c := range cases {
+		calls[i] = llm.ChatToolCall{Name: c.in}
+	}
+	canonicalizeToolCallNames(calls, offered)
+	for i, c := range cases {
+		if got := calls[i].Name; got != c.want {
+			t.Errorf("%q → %q, want %q", c.in, got, c.want)
+		}
+	}
+}

@@ -24,9 +24,13 @@ import (
 	"github.com/mbathepaul/digitorn/internal/version"
 
 	_ "github.com/mbathepaul/digitorn/internal/modules/bash"
+	_ "github.com/mbathepaul/digitorn/internal/modules/database"
 	_ "github.com/mbathepaul/digitorn/internal/modules/filesystem"
 	_ "github.com/mbathepaul/digitorn/internal/modules/lsp"
 	_ "github.com/mbathepaul/digitorn/internal/modules/mcp"
+	_ "github.com/mbathepaul/digitorn/internal/modules/pieces"
+	_ "github.com/mbathepaul/digitorn/internal/modules/rag"
+	_ "github.com/mbathepaul/digitorn/internal/modules/scheduler"
 	_ "github.com/mbathepaul/digitorn/internal/modules/web"
 	_ "github.com/mbathepaul/digitorn/internal/modules/workspace"
 )

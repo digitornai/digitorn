@@ -52,10 +52,20 @@ func (f *fakeDaemon) server(t *testing.T) *httptest.Server {
 		p := r.URL.Path
 		switch {
 		case r.Method == http.MethodGet && strings.HasSuffix(p, "/history"):
-			writeJSON(w, 200, map[string]any{"messages": []map[string]any{
-				{"seq": 2, "role": "user", "content": "q"},
-				{"seq": 5, "role": "assistant", "content": "hi bob"},
-			}})
+			// Model the real daemon: turn_active stays false; the durable turn_ended
+			// event marks completion and assistant text rides an assistant_message event.
+			writeJSON(w, 200, map[string]any{
+				"turn_active": false,
+				"messages": []map[string]any{
+					{"seq": 2, "role": "user", "content": "q"},
+					{"seq": 5, "role": "assistant", "content": "hi bob"},
+				},
+				"events": []map[string]any{
+					{"seq": 3, "type": "turn_started"},
+					{"seq": 5, "type": "assistant_message", "payload": map[string]any{"content": "hi bob"}},
+					{"seq": 6, "type": "turn_ended"},
+				},
+			})
 		case r.Method == http.MethodPost && strings.HasSuffix(p, "/sessions"):
 			f.creates++
 			raw, _ := io.ReadAll(r.Body)

@@ -1,0 +1,48 @@
+schema_version: 2
+app:
+  app_id: mcp-notion-live
+  name: MCP Notion Live E2E
+  version: "0.1.0"
+  description: "Proves a live agent uses the real authenticated Notion MCP server."
+  author: "paul@digitorn.ai"
+  category: "coding"
+
+agents:
+  - id: main
+    role: worker
+    max_tool_iterations: 8
+    brain:
+      provider: openai
+      model: moonshotai/kimi-k2.6
+      temperature: 0.1
+      max_tokens: 2048
+      config:
+        api_key: "{{env.OPENAI_API_KEY}}"
+      context:
+        max_tokens: 1000000
+    system_prompt: |
+      You are connected to the user's real Notion workspace via an MCP server whose
+      tools are in your tool list. To find pages, call the Notion search tool exactly
+      as it appears in your tool list (do not invent a name). Report back what the
+      tool returns verbatim, including page titles. Never fabricate results. No emoji,
+      no preamble.
+    modules:
+      - mcp
+
+tools:
+  modules:
+    mcp:
+      config:
+        servers:
+          notion:
+            transport: stdio
+            command: npx
+            args: ["-y", "@notionhq/notion-mcp-server"]
+            env:
+              NOTION_TOKEN: "{{env.NOTION_TOKEN}}"
+            sandbox:
+              permissions: [process.exec, net.http]
+  capabilities:
+    default_policy: auto
+    grant:
+      - module: mcp

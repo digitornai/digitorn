@@ -32,6 +32,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -49,12 +50,13 @@ var (
 	envErr  error
 )
 
-// ONNXBackend holds one reusable inference session. The model is loaded
-// once (not per call) ; Run is serialised by mu because an onnxruntime
-// session is not safe for concurrent Run from multiple goroutines.
+// ONNXBackend holds a POOL of inference sessions. A single onnxruntime session
+// is not safe for concurrent Run, so on CPU we run several sessions (each with
+// a slice of the cores) in parallel — embedding throughput then scales with the
+// machine instead of one serialised forward. GPU keeps a single session.
 type ONNXBackend struct {
-	mu       sync.Mutex
-	session  *ort.DynamicAdvancedSession
+	pool     chan *ort.DynamicAdvancedSession // checkout one per Run
+	sessions []*ort.DynamicAdvancedSession    // all, for Close
 	tok      tokenizer.Tokenizer
 	inNames  []string // model input order, restricted to those we feed
 	feedType bool     // model declares token_type_ids
@@ -179,6 +181,16 @@ func NewONNXFromSpec(modelDir, modelFile string, spec models.Spec) (Backend, err
 	}
 	fmt.Fprintf(os.Stderr, "worker-embeddings: execution provider = %s\n", ep)
 
+	sessions, err := buildSessionPool(modelPath, inNames, outName, ep, session)
+	if err != nil {
+		return nil, err
+	}
+	pool := make(chan *ort.DynamicAdvancedSession, len(sessions))
+	for _, s := range sessions {
+		pool <- s
+	}
+	fmt.Fprintf(os.Stderr, "worker-embeddings: %d session(s) in pool\n", len(sessions))
+
 	pooling := spec.Pooling
 	if pooling == "" {
 		pooling = models.PoolingMean
@@ -188,7 +200,8 @@ func NewONNXFromSpec(modelDir, modelFile string, spec models.Spec) (Backend, err
 		name = models.Default
 	}
 	return &ONNXBackend{
-		session:  session,
+		pool:     pool,
+		sessions: sessions,
 		tok:      tok,
 		inNames:  inNames,
 		feedType: feedType,
@@ -198,6 +211,59 @@ func NewONNXFromSpec(modelDir, modelFile string, spec models.Spec) (Backend, err
 		name:     name,
 		device:   ep,
 	}, nil
+}
+
+// buildSessionPool returns the inference sessions. On a GPU EP it keeps the
+// single probe session (one device). On CPU it replaces the probe with
+// embedSessions() sessions, each pinned to a fair slice of the cores, so
+// concurrent forwards run truly in parallel.
+func buildSessionPool(modelPath string, inNames []string, outName, ep string, probe *ort.DynamicAdvancedSession) ([]*ort.DynamicAdvancedSession, error) {
+	n := embedSessions()
+	if ep != "cpu" || n <= 1 {
+		return []*ort.DynamicAdvancedSession{probe}, nil
+	}
+	_ = probe.Destroy()
+	threads := runtime.NumCPU() / n
+	if threads < 1 {
+		threads = 1
+	}
+	sessions := make([]*ort.DynamicAdvancedSession, 0, n)
+	for i := 0; i < n; i++ {
+		so, err := ort.NewSessionOptions()
+		if err == nil {
+			_ = so.SetIntraOpNumThreads(threads)
+		}
+		s, serr := ort.NewDynamicAdvancedSession(modelPath, inNames, []string{outName}, so)
+		if so != nil {
+			so.Destroy()
+		}
+		if serr != nil {
+			for _, x := range sessions {
+				_ = x.Destroy()
+			}
+			return nil, fmt.Errorf("onnx: create pooled session %d: %w", i, serr)
+		}
+		sessions = append(sessions, s)
+	}
+	return sessions, nil
+}
+
+// embedSessions resolves the CPU session-pool size : DIGITORN_EMBED_SESSIONS
+// override, else NumCPU/4 clamped to [1,4].
+func embedSessions() int {
+	if v := os.Getenv("DIGITORN_EMBED_SESSIONS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	n := runtime.NumCPU() / 4
+	if n < 1 {
+		n = 1
+	}
+	if n > 4 {
+		n = 4
+	}
+	return n
 }
 
 // deviceFromEnv reads the requested execution device. "" / "auto" lets
@@ -284,40 +350,107 @@ func (b *ONNXBackend) Dimension() int { return b.dim }
 func (b *ONNXBackend) Device() string { return b.device }
 
 func (b *ONNXBackend) Close() error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.session != nil {
-		err := b.session.Destroy()
-		b.session = nil
-		return err
+	var err error
+	for _, s := range b.sessions {
+		if s != nil {
+			if e := s.Destroy(); e != nil {
+				err = e
+			}
+		}
 	}
-	return nil
+	b.sessions = nil
+	return err
 }
 
 // Embed runs one forward pass per input, mean-pools the token hidden
 // states (attention-mask weighted) and optionally L2-normalises.
 func (b *ONNXBackend) Embed(ctx context.Context, inputs []string, l2norm bool) ([][]float32, error) {
 	out := make([][]float32, len(inputs))
-	for i, text := range inputs {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		vec, err := b.embedOne(text)
-		if err != nil {
-			return nil, fmt.Errorf("onnx: input[%d]: %w", i, err)
-		}
-		if l2norm {
-			l2Normalize(vec)
-		}
-		out[i] = vec
+	const sub = 32 // sequences per forward pass
+	workers := cap(b.pool)
+	if workers < 1 {
+		workers = 1
 	}
-	return out, nil
+
+	type job struct{ start, end int }
+	jobs := make(chan job)
+	var wg sync.WaitGroup
+	var firstErr error
+	var errMu sync.Mutex
+	setErr := func(e error) {
+		errMu.Lock()
+		if firstErr == nil {
+			firstErr = e
+		}
+		errMu.Unlock()
+	}
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := range jobs {
+				if ctx.Err() != nil {
+					setErr(ctx.Err())
+					continue
+				}
+				vecs, err := b.embedBatch(inputs[j.start:j.end])
+				if err != nil {
+					setErr(fmt.Errorf("onnx: batch[%d:%d]: %w", j.start, j.end, err))
+					continue
+				}
+				for k, v := range vecs {
+					if l2norm {
+						l2Normalize(v)
+					}
+					out[j.start+k] = v
+				}
+			}
+		}()
+	}
+	for start := 0; start < len(inputs); start += sub {
+		end := start + sub
+		if end > len(inputs) {
+			end = len(inputs)
+		}
+		jobs <- job{start, end}
+	}
+	close(jobs)
+	wg.Wait()
+	return out, firstErr
 }
 
-func (b *ONNXBackend) embedOne(text string) ([]float32, error) {
-	ids, mask, types, seq := b.tok.Encode(text)
-	shape := ort.NewShape(1, int64(seq))
+// embedBatch runs ONE forward pass over the whole sub-batch — every sequence
+// padded to the batch's longest — instead of one forward per text. The padded
+// positions carry attention_mask 0 so they are ignored, giving the same vectors
+// as single inference but an order of magnitude faster at scale.
+func (b *ONNXBackend) embedBatch(texts []string) ([][]float32, error) {
+	n := len(texts)
+	if n == 0 {
+		return nil, nil
+	}
+	encIDs := make([][]int64, n)
+	encMask := make([][]int64, n)
+	encType := make([][]int64, n)
+	maxSeq := 1
+	for i, t := range texts {
+		ids, mask, types, seq := b.tok.Encode(t)
+		encIDs[i], encMask[i], encType[i] = ids, mask, types
+		if seq > maxSeq {
+			maxSeq = seq
+		}
+	}
+	ids := make([]int64, n*maxSeq)
+	mask := make([]int64, n*maxSeq)
+	types := make([]int64, n*maxSeq)
+	for i := 0; i < n; i++ {
+		copy(ids[i*maxSeq:], encIDs[i])
+		copy(mask[i*maxSeq:], encMask[i])
+		if b.feedType {
+			copy(types[i*maxSeq:], encType[i])
+		}
+	}
 
+	shape := ort.NewShape(int64(n), int64(maxSeq))
 	idsT, err := ort.NewTensor(shape, ids)
 	if err != nil {
 		return nil, err
@@ -328,11 +461,7 @@ func (b *ONNXBackend) embedOne(text string) ([]float32, error) {
 		return nil, err
 	}
 	defer maskT.Destroy()
-
-	byName := map[string]ort.Value{
-		"input_ids":      idsT,
-		"attention_mask": maskT,
-	}
+	byName := map[string]ort.Value{"input_ids": idsT, "attention_mask": maskT}
 	if b.feedType {
 		typesT, err := ort.NewTensor(shape, types)
 		if err != nil {
@@ -341,48 +470,53 @@ func (b *ONNXBackend) embedOne(text string) ([]float32, error) {
 		defer typesT.Destroy()
 		byName["token_type_ids"] = typesT
 	}
-	inputs := make([]ort.Value, len(b.inNames))
+	in := make([]ort.Value, len(b.inNames))
 	for i, name := range b.inNames {
-		inputs[i] = byName[name]
+		in[i] = byName[name]
 	}
-
-	outT, err := ort.NewEmptyTensor[float32](ort.NewShape(1, int64(seq), int64(b.dim)))
+	outT, err := ort.NewEmptyTensor[float32](ort.NewShape(int64(n), int64(maxSeq), int64(b.dim)))
 	if err != nil {
 		return nil, err
 	}
 	defer outT.Destroy()
 
-	b.mu.Lock()
-	runErr := b.session.Run(inputs, []ort.Value{outT})
-	b.mu.Unlock()
+	s := <-b.pool
+	runErr := s.Run(in, []ort.Value{outT})
+	b.pool <- s
 	if runErr != nil {
 		return nil, runErr
 	}
 
 	raw := outT.GetData()
-	vec := make([]float32, b.dim)
-	if b.pooling == models.PoolingCLS {
-		// CLS pooling : the first token's hidden state is the sentence
-		// representation (BGE retrieval convention).
-		copy(vec, raw[:b.dim])
-		return vec, nil
-	}
-	// Mean-pool over the sequence dimension, weighted by attention mask.
-	var denom float32
-	for t := 0; t < seq; t++ {
-		m := float32(mask[t])
-		denom += m
-		base := t * b.dim
-		for d := 0; d < b.dim; d++ {
-			vec[d] += raw[base+d] * m
+	out := make([][]float32, n)
+	for bi := 0; bi < n; bi++ {
+		vec := make([]float32, b.dim)
+		rowBase := bi * maxSeq * b.dim
+		if b.pooling == models.PoolingCLS {
+			copy(vec, raw[rowBase:rowBase+b.dim])
+			out[bi] = vec
+			continue
 		}
-	}
-	if denom > 0 {
-		for d := range vec {
-			vec[d] /= denom
+		var denom float32
+		for t := 0; t < maxSeq; t++ {
+			m := float32(mask[bi*maxSeq+t])
+			if m == 0 {
+				continue
+			}
+			denom += m
+			base := rowBase + t*b.dim
+			for d := 0; d < b.dim; d++ {
+				vec[d] += raw[base+d] * m
+			}
 		}
+		if denom > 0 {
+			for d := range vec {
+				vec[d] /= denom
+			}
+		}
+		out[bi] = vec
 	}
-	return vec, nil
+	return out, nil
 }
 
 // ONNXCrossEncoder runs a sentence-pair classification graph (reranker)

@@ -1,0 +1,49 @@
+schema_version: 2
+app:
+  app_id: mcp-install-live
+  name: MCP Install Live E2E
+  version: "0.1.0"
+  description: "Proves digitorn installs an MCP server from a bare id (catalog -> npx) and a live agent uses it."
+  author: "paul@digitorn.ai"
+  category: "coding"
+
+agents:
+  - id: main
+    role: worker
+    max_tool_iterations: 8
+    brain:
+      provider: openai
+      model: moonshotai/kimi-k2.6
+      temperature: 0.1
+      max_tokens: 2048
+      config:
+        api_key: "{{env.OPENAI_API_KEY}}"
+      context:
+        max_tokens: 1000000
+    system_prompt: |
+      You are a test agent connected to a knowledge-graph MCP server. Its tools are
+      in your tool list as ordinary tools (create_entities, read_graph, ...).
+
+      When asked to store an entity, you MUST call the create_entities tool exactly
+      as it appears in your tool list. It takes an "entities" array of objects, each
+      with: name (string), entityType (string), observations (array of strings).
+      Pass the exact name you are given. After the tool returns, report the name back
+      verbatim. Never fabricate the result; never invent a tool name. No emoji, no
+      preamble.
+    modules:
+      - mcp
+
+tools:
+  modules:
+    mcp:
+      config:
+        servers:
+          memory:
+            env:
+              MEMORY_FILE_PATH: "C:/tmp/mcp-install-live-mem.json"
+            sandbox:
+              permissions: [process.exec, net.http]
+  capabilities:
+    default_policy: auto
+    grant:
+      - module: mcp

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -113,27 +114,61 @@ func (d *Daemon) voiceAudioWS(w http.ResponseWriter, r *http.Request) {
 // (Engine.ExecuteToolGated, the SAME gates as a turn) before feeding the result back.
 // No parallel logic : the realtime engine is a pure adapter onto the daemon's brain.
 func (d *Daemon) voiceRealtime(w http.ResponseWriter, r *http.Request, appID, sid, uid, jwt string, callRate int) {
+	q := r.URL.Query()
+	orch, instructions, err := d.buildRealtimeOrchestrator(r.Context(), realtimeBinding{
+		AppID:     appID,
+		SessionID: sid,
+		UserID:    uid,
+		UserJWT:   jwt,
+		Agent:     q.Get("agent"),
+		Model:     q.Get("realtime_model"),
+		TTSVoice:  q.Get("tts_voice"),
+	})
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "realtime_unavailable", err.Error())
+		return
+	}
+	slog.Info("voice realtime: starting (ws)", "app", appID, "session", sid)
+	opts := voice.SessionOpts{SampleRate: callRate, Context: instructions}
+	wstransport.Handler(func(ctx context.Context, call voice.Call) {
+		_ = orch.Handle(ctx, call, opts)
+	}).ServeHTTP(w, r)
+}
+
+// realtimeBinding identifies which app/session/user a realtime call drives, plus the
+// model/voice/agent selection. It is the single input the realtime-orchestrator
+// builder needs, so the SAME brain wiring backs both the WS endpoint and the
+// telephony voice-server (Asterisk/Twilio) — only the transport differs.
+type realtimeBinding struct {
+	AppID     string
+	SessionID string
+	UserID    string
+	UserJWT   string
+	Agent     string
+	Model     string
+	TTSVoice  string
+}
+
+// buildRealtimeOrchestrator assembles the Voie B brain for one call: the gated,
+// curated toolset + spoken instructions (VoiceContext — the SAME path as a text
+// turn), a realtime engine that dials the gateway proxy and routes EVERY function
+// call back through the daemon's gated executor (ExecuteToolGated), durable
+// transcript persistence, and an orchestrator over it. Returns the orchestrator and
+// the assembled instructions. Transport-agnostic: the caller drives it with any
+// voice.Call (WebSocket, AudioSocket, Twilio, …).
+func (d *Daemon) buildRealtimeOrchestrator(ctx context.Context, b realtimeBinding) (*voice.Orchestrator, string, error) {
 	eng, ok := d.engine.(*runtime.Engine)
 	if !ok {
-		writeError(w, http.StatusServiceUnavailable, "engine_unavailable", "realtime voice requires the runtime engine")
-		return
+		return nil, "", errors.New("realtime voice requires the runtime engine")
 	}
 	gatewayBase := strings.TrimRight(d.cfg.Workers.LLM.GatewayURL, "/")
 	if gatewayBase == "" {
-		writeError(w, http.StatusServiceUnavailable, "gateway_unconfigured", "no gateway url configured for realtime voice")
-		return
+		return nil, "", errors.New("no gateway url configured for realtime voice")
 	}
-	q := r.URL.Query()
-	model := q.Get("realtime_model")
-	ttsVoice := q.Get("tts_voice")
-
-	sysPrompt, tools, err := eng.VoiceContext(r.Context(), appID, q.Get("agent"))
+	sysPrompt, tools, err := eng.VoiceContext(ctx, b.AppID, b.Agent)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "voice_context", err.Error())
-		return
+		return nil, "", err
 	}
-	slog.Info("voice realtime: starting", "app", appID, "session", sid, "model", model, "tools", len(tools), "gateway", gatewayBase)
-
 	rtTools := realtime.ToolsFunc{
 		SpecsFn: func() []realtime.ToolSpec { return toRealtimeSpecs(tools) },
 		ExecuteFn: func(ctx context.Context, callID, name, argsJSON string) (string, error) {
@@ -145,28 +180,39 @@ func (d *Daemon) voiceRealtime(w http.ResponseWriter, r *http.Request, appID, si
 				CallID:    callID,
 				Name:      name,
 				Args:      args,
-				AppID:     appID,
-				SessionID: sid,
-				UserID:    uid,
-				UserJWT:   jwt,
+				AppID:     b.AppID,
+				SessionID: b.SessionID,
+				UserID:    b.UserID,
+				UserJWT:   b.UserJWT,
 			})
 			return outcomeJSON(out), nil
 		},
 	}
-
 	dial := func(ctx context.Context, _ voice.SessionOpts) (realtime.Conn, error) {
-		conn, derr := realtime.DialGateway(ctx, gatewayBase, jwt, model)
+		conn, derr := realtime.DialGateway(ctx, gatewayBase, b.UserJWT, b.Model)
 		if derr != nil {
-			slog.Warn("voice realtime: dial gateway failed", "err", derr.Error(), "gateway", gatewayBase, "model", model)
-		} else {
-			slog.Info("voice realtime: dialed gateway ok", "model", model)
+			slog.Warn("voice realtime: dial gateway failed", "err", derr.Error(), "gateway", gatewayBase, "model", b.Model)
 		}
 		return conn, derr
 	}
-	rtEngine := realtime.New(dial, rtTools, model, ttsVoice)
-	// Persist the realtime conversation : in Voie B no daemon turn runs, so the user +
-	// assistant transcripts are durably appended here so /history mirrors the call.
-	rtEngine.SetTranscriptSink(func(role, text string) {
+	rtEngine := realtime.New(dial, rtTools, b.Model, b.TTSVoice)
+	rtEngine.SetTranscriptSink(d.realtimeTranscriptSink(b.AppID, b.SessionID, b.UserID))
+
+	instructions := sysPrompt
+	if instructions == "" {
+		instructions = voiceSystemContext
+	} else {
+		instructions += "\n\n" + voiceSystemContext
+	}
+	slog.Info("voice realtime: built orchestrator", "app", b.AppID, "session", b.SessionID, "model", b.Model, "tools", len(tools))
+	return voice.NewOrchestrator(rtEngine), instructions, nil
+}
+
+// realtimeTranscriptSink persists a finalized user/assistant transcript to session
+// history so /history mirrors the realtime call (in Voie B no daemon turn runs, so
+// these are the only record of the conversation).
+func (d *Daemon) realtimeTranscriptSink(appID, sid, uid string) func(role, text string) {
+	return func(role, text string) {
 		evType, msgRole := sessionstore.EventAssistantMessage, "assistant"
 		if role == "user" {
 			evType, msgRole = sessionstore.EventUserMessage, "user"
@@ -182,20 +228,7 @@ func (d *Daemon) voiceRealtime(w http.ResponseWriter, r *http.Request, appID, si
 		}); perr != nil {
 			slog.Warn("voice realtime: persist transcript failed", "role", role, "err", perr.Error())
 		}
-	})
-	orch := voice.NewOrchestrator(rtEngine)
-
-	instructions := sysPrompt
-	if instructions == "" {
-		instructions = voiceSystemContext
-	} else {
-		instructions += "\n\n" + voiceSystemContext
 	}
-	opts := voice.SessionOpts{SampleRate: callRate, Context: instructions}
-
-	wstransport.Handler(func(ctx context.Context, call voice.Call) {
-		_ = orch.Handle(ctx, call, opts)
-	}).ServeHTTP(w, r)
 }
 
 // toRealtimeSpecs projects the daemon's curated toolset onto the realtime tool shape.

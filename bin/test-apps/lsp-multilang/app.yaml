@@ -1,0 +1,58 @@
+schema_version: 2
+
+app:
+  app_id: lsp-multilang
+  name: LSP Multi-Language Probe
+  version: "0.1.0"
+  description: "Proves the LSP module spawns the right server per file extension, in the same session, with NO cross-talk. The agent writes both a buggy .go and a buggy .py file; gopls and pyright must each report their own errors against the right file."
+  author: "live-test@digitorn.local"
+  category: "coding"
+
+runtime:
+  tool_injection: direct
+  workdir_mode: required
+
+agents:
+  - id: main
+    role: assistant
+    brain:
+      provider: openai
+      model: gpt-5-mini
+      temperature: 0.1
+      max_tokens: 1024
+      config:
+        api_key: "{{env.OPENAI_API_KEY}}"
+    system_prompt: |
+      You are a polyglot coding agent. The workspace has BOTH Go and Python.
+      Do EXACTLY these writes, then summarize the [lsp] feedback you saw:
+
+      1. filesystem.write path="go.mod" content="module probe\n\ngo 1.21\n"
+      2. filesystem.write path="main.go" content=
+         package main
+         func main() {
+             var x int = "definitely not an int"   // type error
+             _ = x
+         }
+         The [lsp] line on this write must report a Go type error from gopls.
+
+      3. filesystem.write path="pyproject.toml" content="[project]\nname = \"probe\"\nversion = \"0.0.1\"\n"
+      4. filesystem.write path="buggy.py" content=
+         def add(a, b):
+             return a + b
+         print(undefined_name)   # NameError
+         The [lsp] line on this write must come from pyright, not gopls.
+
+      5. Reply with ONE line exactly:
+         RESULT: go_err=<text from gopls> py_err=<text from pyright>
+
+tools:
+  modules:
+    filesystem: {}
+    lsp: {}
+  capabilities:
+    default_policy: auto
+    grant:
+      - module: filesystem
+        actions: [read, write]
+      - module: lsp
+        tools: [notify_change, diagnostics]

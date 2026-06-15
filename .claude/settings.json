@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(xargs grep -l \"ContextTouch\\\\|ContextRecordParts\\\\|ContextLookup\")",
+      "Bash(go test *)",
+      "Bash(echo \"RACE_DONE=$?\")"
+    ]
+  }
+}

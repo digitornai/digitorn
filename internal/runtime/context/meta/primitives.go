@@ -782,6 +782,15 @@ func (m *MetaDispatcher) handleBackgroundRun(ctx context.Context, call runtime.T
 		}
 		return jsonOutcome(map[string]any{"cancelled": taskID})
 	}
+	// tail_lines lets the agent ask for the last N lines of the live output —
+	// the common "give me the last 50/100 lines so I see what's happening".
+	// Default 100 lines: enough to spot a build failure or startup error, small
+	// enough to not crowd the prompt. tail_lines:0 returns the full 64 KB
+	// window for a deep dive.
+	tailLines := 100
+	if v, ok := call.Args["tail_lines"].(float64); ok {
+		tailLines = int(v)
+	}
 	if wait, _ := call.Args["wait"].(bool); wait {
 		if taskID == "" {
 			return errored("background_run wait: 'task_id' is required")
@@ -791,14 +800,14 @@ func (m *MetaDispatcher) handleBackgroundRun(ctx context.Context, call runtime.T
 		if err != nil {
 			return errored("background_run wait: " + err.Error())
 		}
-		return jsonOutcome(statusToMap(st))
+		return jsonOutcome(statusToMap(st, tailLines))
 	}
 	if taskID != "" {
 		st, err := m.Background.Status(ctx, m.SessionID(call), taskID)
 		if err != nil {
 			return errored("background_run status: " + err.Error())
 		}
-		return jsonOutcome(statusToMap(st))
+		return jsonOutcome(statusToMap(st, tailLines))
 	}
 	// Launch mode : name + params are required.
 	name, _ := call.Args["name"].(string)
@@ -855,7 +864,7 @@ func (m *MetaDispatcher) handleBackgroundRun(ctx context.Context, call runtime.T
 		if st, werr := m.Background.Wait(ctx, m.SessionID(call), tid, settle); werr == nil {
 			// Finished inside the window → return its terminal result (state +
 			// error + captured output) so a crash is seen immediately.
-			res := statusToMap(st)
+			res := statusToMap(st, tailLines)
 			res["settled"] = true
 			return jsonOutcome(res)
 		}
@@ -948,7 +957,12 @@ func (m *MetaDispatcher) handleCallApp(ctx context.Context, call runtime.ToolInv
 // statusToMap converts a BackgroundStatus into a generic map for
 // jsonOutcome. We don't marshal directly because jsonOutcome's
 // signature takes map[string]any.
-func statusToMap(s BackgroundStatus) map[string]any {
+//
+// tailLines slices the live log to its most recent N lines when N > 0 — the
+// shape the agent typically wants (last 50 / 100 lines is plenty to spot a
+// build failure or a startup error without burning the prompt budget on the
+// whole 64 KB window). N == 0 returns the full window untrimmed.
+func statusToMap(s BackgroundStatus, tailLines int) map[string]any {
 	out := map[string]any{
 		"task_id": s.TaskID,
 		"name":    s.Name,
@@ -963,12 +977,45 @@ func statusToMap(s BackgroundStatus) map[string]any {
 	if s.StartedAt > 0 {
 		out["started_at_unix"] = s.StartedAt
 	}
-	// Live tail of a still-running task (empty once it finishes — the full output
-	// is then in result). Lets the agent watch progress / spot a startup error.
+	// Live tail of a still-running task (empty once it finishes — the full
+	// output is then in result). Lets the agent watch progress / spot a
+	// startup error. Sliced to tailLines lines when the caller asked for it,
+	// so the agent can keep its context window small while still seeing the
+	// most recent output.
 	if s.Log != "" {
-		out["log"] = s.Log
+		log := s.Log
+		if tailLines > 0 {
+			log = sliceLastLines(log, tailLines)
+		}
+		out["log"] = log
+		// Surface line counts so the agent knows whether more output was
+		// dropped, without having to count newlines itself.
+		if tailLines > 0 {
+			out["log_lines"] = countLines(log)
+		}
 	}
 	return out
+}
+
+// sliceLastLines returns the last n lines of s as a single string. Defensive:
+// returns s untouched on n<=0 or when s has fewer than n lines.
+func sliceLastLines(s string, n int) string {
+	if n <= 0 || s == "" {
+		return s
+	}
+	trimmed := strings.TrimRight(s, "\n")
+	parts := strings.Split(trimmed, "\n")
+	if len(parts) <= n {
+		return s
+	}
+	return strings.Join(parts[len(parts)-n:], "\n")
+}
+
+func countLines(s string) int {
+	if s == "" {
+		return 0
+	}
+	return strings.Count(strings.TrimRight(s, "\n"), "\n") + 1
 }
 
 // SessionID returns the session key the BackgroundManager uses to scope

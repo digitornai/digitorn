@@ -34,6 +34,7 @@ import (
 	"github.com/mbathepaul/digitorn/internal/runtime/context/prompt"
 	"github.com/mbathepaul/digitorn/internal/runtime/contextcompact"
 	"github.com/mbathepaul/digitorn/internal/runtime/contextsvc"
+	"github.com/mbathepaul/digitorn/internal/runtime/docextract"
 	"github.com/mbathepaul/digitorn/internal/runtime/errclass"
 	"github.com/mbathepaul/digitorn/internal/runtime/hooks"
 	"github.com/mbathepaul/digitorn/internal/runtime/policy"
@@ -138,6 +139,16 @@ type Engine struct {
 	// occupancy into system / tools / messages (CTX-7). nil = no breakdown.
 	// MUST be non-blocking (hot build path).
 	ContextRecordParts func(sessionID string, system, tools []string)
+	// PrepareSummary (CTX-8) proactively nudges the background summary maintainer
+	// to keep a high-fidelity LLM summary of the aged region ready ahead of the
+	// compaction gate, carrying the turn's user JWT for gateway-mode auth. nil =
+	// maintainer disabled (the gate truncates instantly). MUST be non-blocking.
+	PrepareSummary func(sessionID, jwt string)
+	// MicroCompactView (CTX-8 Phase 2) elides the bodies of stale, bulky tool
+	// results from the model's prompt VIEW each turn — cheap, no LLM, no message
+	// dropped — recovering context before heavier compaction is needed. false =
+	// off (the view is exactly the compacted history). Set from the same flag.
+	MicroCompactView bool
 	// ContextLookup returns the freshest context variable for a session — the
 	// in-memory ContextView the runtime keeps current from the Context Service
 	// notifications (leads the durable projection). The per-round compaction
@@ -1004,8 +1015,9 @@ func (e *Engine) runPhases(
 	// tail and blobs are loaded once. Output is identical to a fresh
 	// MessagesToLLM(viewMsgs) on every call (proven in adapter tests).
 	conv := adapter.NewConverter(adapter.Options{
-		LoadBlob: e.loadBlob,
-		Report:   &slogReporter{log: e.Logger},
+		LoadBlob:   e.loadBlob,
+		Report:     &slogReporter{log: e.Logger},
+		ExtractDoc: docextract.CachedExtract, // PDF/Office attachments → readable text
 	})
 	// Per-round compaction guard policy : the same auto_compact knobs the
 	// compiler reads (runtime.context, brain.context fallback). guardKeep is the
@@ -1126,7 +1138,11 @@ func (e *Engine) runPhases(
 							snap = st.Snapshot()
 							vm := snap.Messages
 							if cc := snap.ContextCompaction; cc != nil && cc.CutoffSeq > 0 {
-								vm = contextcompact.ApplyView(snap.Messages, cc.CutoffSeq, cc.Summary)
+								recap := cc.Summary
+								if len(snap.Facts) > 0 {
+									recap = contextcompact.StripKeyFactsSection(recap)
+								}
+								vm = contextcompact.ApplyView(snap.Messages, cc.CutoffSeq, recap)
 							}
 							req.Messages = conv.Convert(ctx, vm)
 							if systemPrompt != "" {
@@ -1184,6 +1200,23 @@ func (e *Engine) runPhases(
 		// holds no format knowledge. No-op for native-tool providers.
 		if e.ResponseNormalizer != nil {
 			e.ResponseNormalizer(resp)
+		}
+
+		// Inline chain-of-thought split : models like Kimi/Qwen emit their
+		// reasoning INSIDE <think>…</think> in CONTENT instead of the structured
+		// reasoning_content field. Left there it leaks to every channel AND is
+		// replayed into the next round's context — re-feeding the model its own raw
+		// thinking, which compounds confusion and tool-call loops. Lift it into
+		// ReasoningContent : persisted as structured Reasoning, replayed to
+		// reasoning models, never surfaced as an answer. No-op when content carries
+		// no think tags.
+		if clean, reasoning := splitInlineReasoning(resp.Content); reasoning != "" {
+			resp.Content = clean
+			if resp.ReasoningContent == "" {
+				resp.ReasoningContent = reasoning
+			} else {
+				resp.ReasoningContent = resp.ReasoningContent + "\n" + reasoning
+			}
 		}
 
 		// App middleware After : transforms the response (response_filter,
@@ -1399,6 +1432,12 @@ func (e *Engine) runPhases(
 	// Signal the background Context Service to recount the EXACT context size
 	// now the turn's messages have settled — non-blocking, off the loop.
 	e.touchContext(in.SessionID)
+	// CTX-8 : proactively keep a high-fidelity summary prepared off the loop, so
+	// the next compaction applies it instantly instead of truncating. Carries the
+	// turn's JWT for gateway auth. Non-blocking and nil when the maintainer is off.
+	if e.PrepareSummary != nil {
+		e.PrepareSummary(in.SessionID, llm.UserJWTFromContext(ctx))
+	}
 	// Final turn-state metrics for the turn_end hook : reflect the
 	// post-loop snapshot, the assistant's final content, and the
 	// cumulative tool_calls used this turn.
@@ -1473,10 +1512,32 @@ func (e *Engine) msgByteCap(sessionID string, snap sessionstore.SessionSnapshot,
 // engine's fresh system prompt PREPENDED (never replacing a leading durable
 // system directive / compaction summary). Used at build AND when the budget
 // enforcer rebuilds after a synchronous compaction.
+const (
+	// microCompactKeepRecent keeps the last N tool results full (the agent almost
+	// always needs the most recent outputs verbatim); microCompactMinBytes is the
+	// size below which a stale result is left alone (small outputs aren't worth it).
+	microCompactKeepRecent = 3
+	microCompactMinBytes   = 4096
+)
+
 func (e *Engine) buildLLMMessages(ctx context.Context, conv *adapter.Converter, snap sessionstore.SessionSnapshot, systemPrompt, sessionID string, brain schema.Brain) []llm.ChatMessage {
 	viewMsgs := snap.Messages
 	if cc := snap.ContextCompaction; cc != nil && cc.CutoffSeq > 0 {
-		viewMsgs = contextcompact.ApplyView(snap.Messages, cc.CutoffSeq, cc.Summary)
+		recap := cc.Summary
+		// The recap's KEY FACTS already live in the lossless working-memory channel
+		// (snap.Facts), injected separately every turn. Strip them from the injected
+		// recap so the model never sees a fact twice and the compacted prompt truly
+		// shrinks — facts in ONE place, recap = narrative only. The stored recap keeps
+		// its facts (the cumulative-merge substrate); only the injected copy is stripped.
+		if len(snap.Facts) > 0 {
+			recap = contextcompact.StripKeyFactsSection(recap)
+		}
+		viewMsgs = contextcompact.ApplyView(snap.Messages, cc.CutoffSeq, recap)
+	}
+	// CTX-8 Phase 2 : elide stale, bulky tool-result bodies from the view (no LLM,
+	// no message dropped) so the prompt shrinks before heavier compaction trips.
+	if e.MicroCompactView {
+		viewMsgs = contextcompact.MicroCompact(viewMsgs, microCompactKeepRecent, microCompactMinBytes)
 	}
 	msgs := conv.Convert(ctx, viewMsgs)
 	snipOversizedMessages(msgs, e.msgByteCap(sessionID, snap, brain))
@@ -1634,9 +1695,44 @@ func resolveAutoCompact(rt *schema.RuntimeBlock, brainCtx *schema.ContextConfig)
 		p.keep = brainCtx.KeepRecent
 	}
 	if p.threshold == 0 {
-		p.threshold = 0.97
+		p.threshold = 0.95
 	}
 	return p
+}
+
+const (
+	// compactionAbsBuffer is the ABSOLUTE headroom (tokens) we keep below the
+	// usable limit, à la Claude Code's 13k buffer — so a single big tool result
+	// can't blow past the window between two pressure checks. It makes the trigger
+	// window-aware: a fixed ratio leaves tiny headroom on small windows (8k @ 95%
+	// ≈ 400 tokens) and huge idle headroom on large ones.
+	compactionAbsBuffer = 13000
+	// compactionMaxBufferFrac caps the buffer on SMALL windows so it never exceeds
+	// a sensible fraction of the budget (else an 8k window would compact far too
+	// early). Tuned so an 8k limit keeps ~25% headroom, a 200k limit ~13k.
+	compactionMaxBufferFrac = 0.25
+)
+
+// compactionTriggerPoint is the token count at/above which the per-round guard
+// compacts. It is the MORE CONSERVATIVE (earlier) of the ratio threshold and an
+// absolute-headroom floor: trigger = min(threshold*limit, limit-buffer), with
+// buffer = min(compactionAbsBuffer, limit*compactionMaxBufferFrac). This never
+// fires LATER than the configured ratio (an explicit low compression_trigger
+// still wins), only EARLIER when the ratio would leave too little absolute room.
+func compactionTriggerPoint(limit int, threshold float64) int {
+	if limit <= 0 {
+		return 0
+	}
+	ratioPoint := int(float64(limit) * threshold)
+	buffer := compactionAbsBuffer
+	if maxBuf := int(float64(limit) * compactionMaxBufferFrac); buffer > maxBuf {
+		buffer = maxBuf
+	}
+	bufferPoint := limit - buffer
+	if bufferPoint < ratioPoint {
+		return bufferPoint
+	}
+	return ratioPoint
 }
 
 // guardContextPressure is the per-ROUND compaction guarantee. Before each LLM
@@ -1666,7 +1762,7 @@ func (e *Engine) guardContextPressure(
 	if lastPromptTokens > used {
 		used = lastPromptTokens
 	}
-	if float64(used)/float64(cv.Limit) < pol.threshold {
+	if used < compactionTriggerPoint(cv.Limit, pol.threshold) {
 		return false
 	}
 	k := contextcompact.KeepRecentOrDefault(*keep)
@@ -1956,6 +2052,12 @@ func canonicalizeToolCallNames(calls []llm.ChatToolCall, offered []llm.ToolSpec)
 	// denied for a dropped module prefix. The shared resolver is
 	// toolname.QualifyBareName.
 	known := make([]string, 0, len(offered))
+	// alias maps a tool's model-facing wire Name to its canonical FQN when the
+	// two differ — the case for MCP virtual tools, which ship a short alias
+	// ("echo") that dispatches as "mcp_<server>.<tool>". An exact alias hit is
+	// authoritative (the planner guaranteed these names unique), so it wins over
+	// every heuristic below.
+	alias := make(map[string]string, len(offered))
 	// singleWire maps a SINGLE-underscore rendering of each offered FQN
 	// ("filesystem_read") back to the FQN. Our wire form is double-underscore
 	// ("filesystem__read"), but models routinely collapse it to a single `_`,
@@ -1964,19 +2066,37 @@ func canonicalizeToolCallNames(calls []llm.ChatToolCall, offered []llm.ToolSpec)
 	// tools the recovery stays unambiguous; a collision drops to "" so it never
 	// guesses.
 	singleWire := make(map[string]string, len(offered))
-	for _, t := range offered {
-		fqn := toolname.Canonicalize(t.Name)
-		known = append(known, fqn)
-		if dot := strings.IndexByte(fqn, '.'); dot >= 0 {
-			w := fqn[:dot] + "_" + fqn[dot+1:]
-			if prev, seen := singleWire[w]; seen && prev != fqn {
-				singleWire[w] = ""
-			} else {
-				singleWire[w] = fqn
-			}
+	addSingleWire := func(fqn string) {
+		dot := strings.IndexByte(fqn, '.')
+		if dot < 0 {
+			return
+		}
+		w := fqn[:dot] + "_" + fqn[dot+1:]
+		if prev, seen := singleWire[w]; seen && prev != fqn {
+			singleWire[w] = "" // collision → never guess
+		} else {
+			singleWire[w] = fqn
 		}
 	}
+	for _, t := range offered {
+		if t.Canonical != "" {
+			alias[t.Name] = t.Canonical
+			known = append(known, t.Canonical)
+			// ALSO recover the single-underscore mangling of the canonical: models
+			// routinely emit mcp_notion.notion-search as mcp_notion_notion-search.
+			addSingleWire(t.Canonical)
+			continue
+		}
+		fqn := toolname.Canonicalize(t.Name)
+		known = append(known, fqn)
+		addSingleWire(fqn)
+	}
 	for i := range calls {
+		// Exact wire-alias hit (MCP virtual tool) resolves straight to canonical.
+		if canon, ok := alias[calls[i].Name]; ok {
+			calls[i].Name = canon
+			continue
+		}
 		// Canonicalize the wire form, resolve documented runtime-internal short
 		// aliases (Agent → agent_spawn.agent, Remember → memory.remember, …),
 		// then recover the module for a still-bare domain action.
@@ -2645,7 +2765,13 @@ func (e *Engine) enforceGate(
 	// hard block regardless of the capability policy.
 	if pp, ok := workdir.PathPolicyFromContext(ctx); ok {
 		module, action := splitToolName(toolName)
-		if keys := e.pathParamNames(module, action); len(keys) > 0 {
+		// MCP virtual tools (mcp_<server>) address the EXTERNAL server's own
+		// filesystem namespace, which the server sandboxes via its allowed-roots
+		// config. digitorn's session-workdir confinement does not apply and would
+		// wrongly reject any path outside the workdir (deadlocking, e.g., the
+		// filesystem server whose allowed dir is elsewhere). The server is the
+		// boundary; skip workdir enforcement for these.
+		if keys := e.pathParamNames(module, action); len(keys) > 0 && !strings.HasPrefix(module, "mcp_") {
 			if err := workdir.EnforceArgs(pp, args, keys...); err != nil {
 				return &ToolOutcome{Status: "errored", Error: "denied by workdir policy: " + err.Error()}
 			}

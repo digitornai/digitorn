@@ -1,0 +1,35 @@
+schema_version: 2
+app:
+  app_id: json-probe
+  name: JSON Probe
+  version: "1.0.0"
+  description: "Test agent for Activepieces JSON piece — 3 tools only."
+  author: "paul@digitorn.ai"
+  category: "coding"
+
+agents:
+  - id: main
+    role: worker
+    max_tool_iterations: 6
+    brain:
+      provider: openai
+      model: mimo-v2.5
+      temperature: 0.1
+      max_tokens: 512
+      config:
+        api_key: "eyJhbGciOiJSUzI1NiIsImtpZCI6ImF1dGgtMjAyNi0wNCIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIzNDQyNjQ3NDgzZWI0YTQ1OGU0ZmVmZmNiZTRiOTQyOSIsInR5cGUiOiJhY2Nlc3MiLCJpc3MiOiJkaWdpdG9ybiIsImlhdCI6MTc4MDg1NzU2NywianRpIjoiMTNhMTUxMWE3NWZjMTJkYjdmZDNhMDAxN2Y3ZGVlYjQiLCJlbWFpbCI6Im1iYXRoZXBhdWxAZ21haWwuY29tIiwibmFtZSI6IlBhdWwgTUJBVEhFIiwicm9sZXMiOlsiYWRtaW4iXSwicGVybXMiOlsiKiJdfQ.BHp6lo6UDOzJNDZffioRllw-ez-R5-VvaBFIUfF98Kl9zB27FJnY6PoKFRPwMrWxOZFshsA8w2Ha7RaJoFMCQRFQAIi3S1IPz5Vy5TgzoNVp7dd7wqvzotnZ0Cb59ruu14B-k7JNj0SSIgtNI-pCELg5InnikRwAdkI9h4pZZSwY1JFwdQZsg71VKhbOq7laEhji6Sbz4S_m2sDXWBEGk0psSGqSrwr-k732IMve5suAZfD_f25yTVFsFo6Jx2PRwrzgj7Bk513Hrm1y9e8eDVNuP3eKiPONzv6MR-xnl859AFzIHEIjxMfqTvlUPAEYAkcAi8Z6VR9RPjttc6dLZQ"
+        base_url: "http://127.0.0.1:8002/v1"
+    system_prompt: |
+      You are a JSON utility agent. Use the available JSON tools when asked to transform data.
+    modules:
+      - pieces
+
+tools:
+  modules:
+    pieces:
+      config:
+        static_auth: {}
+  capabilities:
+    default_policy: auto
+    grant:
+      - module: pieces

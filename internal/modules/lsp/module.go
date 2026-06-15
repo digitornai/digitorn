@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -138,6 +139,12 @@ func (m *Module) manager() *manager {
 // structures file content as a line array instead of a single string.
 type flexContent string
 
+// Object keys we recognize as carrying string content. Order matters: first match wins.
+var (
+	flexArrayObjectKeys  = []string{"text", "content", "line", "value", "code", "source", "snippet"}
+	flexObjectStringKeys = []string{"content", "text", "body", "code", "source"}
+)
+
 func (f *flexContent) UnmarshalJSON(b []byte) error {
 	// 1. Explicit null
 	if string(b) == "null" {
@@ -152,30 +159,26 @@ func (f *flexContent) UnmarshalJSON(b []byte) error {
 		return nil
 	}
 
-	// 3. Array path : []any — each element becomes a line
+	// 3. Array path : []any — each element becomes a line. A bad element fails
+	// the WHOLE unmarshal: silently embedding raw JSON as source code would
+	// produce nonsense diagnostics the LLM would take at face value.
 	var arr []any
 	if err := json.Unmarshal(b, &arr); err == nil {
 		lines := make([]string, 0, len(arr))
-		for _, el := range arr {
+		for i, el := range arr {
 			switch v := el.(type) {
 			case string:
 				lines = append(lines, v)
 			case map[string]any:
-				found := false
-				for _, k := range []string{"text", "content", "line", "value", "code", "source", "snippet"} {
-					if sv, ok := v[k].(string); ok {
-						lines = append(lines, sv)
-						found = true
-						break
-					}
+				sv, ok := firstStringField(v, flexArrayObjectKeys)
+				if !ok {
+					return fmt.Errorf("lsp: content[%d] is an object with no string field in %v (got keys %v) — send the file body as a string or pick one of those keys", i, flexArrayObjectKeys, sortedKeys(v))
 				}
-				if !found {
-					b2, _ := json.Marshal(v)
-					lines = append(lines, string(b2))
-				}
+				lines = append(lines, sv)
+			case float64, bool, nil:
+				return fmt.Errorf("lsp: content[%d] is a %T; expected string or {%s:string}", i, el, strings.Join(flexArrayObjectKeys, "|"))
 			default:
-				b2, _ := json.Marshal(el)
-				lines = append(lines, string(b2))
+				return fmt.Errorf("lsp: content[%d] is %T; expected string or object", i, el)
 			}
 		}
 		*f = flexContent(strings.Join(lines, "\n"))
@@ -185,21 +188,33 @@ func (f *flexContent) UnmarshalJSON(b []byte) error {
 	// 4. Object path
 	var obj map[string]any
 	if err := json.Unmarshal(b, &obj); err == nil {
-		for _, k := range []string{"content", "text", "body", "code", "source"} {
-			if sv, ok := obj[k].(string); ok {
-				*f = flexContent(sv)
-				return nil
-			}
+		if sv, ok := firstStringField(obj, flexObjectStringKeys); ok {
+			*f = flexContent(sv)
+			return nil
 		}
-		// Fallback: serialize the object so the LLM sees its mistake
-		b2, _ := json.MarshalIndent(obj, "", "  ")
-		*f = flexContent(string(b2))
-		return nil
+		return fmt.Errorf("lsp: content is an object with no string field in %v (got keys %v)", flexObjectStringKeys, sortedKeys(obj))
 	}
 
-	// 5. Scalar fallback (number, bool…)
-	*f = flexContent(strings.Trim(string(b), `"`))
-	return nil
+	// 5. Scalar (number, bool…) — refuse instead of stringifying it as code.
+	return fmt.Errorf("lsp: content has unsupported shape %q; pass the file body as a string", strings.TrimSpace(string(b)))
+}
+
+func firstStringField(m map[string]any, keys []string) (string, bool) {
+	for _, k := range keys {
+		if sv, ok := m[k].(string); ok {
+			return sv, true
+		}
+	}
+	return "", false
+}
+
+func sortedKeys(m map[string]any) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 type changeParams struct {
@@ -240,7 +255,7 @@ func (m *Module) notifyChange(ctx context.Context, raw json.RawMessage) (tool.Re
 	if err != nil {
 		return errResult(err), err
 	}
-	return diagnosticsResult(p.Path, diags), nil
+	return diagnosticsResult(p.Path, diags, mgr.projectSummary(ctx, p.Path)), nil
 }
 
 type diagParams struct {
@@ -267,7 +282,7 @@ func (m *Module) diagnostics(ctx context.Context, raw json.RawMessage) (tool.Res
 	if err != nil {
 		return errResult(err), err
 	}
-	return diagnosticsResult(p.Path, diags), nil
+	return diagnosticsResult(p.Path, diags, mgr.projectSummary(ctx, p.Path)), nil
 }
 
 // buildSpecs turns the config into server specs: app-declared servers first
@@ -295,7 +310,7 @@ func buildSpecs(c Config) []serverSpec {
 	return specs
 }
 
-func diagnosticsResult(path string, diags []Diagnostic) tool.Result {
+func diagnosticsResult(path string, diags []Diagnostic, project ProjectSummary) tool.Result {
 	errs, warns := 0, 0
 	for _, d := range diags {
 		switch d.Severity {
@@ -305,17 +320,28 @@ func diagnosticsResult(path string, diags []Diagnostic) tool.Result {
 			warns++
 		}
 	}
+	data := map[string]any{
+		"path":        path,
+		"diagnostics": diags,
+		"count":       len(diags),
+		"errors":      errs,
+		"warnings":    warns,
+		"ok":          errs == 0 && project.TotalErrors == 0,
+	}
+	// Embed the project rollup only when it carries signal — keeps the wire
+	// payload small for the common "everything is fine" case.
+	if project.TotalErrors > 0 || project.TotalWarnings > 0 {
+		data["project"] = project
+	}
+	title := fmt.Sprintf("LSP: %d error(s), %d warning(s)", errs, warns)
+	if project.TotalErrors > 0 || project.TotalWarnings > 0 {
+		title += fmt.Sprintf(" | project: +%d / +%d across %d file(s)",
+			project.TotalErrors, project.TotalWarnings, len(project.AffectedFiles))
+	}
 	return tool.Result{
 		Success: true,
-		Data: map[string]any{
-			"path":        path,
-			"diagnostics": diags,
-			"count":       len(diags),
-			"errors":      errs,
-			"warnings":    warns,
-			"ok":          errs == 0,
-		},
-		Display: &tool.DisplayHint{Type: "json", Title: fmt.Sprintf("LSP: %d error(s), %d warning(s)", errs, warns)},
+		Data:    data,
+		Display: &tool.DisplayHint{Type: "json", Title: title},
 	}
 }
 

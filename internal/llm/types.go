@@ -205,6 +205,15 @@ type ToolSpec struct {
 	// Typically only the LAST tool in the list carries this — Anthropic
 	// caches the whole tool array up to and including the marked entry.
 	CacheControl *CacheControl `json:"cache_control,omitempty"`
+
+	// Canonical is the internal dotted FQN this tool dispatches to when the
+	// wire Name is a model-friendly alias rather than the canonical form.
+	// MCP virtual tools ship a short Name ("echo") the LLM can call cleanly
+	// while resolving to "mcp_<server>.<tool>" internally; the inbound
+	// canonicalizer maps the returned tool_call back via this field. Empty
+	// when Name already IS the canonical form (every native tool). Never
+	// serialised to the provider.
+	Canonical string `json:"-"`
 }
 
 // ChatResponse is the non-streaming result.

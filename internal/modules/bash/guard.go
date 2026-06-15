@@ -5,6 +5,8 @@ import (
 	"regexp"
 	"strings"
 
+	"mvdan.cc/sh/v3/syntax"
+
 	"github.com/mbathepaul/digitorn/internal/modules/bash/goshell"
 )
 
@@ -116,23 +118,268 @@ func dosHint(command string) string {
 	return ""
 }
 
-var hardDenied = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)\brm\s+(-[a-z]*\s+)*-[a-z]*r[a-z]*f?[a-z]*\s+/(\s|$|\*)`),
-	regexp.MustCompile(`(?i)\brm\s+(-[a-z]*\s+)*-[a-z]*f[a-z]*r?[a-z]*\s+/(\s|$|\*)`),
-	regexp.MustCompile(`:\s*\(\s*\)\s*\{`),
-	regexp.MustCompile(`(?i)\bmkfs\b`),
-	regexp.MustCompile(`(?i)\bdd\b.*\bof=/dev/(sd|hd|nvme|disk)`),
-	regexp.MustCompile(`(?i)>\s*/dev/(sd|hd|nvme|disk)`),
+// hardDeniedFallback is the regex-only last-resort check, used when the AST
+// parser cannot understand the input. The AST checker is always tried first
+// and is authoritative when it succeeds — it has accurate command/arg
+// boundaries, so it cannot be fooled by quoted flags or by `echo`-of-rm-
+// looking text. The regex only fires for syntactically degenerate inputs that
+// the parser rejects (e.g. a fork bomb whose `:(){…}` is not parseable as a
+// CallExpr).
+var hardDeniedFallback = []*regexp.Regexp{
+	regexp.MustCompile(`:\s*\(\s*\)\s*\{`), // fork bomb: function ":" with `:|:&` body
+	regexp.MustCompile(`(?i)>\s*/dev/(sd|hd|nvme|disk|vd|xvd|mmcblk|loop|mem|kmem|ram|fd)`),
 }
 
-// checkCommand is an advisory last line of defense only. The real barrier is
-// workspace confinement (the shell starts inside the workspace) plus the env
-// allowlist. It refuses a small set of unambiguously destructive patterns; it
-// is NOT a sandbox and makes no completeness claim.
+// dangerousDevicePrefixes are device-name prefixes whose underlying block /
+// kernel devices a command MUST NOT overwrite. Union of common storage names
+// (sd, hd, nvme), macOS disks (disk), virtio-blk on KVM (vd), Xen / AWS EC2
+// (xvd), eMMC / SD cards on ARM boards (mmcblk), loop devices (loop), kernel
+// memory and main memory (mem, kmem, ram), and floppies (fd).
+var dangerousDevicePrefixes = []string{
+	"sd", "hd", "nvme", "disk", "vd", "xvd", "mmcblk", "loop",
+	"mem", "kmem", "ram", "fd",
+}
+
+// checkCommand is an advisory last line of defense. The real barrier is
+// workspace confinement plus the env allowlist; this layer refuses a small
+// set of unambiguously destructive shapes. The AST-based checker understands
+// shell quoting, long flags and command vs. literal boundaries — so it
+// cannot be fooled by `rm "-rf" /` (quoted flag) or trigger a false positive
+// on `echo "rm -rf /"` (echo, not rm).
 func checkCommand(command string) error {
-	for _, re := range hardDenied {
+	if strings.TrimSpace(command) == "" {
+		return nil
+	}
+	file, perr := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(command), "")
+	if perr == nil {
+		return walkCheckDestructive(file)
+	}
+	// AST parse failed → fall back to regex on the raw text.
+	for _, re := range hardDeniedFallback {
 		if re.MatchString(command) {
 			return fmt.Errorf("command refused by safety guard (matched a destructive pattern)")
+		}
+	}
+	return nil
+}
+
+// walkCheckDestructive walks every CallExpr in the file (so nested commands
+// inside subshells, pipes, &&-chains and command substitutions are all
+// inspected), and refuses on the first destructive shape it sees.
+func walkCheckDestructive(file *syntax.File) error {
+	var refusal error
+	// Always check fork-bomb shape on the file's first statement structure —
+	// the parser turns `:(){:|:&};:` into a function declaration + recursion,
+	// which the per-call check below can't see.
+	if forkBombShape(file) {
+		return fmt.Errorf("command refused by safety guard (fork bomb)")
+	}
+	syntax.Walk(file, func(node syntax.Node) bool {
+		if refusal != nil {
+			return false
+		}
+		switch n := node.(type) {
+		case *syntax.CallExpr:
+			if len(n.Args) > 0 {
+				if err := checkCallExpr(n); err != nil {
+					refusal = err
+					return false
+				}
+			}
+		case *syntax.Stmt:
+			if err := checkRedirs(n.Redirs); err != nil {
+				refusal = err
+				return false
+			}
+		}
+		return true
+	})
+	return refusal
+}
+
+// checkRedirs refuses output redirections that overwrite or append to a
+// dangerous device (`> /dev/sda`, `>> /dev/nvme0`). The target is taken
+// dequoted so `> "/dev/sda"` is caught too.
+func checkRedirs(redirs []*syntax.Redirect) error {
+	for _, r := range redirs {
+		if r == nil || r.Word == nil {
+			continue
+		}
+		op := r.Op
+		if op != syntax.RdrOut && op != syntax.AppOut && op != syntax.RdrClob {
+			continue
+		}
+		target := strings.ToLower(dequote(r.Word))
+		const devPrefix = "/dev/"
+		if !strings.HasPrefix(target, devPrefix) {
+			continue
+		}
+		dev := target[len(devPrefix):]
+		for _, p := range dangerousDevicePrefixes {
+			if strings.HasPrefix(dev, p) {
+				return fmt.Errorf("command refused by safety guard (redirect to block device %q)", target)
+			}
+		}
+	}
+	return nil
+}
+
+// forkBombShape spots the classic `:(){ :|:& };:` pattern: a function whose
+// body calls itself recursively in a backgrounded pipe. Detection is structural
+// (function name == ":" or any single char, body contains a call to itself
+// piped and backgrounded) so quoting tricks cannot hide it.
+func forkBombShape(file *syntax.File) bool {
+	for _, stmt := range file.Stmts {
+		fn, ok := stmt.Cmd.(*syntax.FuncDecl)
+		if !ok {
+			continue
+		}
+		name := fn.Name.Value
+		if len(name) > 2 { // genuine fns have names; fork bombs use cryptic single chars
+			continue
+		}
+		// Body containing both `|` (pipe) and `&` (background) calling the fn.
+		var body strings.Builder
+		_ = syntax.NewPrinter().Print(&body, fn.Body)
+		text := body.String()
+		if strings.Contains(text, "|") && strings.Contains(text, "&") && strings.Contains(text, name) {
+			return true
+		}
+	}
+	return false
+}
+
+func checkCallExpr(call *syntax.CallExpr) error {
+	words := make([]string, 0, len(call.Args))
+	for _, arg := range call.Args {
+		words = append(words, dequote(arg))
+	}
+	cmd := strings.ToLower(commandBase(words[0]))
+	args := words[1:]
+	switch {
+	case cmd == "rm":
+		return checkRmArgs(args)
+	case cmd == "dd":
+		return checkDdArgs(args)
+	case strings.HasPrefix(cmd, "mkfs"):
+		// `mkfs`, `mkfs.ext4`, `mkfs.xfs`, … all format a device.
+		return fmt.Errorf("command refused by safety guard (mkfs is destructive)")
+	}
+	return nil
+}
+
+// commandBase returns the basename of an invocation path, so `/bin/rm` and
+// `rm` and `\rm` (the backslash form used to bypass aliases) all resolve to
+// `rm`. Bash also accepts a leading `\` so we strip it before splitting.
+func commandBase(p string) string {
+	p = strings.TrimPrefix(p, `\`)
+	if i := strings.LastIndexAny(p, `/\`); i >= 0 {
+		return p[i+1:]
+	}
+	return p
+}
+
+// dequote returns the string value of a parsed word, with single / double
+// quotes removed exactly the way bash treats them at expansion: `"-rf"` and
+// `'-rf'` both dequote to `-rf`. Complex words (parameter expansion, command
+// substitution, globs) fall back to the printer's verbatim text so the check
+// still has SOMETHING to match against.
+func dequote(w *syntax.Word) string {
+	var b strings.Builder
+	complex := false
+	for _, part := range w.Parts {
+		switch p := part.(type) {
+		case *syntax.Lit:
+			b.WriteString(p.Value)
+		case *syntax.SglQuoted:
+			b.WriteString(p.Value)
+		case *syntax.DblQuoted:
+			for _, dq := range p.Parts {
+				if lit, ok := dq.(*syntax.Lit); ok {
+					b.WriteString(lit.Value)
+				} else {
+					complex = true
+				}
+			}
+		default:
+			complex = true
+		}
+	}
+	if complex {
+		var pb strings.Builder
+		_ = syntax.NewPrinter().Print(&pb, w)
+		return pb.String()
+	}
+	return b.String()
+}
+
+// checkRmArgs refuses `rm` invocations that combine "-r" (any spelling),
+// "-f" (any spelling), AND a root-targeting path. All three must be present —
+// `rm -rf ./build` keeps working, `rm -r ./testdata` keeps working, only the
+// root-deletion shape is refused.
+func checkRmArgs(args []string) error {
+	hasRecurse, hasForce, dangerousPath := false, false, false
+	for _, a := range args {
+		switch a {
+		case "--recursive", "-R":
+			hasRecurse = true
+			continue
+		case "--force":
+			hasForce = true
+			continue
+		}
+		if strings.HasPrefix(a, "-") && !strings.HasPrefix(a, "--") && len(a) > 1 {
+			flags := strings.ToLower(a[1:])
+			if strings.Contains(flags, "r") {
+				hasRecurse = true
+			}
+			if strings.Contains(flags, "f") {
+				hasForce = true
+			}
+			continue
+		}
+		if isRootishPath(a) {
+			dangerousPath = true
+		}
+	}
+	if hasRecurse && hasForce && dangerousPath {
+		return fmt.Errorf("command refused by safety guard (rm -r -f targeting filesystem root)")
+	}
+	return nil
+}
+
+// isRootishPath identifies POSIX root path arguments (`/`, `/*`, `/.`, `/.*`)
+// and the bare-slash forms bash globbing expands into. NOT triggered by
+// `/etc/passwd` or any other deeper path: the user explicitly wants to be
+// able to delete inside the filesystem.
+func isRootishPath(a string) bool {
+	switch a {
+	case "/", "/*", "/.", "/.*", "//", "/**":
+		return true
+	}
+	return false
+}
+
+// checkDdArgs refuses dd writes to any block/kernel device whose prefix is
+// in dangerousDevicePrefixes. Allowed: writes to plain files (e.g. an ISO
+// build), and writes to harmless special files like `/dev/null` (which
+// matches none of the dangerous prefixes).
+func checkDdArgs(args []string) error {
+	for _, a := range args {
+		const ofPrefix = "of="
+		if !strings.HasPrefix(a, ofPrefix) {
+			continue
+		}
+		target := strings.ToLower(a[len(ofPrefix):])
+		const devPrefix = "/dev/"
+		if !strings.HasPrefix(target, devPrefix) {
+			continue
+		}
+		dev := target[len(devPrefix):]
+		for _, p := range dangerousDevicePrefixes {
+			if strings.HasPrefix(dev, p) {
+				return fmt.Errorf("command refused by safety guard (dd write to block device %q)", target)
+			}
 		}
 	}
 	return nil

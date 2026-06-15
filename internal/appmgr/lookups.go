@@ -30,6 +30,7 @@ func (m *gormManager) List(ctx context.Context, includeDisabled bool) ([]App, er
 	out := make([]App, len(rows))
 	for i := range rows {
 		out[i] = *metaFromRow(&rows[i])
+		m.enrichMeta(&out[i])
 	}
 	return out, nil
 }
@@ -58,7 +59,9 @@ func (m *gormManager) GetApp(ctx context.Context, appID string) (*App, error) {
 		}
 		return nil, err
 	}
-	return metaFromRow(&row), nil
+	meta := metaFromRow(&row)
+	m.enrichMeta(meta)
+	return meta, nil
 }
 
 // Get returns the runtime view of an enabled app. Hot path : reads the

@@ -26,7 +26,7 @@ var pathParamNames = map[string]bool{
 // tools) into native tool.Specs. RiskLevel is always set — an empty risk fails
 // the risk gate closed.
 func (m *Module) LiveTools(ctx context.Context) []tool.Spec {
-	m.ensureConnected(ctx)
+	m.ensureConnected(ctx, "")
 	m.mu.RLock()
 	pool := m.pool
 	m.mu.RUnlock()

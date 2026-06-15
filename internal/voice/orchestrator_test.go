@@ -2,6 +2,7 @@ package voice
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -107,4 +108,47 @@ func TestOrchestrator_BargeIn(t *testing.T) {
 		call.in <- loud()
 	}
 	eventually(t, runner.aborted.Load, time.Second, "barge-in did not abort the in-flight turn")
+}
+
+// clearingCall is a fakeCall that also has a remote playback buffer (à la Twilio
+// Media Streams) — the orchestrator must flush it on barge-in.
+type clearingCall struct {
+	fakeCall
+	cleared atomic.Bool
+}
+
+func (c *clearingCall) ClearPlayback() { c.cleared.Store(true) }
+
+// TestOrchestrator_BargeInClearsPlayback locks the PlaybackClearer contract: a
+// barge-in on a transport with a remote buffer flushes it, so the caller stops
+// hearing the stale reply instantly.
+func TestOrchestrator_BargeInClearsPlayback(t *testing.T) {
+	stt := &fakeSTT{final: "tell me a story"}
+	tts := &fakeTTS{}
+	runner := &fakeRunner{tokens: []string{"Once upon a time. ", "and so on..."}, gate: make(chan struct{})}
+	o := NewOrchestrator(NewPipelineEngine(stt, tts, runner))
+	o.NewVAD = fastVAD()
+
+	call := &clearingCall{fakeCall: fakeCall{in: make(chan Frame, 64), out: make(chan Frame, 256)}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = o.Handle(ctx, call, SessionOpts{SampleRate: 8000}) }()
+
+	for i := 0; i < 3; i++ {
+		call.in <- loud()
+	}
+	for i := 0; i < 4; i++ {
+		call.in <- quiet()
+	}
+	select {
+	case <-call.out:
+	case <-time.After(2 * time.Second):
+		t.Fatal("agent never started speaking")
+	}
+	time.Sleep(20 * time.Millisecond)
+
+	for i := 0; i < 3; i++ {
+		call.in <- loud()
+	}
+	eventually(t, call.cleared.Load, time.Second, "barge-in did not clear the remote playback buffer")
 }

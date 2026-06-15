@@ -1,0 +1,63 @@
+schema_version: 2
+
+app:
+  app_id: bg-cancel-probe-mimo
+  name: Background-Cancel Probe (mimo via gateway)
+  version: "0.1.0"
+  description: "Live LLM E2E proving the agent can cancel a long-running background task and read the live log of what got done before the kill."
+  author: "live-test@digitorn.local"
+  category: "coding"
+
+runtime:
+  tool_injection: direct
+  workdir_mode: required
+
+agents:
+  - id: main
+    role: assistant
+    brain:
+      provider: openai
+      model: mimo-v2.5
+      temperature: 0.1
+      max_tokens: 1024
+      config:
+        api_key: "{{env.OPENAI_API_KEY}}"
+    system_prompt: |
+      You are a shell automation agent. Your task proves that an agent can
+      ABORT a long-running background task and inspect its live log. Do
+      EXACTLY these steps in order, then stop.
+
+      STEP 1 - Launch a long streaming task:
+        background_run with:
+          name: "bash.run"
+          params: {"command": "for i in $(seq 1 50); do printf 'PROOF_LINE_%d\\n' \"$i\"; sleep 1; done"}
+          settle_seconds: 0
+        Remember the task_id it returns.
+
+      STEP 2 - Wait briefly to let a few lines stream, then check status with
+        tail_lines so you see real lines in the log field:
+          background_run with: {task_id: "<id>", tail_lines: 20}
+
+      STEP 3 - Cancel the task:
+          background_run with: {task_id: "<id>", cancel: true}
+
+      STEP 4 - Read the final state and log one more time:
+          background_run with: {task_id: "<id>", tail_lines: 20}
+
+      STEP 5 - Reply with ONE line exactly, no extra text, no markdown:
+        RESULT: state=<state> killed_at=<the last PROOF_LINE_* line you saw in the final log, verbatim>
+
+      `killed_at` MUST come from the `log` field of the final response. If the
+      log is empty, reply: RESULT: state=<state> killed_at=<MISSING>.
+
+tools:
+  modules:
+    bash: {}
+    context_builder: {}
+  capabilities:
+    default_policy: auto
+    grant:
+      - module: bash
+        tools: [run]
+      - module: context_builder
+        tools: [background_run]

@@ -76,19 +76,95 @@ type DefaultPolicyEvaluator struct {
 }
 
 // limiterFor returns the per-app gate-6 rate limiter, creating it on first use
-// from the app's rate_limits. nil when the app declares none (gate 6 no-op).
-func (e *DefaultPolicyEvaluator) limiterFor(appID string, caps *schema.CapabilitiesConfig) *policy.RateLimiter {
-	if caps == nil || len(caps.RateLimits) == 0 {
-		return nil
-	}
+// from the app's capabilities.rate_limits MERGED with each MCP server's
+// rate_limit_rpm (a module-level "mcp_<server>" cap). nil when neither source
+// declares a limit (gate 6 no-op).
+func (e *DefaultPolicyEvaluator) limiterFor(appID string, caps *schema.CapabilitiesConfig, app *appmgr.RuntimeApp) *policy.RateLimiter {
 	if v, ok := e.limiters.Load(appID); ok {
-		return v.(*policy.RateLimiter)
+		return v.(*policy.RateLimiter) // may be a nil *RateLimiter — Check is nil-safe
 	}
-	actual, _ := e.limiters.LoadOrStore(appID, policy.NewRateLimiter(caps.RateLimits))
-	if actual == nil {
+	// Cache miss : build once. mcpServerRateLimits re-parses the servers config,
+	// so it runs only here, not on every tool call.
+	merged := map[string]int{}
+	if caps != nil {
+		for k, v := range caps.RateLimits {
+			merged[k] = v
+		}
+	}
+	for k, v := range mcpServerRateLimits(app) { // per-server rate_limit_rpm → module-level cap
+		merged[k] = v
+	}
+	lim := policy.NewRateLimiter(merged) // nil *RateLimiter when merged is empty
+	actual, _ := e.limiters.LoadOrStore(appID, lim)
+	return actual.(*policy.RateLimiter)
+}
+
+// mcpServerRateLimits extracts each MCP server's rate_limit_rpm as a
+// module-level limit keyed "mcp_<server>" (caps the TOTAL calls to that server
+// across all its tools, matching the Python per-server semantics). nil when no
+// MCP server declares one.
+func mcpServerRateLimits(app *appmgr.RuntimeApp) map[string]int {
+	mb, ok := mcpModuleBlock(app)
+	if !ok || mb.Config == nil {
 		return nil
 	}
-	return actual.(*policy.RateLimiter)
+	servers, _ := schema.NormalizeServers(mb.Config["servers"])
+	out := map[string]int{}
+	for id, sc := range servers {
+		if sc.RateLimitRPM > 0 {
+			out["mcp_"+id] = sc.RateLimitRPM
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// mcpAllowedServers resolves tools.modules.mcp.constraints.allowed_servers into
+// a lookup set for gate 1c. nil = the constraint is absent (no restriction). A
+// present-but-empty list yields a non-nil empty set (deny every MCP server).
+func mcpAllowedServers(app *appmgr.RuntimeApp) map[string]struct{} {
+	mb, ok := mcpModuleBlock(app)
+	if !ok || mb.Constraints == nil {
+		return nil
+	}
+	raw, ok := mb.Constraints["allowed_servers"]
+	if !ok {
+		return nil
+	}
+	set := map[string]struct{}{}
+	for _, s := range constraintStringList(raw) {
+		set[s] = struct{}{}
+	}
+	return set
+}
+
+// mcpModuleBlock returns the app's tools.modules.mcp block.
+func mcpModuleBlock(app *appmgr.RuntimeApp) (schema.ModuleBlock, bool) {
+	if app == nil || app.Definition == nil || app.Definition.Tools == nil {
+		return schema.ModuleBlock{}, false
+	}
+	mb, ok := app.Definition.Tools.Modules["mcp"]
+	return mb, ok
+}
+
+// constraintStringList coerces a YAML constraint value ([]any / []string) into
+// a []string, ignoring non-string entries.
+func constraintStringList(raw any) []string {
+	switch v := raw.(type) {
+	case []string:
+		return v
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, e := range v {
+			if s, ok := e.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	return nil
 }
 
 // Evaluate runs the documented gates via policy.RunGates.
@@ -131,7 +207,9 @@ func (e *DefaultPolicyEvaluator) Evaluate(_ context.Context, in EvaluateInput) p
 		// Runtime-only : the per-app gate-6 limiter. Absent on the
 		// schema-build path (BuildAgentToolset builds its own PolicyContext
 		// with no limiter), so listing tools never consumes rate budget.
-		RateLimiter: e.limiterFor(in.AppID, caps),
+		RateLimiter: e.limiterFor(in.AppID, caps, in.App),
+		// Gate 1c : per-app MCP allowed_servers allow-list. nil = no restriction.
+		MCPAllowedServers: mcpAllowedServers(in.App),
 	}
 	return policy.RunGates(inv, pc)
 }

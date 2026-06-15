@@ -35,6 +35,8 @@
 package policy
 
 import (
+	"strings"
+
 	"github.com/mbathepaul/digitorn/internal/compiler/schema"
 	"github.com/mbathepaul/digitorn/internal/domain/tool"
 )
@@ -118,6 +120,7 @@ type GateCode string
 const (
 	GateInactive       GateCode = "gate0_inactive"
 	GateModule         GateCode = "gate1a_module"
+	GateMCPServer      GateCode = "gate1c_mcp_server"
 	GateHidden         GateCode = "gate1b_hidden"
 	GateRisk           GateCode = "gate2_risk"
 	GatePermissions    GateCode = "gate3_permissions"
@@ -228,6 +231,14 @@ type PolicyContext struct {
 	// schema-build, so building the tool list never consumes rate budget.
 	// Stateful: RunGates calls it (the only gate that mutates state).
 	RateLimiter *RateLimiter
+
+	// MCPAllowedServers enforces tools.modules.mcp.constraints.allowed_servers
+	// at runtime (gate 1c). nil = no restriction (every connected MCP server is
+	// callable). Non-nil = ONLY the listed servers' virtual tools may run; a
+	// tool of an unlisted mcp_<server> is denied — exactly as gate 1a restricts
+	// modules. An empty (non-nil) set therefore denies every MCP server. Only
+	// affects mcp_<server> modules; native modules ignore it.
+	MCPAllowedServers map[string]struct{}
 }
 
 // AgentModuleAccess captures one entry in the agent's resolved
@@ -253,7 +264,22 @@ func (c PolicyContext) CanAgentCall(module, action string) bool {
 	}
 	access, ok := c.AgentModules[module]
 	if !ok {
-		return false
+		// MCP virtual modules are named mcp_<server>; the concrete servers an
+		// app connects aren't known when the agent declares its modules, so
+		// declaring the umbrella `mcp` module grants every mcp_<server> the app
+		// materialises. Without this the per-agent toolset filter (SG-3) and
+		// gate 1a drop every MCP virtual tool, and the agent never sees them.
+		if strings.HasPrefix(module, "mcp_") {
+			access, ok = c.AgentModules["mcp"]
+		}
+		// Pieces virtual modules are named ap_<piece>; same umbrella pattern:
+		// declaring `pieces` grants every ap_<piece> virtual module.
+		if !ok && strings.HasPrefix(module, "ap_") {
+			access, ok = c.AgentModules["pieces"]
+		}
+		if !ok {
+			return false
+		}
 	}
 	if access.AllActions {
 		return true

@@ -19,6 +19,10 @@ func TestSystemModulesSeeded(t *testing.T) {
 	}{
 		{"memory", []string{"set_goal", "remember", "task_create", "task_update"}},
 		{"agent_spawn", []string{"agent"}},
+		// channels is a tool-less, background-only module : an app must be able to
+		// DECLARE tools.modules.channels.config (cron schedules + adapters) in the
+		// same app.yaml, even though the daemon loads no "channels" module.
+		{"channels", nil},
 	}
 	for _, c := range cases {
 		if !cat.HasModule(c.module) {

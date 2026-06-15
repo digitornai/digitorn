@@ -570,11 +570,21 @@ func frame(kind, command, marker string) string {
 		// [scriptblock]::Create throw, which otherwise printed to the raw console
 		// and reported exit 0 (a parse failure masquerading as success). We emit
 		// the exception message as tagged output and force a non-zero exit.
+		// Block stdin reads for the duration of the script: an agent command that
+		// does Read-Host (or bash-style `read -p`, which PowerShell forwards to
+		// $host.UI.ReadLine) would otherwise wait forever for input the daemon
+		// never sends. We save / restore [Console]::In so the persistent shell's
+		// own command-prompt loop (which reads from the SAME stdin we use to
+		// pipe frames in) keeps working after the script ends. Console.In is the
+		// PowerShell-level reader; native programs that bypass it for /dev/tty
+		// are still bounded by the per-call timeout.
 		return "$LASTEXITCODE = 0; $ErrorActionPreference = 'Continue'\n" +
+			"$__dgt_savedIn = [Console]::In; [Console]::SetIn([System.IO.TextReader]::Null)\n" +
 			"try { . ([scriptblock]::Create([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('" + b64 + "')))) 2>&1 | " +
 			"ForEach-Object { if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.ToString() } else { $_ } } | " +
 			"Out-String -Stream -Width 4096 | ForEach-Object { [Console]::Out.WriteLine('" + pfx + "' + $_) } } " +
-			"catch { [Console]::Out.WriteLine('" + pfx + "' + $_.Exception.Message); if (($null -eq $LASTEXITCODE) -or ($LASTEXITCODE -eq 0)) { $LASTEXITCODE = 1 } }\n" +
+			"catch { [Console]::Out.WriteLine('" + pfx + "' + $_.Exception.Message); if (($null -eq $LASTEXITCODE) -or ($LASTEXITCODE -eq 0)) { $LASTEXITCODE = 1 } } " +
+			"finally { [Console]::SetIn($__dgt_savedIn) }\n" +
 			"$__dgt_rc = $LASTEXITCODE; if ($null -eq $__dgt_rc) { $__dgt_rc = 0 }; if (-not $?) { if ($__dgt_rc -eq 0) { $__dgt_rc = 1 } }\n" +
 			"[Console]::Out.WriteLine(\"" + marker + " $__dgt_rc $($PWD.Path)\")\n" +
 			"[Console]::Error.WriteLine('" + marker + "')\n"

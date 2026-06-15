@@ -1,0 +1,52 @@
+schema_version: 2
+
+app:
+  app_id: yamldemo
+  name: YAML Scheduled Demo
+  version: "0.1.0"
+  description: "Recurring document-report schedule declared ENTIRELY in YAML (no agent tool, no API call)."
+  author: "live-test@digitorn.local"
+  category: "automation"
+
+agents:
+  - id: main
+    role: worker
+    brain:
+      provider: openai
+      model: mimo-v2.5
+      temperature: 0.1
+      max_tokens: 400
+      config:
+        api_key: "{{env.OPENAI_API_KEY}}"
+    system_prompt: |
+      When you are woken with a "[Report folder]" path and an attached document,
+      read the document and write a one-line report to a file in that exact folder
+      using filesystem.write (e.g. <that-folder>/report.md). Always call the tool;
+      never just describe what you would do.
+    modules:
+      - filesystem
+
+tools:
+  modules:
+    # The background service reads tools.modules.channels.config from the bundle
+    # (daemon-opaque). A cron provider here = a fully declarative recurring wake:
+    # message + reports folder + input attachments (the CV) + owner, all in YAML.
+    channels:
+      config:
+        providers:
+          autodigest:
+            adapter: cron
+            config:
+              schedule: "* * * * *"
+            activation:
+              session: "yaml-digest-session"
+              message: "Read the attached PDF and write a one-line report naming the candidate, their role, and the SECRET-TAG value."
+              reply: none
+              reports: true
+              owner: "3442647483eb4a458e4feffcbe4b9429"
+              attachments:
+                - hash: "33683e399c8f6fabf6a12c00e005b191ca1b896bec4b71ffe79926170c1da6f4"
+                  mime: "application/pdf"
+                  size: 640
+  capabilities:
+    default_policy: auto

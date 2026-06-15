@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"testing"
 
 	"github.com/mbathepaul/digitorn/internal/compiler/schema"
@@ -10,7 +11,7 @@ func resolveFromRaw(t *testing.T, id string, raw map[string]any) (connectSpec, b
 	t.Helper()
 	servers, _ := schema.NormalizeServers(map[string]any{id: raw})
 	m := New()
-	return m.resolveServer(id, servers[id], false)
+	return m.resolveServer(context.Background(), id, servers[id], false)
 }
 
 func TestResolve_BareRefFromCatalog(t *testing.T) {

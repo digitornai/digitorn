@@ -1,0 +1,8 @@
+id: behavior
+version: 1.0.0
+description: Declarative behavior rules engine.
+tools:
+  - { name: get_directives, description: Get active behavior directives., risk_level: low, params: [] }
+  - { name: classify_turn, description: Run the semantic classifier., risk_level: low, params: [{name: message, type: string, required: true}] }
+  - { name: evaluate, description: Evaluate a rule against current state., risk_level: low, params: [{name: rule_id, type: string, required: true}] }
+  - { name: trace, description: Return the rule evaluation trace., risk_level: low, params: [] }

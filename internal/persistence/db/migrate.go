@@ -27,10 +27,13 @@ func AutoMigrate(gdb *gorm.DB) error {
 		&models.App{},
 		&models.Credential{},
 		&models.OAuthState{},
+		&models.OAuthClient{},
 		&models.AuditLog{},
 		&models.ModuleState{},
 		&models.UserSkill{},
 		&models.UserSnippet{},
+		&models.ManagedMCPServer{},
+		&models.InstalledPiece{},
 	); err != nil {
 		return fmt.Errorf("db: auto-migrate: %w", err)
 	}

@@ -113,20 +113,21 @@ func BuildPlan(apps []AppChannels, env func(string) string) Plan {
 			if !pc.IsEnabled() {
 				continue
 			}
-			p.Triggers = append(p.Triggers, processor.TriggerSpec{
+			spec := processor.TriggerSpec{
 				AppID:        app.AppID,
 				Provider:     name,
 				Adapter:      pc.Adapter,
 				DefaultAgent: app.Config.DefaultAgent,
 				SecretFilter: app.Config.FilterSecrets(),
 				Activation:   pc.Activation,
-			})
+			}
 			switch pc.Adapter {
 			case "webhook":
 				p.Webhooks = append(p.Webhooks, webhookProvider(name, pc.Config, env))
 			case "cron":
 				if cp, ok := cronProvider(name, pc.Config, &p); ok {
 					p.Crons = append(p.Crons, cp)
+					spec.Schedule = cfgStr(pc.Config, "schedule", env) // for ops next_run
 				}
 			case "rss":
 				p.Feeds = append(p.Feeds, rssProvider(app.AppID, name, pc.Config, env))
@@ -139,6 +140,7 @@ func BuildPlan(apps []AppChannels, env func(string) string) Plan {
 			default:
 				p.Warnings = append(p.Warnings, "provider "+name+": adapter "+pc.Adapter+" not wired (V1: webhook|cron|rss|telegram|whatsapp|discord)")
 			}
+			p.Triggers = append(p.Triggers, spec)
 		}
 	}
 	return p

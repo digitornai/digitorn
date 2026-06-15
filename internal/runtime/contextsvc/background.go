@@ -2,6 +2,7 @@ package contextsvc
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -169,17 +170,9 @@ func (b *Background) recompute(sid string) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), b.timeout)
 	defer cancel()
-	// Count each budget bucket EXACTLY. Any per-bucket error aborts the whole
-	// recompute (no estimate, no partial gauge) — the last exact value stays.
-	sys, err := b.count(ctx, v.System, v.Provider, v.Model)
-	if err != nil {
-		return
-	}
-	tools, err := b.count(ctx, v.Tools, v.Provider, v.Model)
-	if err != nil {
-		return
-	}
-	msgs, err := b.count(ctx, v.Messages, v.Provider, v.Model)
+	// Count each budget bucket EXACTLY. Any error aborts the whole recompute (no
+	// estimate, no partial gauge) — the last exact value stays.
+	sys, tools, msgs, err := b.countBuckets(ctx, v)
 	if err != nil {
 		return
 	}
@@ -190,6 +183,63 @@ func (b *Background) recompute(sid string) {
 	if b.onResult != nil {
 		b.onResult(Result{SessionID: sid, System: sys, Tools: tools, Messages: msgs, Total: total})
 	}
+}
+
+// batchCounter is an optional TokenCounter that counts many texts in ONE pass,
+// returning per-text counts. *tokenizer.Client implements it.
+type batchCounter interface {
+	CountEach(ctx context.Context, texts []string, provider, model string) ([]int, error)
+}
+
+// countBuckets counts the three budget buckets. When the counter supports batch
+// per-text counting (CTX-8 Phase 4) it does ONE RPC pass over all texts and
+// splits the result by bucket boundary — fewer round-trips on the background
+// pool. Otherwise it falls back to one CountTotal per bucket (unchanged).
+func (b *Background) countBuckets(ctx context.Context, v View) (sys, tools, msgs int, err error) {
+	if bc, ok := b.counter.(batchCounter); ok {
+		return b.countBucketsBatched(ctx, bc, v)
+	}
+	if sys, err = b.count(ctx, v.System, v.Provider, v.Model); err != nil {
+		return
+	}
+	if tools, err = b.count(ctx, v.Tools, v.Provider, v.Model); err != nil {
+		return
+	}
+	if msgs, err = b.count(ctx, v.Messages, v.Provider, v.Model); err != nil {
+		return
+	}
+	return sys, tools, msgs, nil
+}
+
+func (b *Background) countBucketsBatched(ctx context.Context, bc batchCounter, v View) (sys, tools, msgs int, err error) {
+	all := make([]string, 0, len(v.System)+len(v.Tools)+len(v.Messages))
+	all = append(all, v.System...)
+	all = append(all, v.Tools...)
+	all = append(all, v.Messages...)
+	if len(all) == 0 {
+		return 0, 0, 0, nil
+	}
+	counts, err := bc.CountEach(ctx, all, v.Provider, v.Model)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	if len(counts) != len(all) {
+		return 0, 0, 0, fmt.Errorf("contextsvc: per-text count length mismatch (%d vs %d)", len(counts), len(all))
+	}
+	i := 0
+	for range v.System {
+		sys += counts[i]
+		i++
+	}
+	for range v.Tools {
+		tools += counts[i]
+		i++
+	}
+	for range v.Messages {
+		msgs += counts[i]
+		i++
+	}
+	return sys, tools, msgs, nil
 }
 
 // count returns the exact token count of a bucket (0 for an empty bucket, with

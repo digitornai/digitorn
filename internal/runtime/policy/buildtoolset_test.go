@@ -413,6 +413,44 @@ func TestResolveAgentModules_ActionSubset(t *testing.T) {
 	}
 }
 
+// An agent that declares the umbrella `mcp` module can call every
+// mcp_<server> virtual tool — the concrete servers an app connects aren't known
+// when the agent declares its modules. Without this, SG-3 (BuildAgentToolset)
+// and gate 1a drop every MCP virtual tool and the agent never sees them.
+func TestCanAgentCall_MCPUmbrellaGrantsVirtualModules(t *testing.T) {
+	mcp := policy.PolicyContext{AgentModules: policy.ResolveAgentModules(schema.AgentModules{{ID: "mcp"}})}
+	if !mcp.CanAgentCall("mcp_everything", "echo") {
+		t.Error("declaring `mcp` must grant mcp_everything.echo")
+	}
+	if !mcp.CanAgentCall("mcp_sequential_thinking", "sequentialthinking") {
+		t.Error("declaring `mcp` must grant any mcp_<server> tool")
+	}
+
+	// Action subset: `mcp: [echo]` grants only echo across MCP servers.
+	subset := policy.PolicyContext{AgentModules: policy.ResolveAgentModules(schema.AgentModules{{ID: "mcp", Tools: []string{"echo"}}})}
+	if !subset.CanAgentCall("mcp_everything", "echo") {
+		t.Error("`mcp: [echo]` must grant mcp_everything.echo")
+	}
+	if subset.CanAgentCall("mcp_everything", "add") {
+		t.Error("`mcp: [echo]` must NOT grant mcp_everything.add")
+	}
+
+	// An agent that did not declare `mcp` reaches no MCP tool, and a genuinely
+	// undeclared non-MCP module stays denied.
+	noMCP := policy.PolicyContext{AgentModules: policy.ResolveAgentModules(schema.AgentModules{{ID: "filesystem"}})}
+	if noMCP.CanAgentCall("mcp_everything", "echo") {
+		t.Error("agent without `mcp` must NOT reach mcp_everything")
+	}
+	if noMCP.CanAgentCall("shell", "run") {
+		t.Error("undeclared non-MCP module must stay denied")
+	}
+
+	// nil AgentModules = no per-agent restriction.
+	if !(policy.PolicyContext{}).CanAgentCall("mcp_everything", "echo") {
+		t.Error("nil AgentModules must allow")
+	}
+}
+
 // TestResolveAgentModules_MultiEntrySameModule_Merges : if a YAML
 // declares the same module twice (legal in AgentModules), the
 // actions merge.

@@ -68,8 +68,8 @@ const (
 	// clears the override (revert to the Brain default).
 	EventModelChanged EventType = "model_changed"
 	EventCompactDone  EventType = "compact_done"
-	EventQuarantine       EventType = "quarantine"
-	EventError            EventType = "error"
+	EventQuarantine   EventType = "quarantine"
+	EventError        EventType = "error"
 
 	// EventContextCompacting is the START marker of an LLM-context
 	// compaction : emitted just BEFORE the (possibly slow, LLM-backed)
@@ -98,6 +98,15 @@ const (
 	// It is the production source of truth for context_pressure — never an
 	// estimate. Emitted off the turn loop ; carried in CtxCompact.NewContextTokens.
 	EventContextTokens EventType = "context_tokens"
+
+	// EventContextSummaryPrepared carries a high-fidelity LLM summary of the
+	// session's aged region, produced PROACTIVELY off the turn loop by the
+	// summary maintainer (CTX-8). It is a CANDIDATE the compaction gate applies
+	// INSTANTLY — it does NOT itself change the model's view, so the loop never
+	// blocks on a summary LLM call. CoversSeq is the Seq the summary accounts up
+	// to; the gate applies it as an EventContextCompacted at that cutoff.
+	// Coalesced (non-durable); the prepared candidate rides the snapshot.
+	EventContextSummaryPrepared EventType = "context_summary_prepared"
 
 	// Turn lifecycle events (RT-1). Emitted by the runtime turn package
 	// to record each phase transition durably. Replaying the events
@@ -196,6 +205,7 @@ type Event struct {
 	Cost       *CostPayload             `json:"cost,omitempty"`
 	Compact    *CompactPayload          `json:"compact,omitempty"`
 	CtxCompact *ContextCompactPayload   `json:"ctx_compact,omitempty"`
+	CtxSummary *ContextSummaryPayload   `json:"ctx_summary,omitempty"`
 	Meta       *MetaPayload             `json:"meta,omitempty"`
 	Error      *ErrorPayload            `json:"error,omitempty"`
 	Turn       *TurnPayload             `json:"turn,omitempty"`
@@ -566,6 +576,19 @@ type ContextTokensPayload struct {
 	// the daemon's own numbers exactly.
 	Window int `json:"window,omitempty"`
 	Limit  int `json:"limit,omitempty"`
+}
+
+// ContextSummaryPayload is a PREPARED high-fidelity LLM summary of the aged
+// region (CTX-8), produced off the turn loop by the summary maintainer. It is a
+// candidate the compaction gate applies instantly (emitting an
+// EventContextCompacted at CoversSeq with this Summary) so the loop never waits
+// on a summary LLM call. CoversSeq is the Seq of the last message the summary
+// accounts for; the kept view is messages with Seq > CoversSeq.
+type ContextSummaryPayload struct {
+	Summary     string `json:"summary"`
+	CoversSeq   uint64 `json:"covers_seq"`
+	InputTokens int    `json:"input_tokens,omitempty"`
+	Model       string `json:"model,omitempty"`
 }
 
 type MetaPayload struct {

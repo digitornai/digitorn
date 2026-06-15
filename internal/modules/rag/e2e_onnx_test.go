@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/mbathepaul/digitorn/internal/embeddings"
+	"github.com/mbathepaul/digitorn/internal/indexer"
 	"github.com/mbathepaul/digitorn/pkg/module"
 )
 
@@ -218,8 +219,6 @@ func TestRAG_E2E_ConfigSources(t *testing.T) {
 	cfg, _ := ParseConfig(map[string]any{
 		"embedding_model": "minilm-l12",
 		"backend":         map[string]any{"type": "qdrant", "url": url},
-		"sources":         []any{map[string]any{"type": "file", "path": dir, "knowledge_base": "cfgsrc"}},
-		"auto_index":      map[string]any{"on_start": true},
 	})
 	be, err := newBackend(cfg)
 	if err != nil {
@@ -229,9 +228,11 @@ func TestRAG_E2E_ConfigSources(t *testing.T) {
 	_ = be.DeleteKB(context.Background(), "cfgsrc")
 
 	eng := NewEngine(cfg, be, onnxEmbedder{mgr: mgr}, nil)
-	rep, err := eng.SyncAll(context.Background())
+	svc := indexer.NewService(nil, 2)
+	spec := fileSpec(SourceConfig{Type: "file", Path: dir, KnowledgeBase: "cfgsrc"}, AutoIndex{})
+	rep, err := svc.Sync(context.Background(), spec, ragSink{eng: eng})
 	if err != nil {
-		t.Fatalf("syncall: %v", err)
+		t.Fatalf("sync: %v", err)
 	}
 	if rep.Added != 2 {
 		t.Fatalf("sync report = %+v, want Added=2", rep)

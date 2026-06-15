@@ -44,6 +44,17 @@ func (c *Compiler) WithSources(sources ...catalog.ManifestSource) *Compiler {
 	return c
 }
 
+// InvalidateCatalog drops the cached catalog so the next compile rebuilds it
+// from the (now-current) registry. Called after worker-hosted modules register
+// their manifests at startup : those registrations otherwise race the first
+// compile, leaving worker modules wrongly reported "unknown module" for apps
+// installed afterward.
+func (c *Compiler) InvalidateCatalog() {
+	c.mu.Lock()
+	c.catalog = nil
+	c.mu.Unlock()
+}
+
 // loadCatalog returns the (lazily built, cached) catalog. The mutex makes it
 // safe to call Compile concurrently on one Compiler : the first caller builds,
 // the rest read the cache. Holding the lock across catalog.New collapses N

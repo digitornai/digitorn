@@ -109,7 +109,7 @@ func resolveDefaultPolicy(p schema.CapabilityPolicy, inv Invocation) Decision {
 // module" — the documented convention for empty action lists in
 // deny/approve/grant/hidden_actions.
 func matchesGrant(g schema.CapabilityGrant, module, action string) bool {
-	if g.Module != module {
+	if !moduleMatches(g.Module, module) {
 		return false
 	}
 	tools := g.EffectiveTools()

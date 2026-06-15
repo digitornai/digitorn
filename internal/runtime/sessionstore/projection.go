@@ -89,6 +89,14 @@ func applyLocked(s *SessionState, ev *Event) {
 		})
 		if ev.Type == EventUserMessage {
 			s.TurnCount++
+			// Record the idempotency key so a re-delivery of the same client message
+			// (a background-job retry, a client resend) is detected and skipped.
+			if ev.Message.ClientMessageID != "" {
+				if s.SeenClientMsgIDs == nil {
+					s.SeenClientMsgIDs = make(map[string]uint64)
+				}
+				s.SeenClientMsgIDs[ev.Message.ClientMessageID] = ev.Seq
+			}
 		}
 		// A mode-switch directive binds the session's active mode, so it is
 		// reconstructed verbatim on cold-load / replay.
@@ -447,6 +455,23 @@ func applyLocked(s *SessionState, ev *Event) {
 			s.ContextMessageTokens = ev.CtxTokens.Messages
 		}
 
+	case EventContextSummaryPrepared:
+		// A background-prepared high-fidelity LLM summary CANDIDATE (CTX-8). Store
+		// the latest; only ever advance coverage (a replayed/older event never
+		// regresses it). This does NOT change the model's view — the compaction
+		// gate applies it instantly, off the LLM hot path.
+		if ev.CtxSummary == nil || ev.CtxSummary.CoversSeq == 0 || strings.TrimSpace(ev.CtxSummary.Summary) == "" {
+			return
+		}
+		if s.PreparedSummary == nil || ev.CtxSummary.CoversSeq > s.PreparedSummary.CoversSeq {
+			s.PreparedSummary = &PreparedSummaryState{
+				Summary:    ev.CtxSummary.Summary,
+				CoversSeq:  ev.CtxSummary.CoversSeq,
+				AtSeq:      ev.Seq,
+				TsUnixNano: ev.TsUnixNano,
+			}
+		}
+
 	case EventContextCompacting:
 		// START marker : a compaction has begun but not finished. Flag it
 		// so a state-snapshot reader knows to show "compacting…" until the
@@ -491,6 +516,12 @@ func applyLocked(s *SessionState, ev *Event) {
 			// bounded regardless of session age. This is what makes the LLM context
 			// load "from the last compaction", not from all of history.
 			s.Messages = MessagesAfterCutoff(s.Messages, ev.CtxCompact.CutoffSeq)
+		}
+		// A prepared summary consumed by this compaction (its coverage is now at or
+		// below the applied cutoff) is no longer a pending candidate — clear it so a
+		// stale one is never re-applied. A deeper prepared summary (rare) survives.
+		if s.PreparedSummary != nil && ev.CtxCompact.CutoffSeq >= s.PreparedSummary.CoversSeq {
+			s.PreparedSummary = nil
 		}
 
 	case EventError:

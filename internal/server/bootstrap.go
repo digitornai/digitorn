@@ -27,7 +27,10 @@ import (
 	"github.com/mbathepaul/digitorn/internal/embeddings"
 	"github.com/mbathepaul/digitorn/internal/llm"
 	"github.com/mbathepaul/digitorn/internal/middlewareplugin"
+	"github.com/mbathepaul/digitorn/internal/mcphub"
+	"github.com/mbathepaul/digitorn/internal/mcpservers"
 	"github.com/mbathepaul/digitorn/internal/module/gateway"
+	"github.com/mbathepaul/digitorn/internal/modules/pieces"
 	"github.com/mbathepaul/digitorn/internal/persistence/db"
 	"github.com/mbathepaul/digitorn/internal/ports"
 	"github.com/mbathepaul/digitorn/internal/runtime"
@@ -69,23 +72,25 @@ type Daemon struct {
 	sessionPaths    sessionstore.Paths
 	envelopeBuilder *sessionstore.EnvelopeBuilder
 	bridge          *SocketIOBridge
-	workspaceLive   *workspaceLive // debounced workspace-change notifier (also reused by the REST file save)
+	workspaceLive   *workspaceLive   // debounced workspace-change notifier (also reused by the REST file save)
+	blobStore       *blobstore.Store // content-addressed attachment store (multimodal in + out)
 
 	jwks          *JWKS
 	jwtVerifier   *JWTVerifier
 	authValidator AuthValidator
 
-	workerMgr        *worker.Manager
-	llmClient        *llm.Client
-	embeddingsClient *embeddings.Client
-	tokenizerClient  *tokenizer.Client
-	serviceGateway   *gateway.Server                       // worker→daemon service bridge (embeddings, …)
-	gatewayAddr      string                                // gateway loopback addr handed to worker pools
-	gatewaySecret    string                                // gateway's dedicated handshake secret
-	contextBG        atomic.Pointer[contextsvc.Background] // background EXACT context recompute (CTX-7)
-	contextTracker   *contextsvc.Tracker                   // freshest per-session context variable (engine + hooks read it)
-	ctxParts         sync.Map                              // sessionID -> ctxParts (build-time system+tools for the recount breakdown)
-	agents           *agent.Manager
+	workerMgr         *worker.Manager
+	llmClient         *llm.Client
+	embeddingsClient  *embeddings.Client
+	tokenizerClient   *tokenizer.Client
+	serviceGateway    *gateway.Server                       // worker→daemon service bridge (embeddings, …)
+	gatewayAddr       string                                // gateway loopback addr handed to worker pools
+	gatewaySecret     string                                // gateway's dedicated handshake secret
+	contextBG         atomic.Pointer[contextsvc.Background] // background EXACT context recompute (CTX-7)
+	summaryMaintainer *summaryMaintainer                    // background high-fidelity summary, off the loop (CTX-8); nil when flag off
+	contextTracker    *contextsvc.Tracker                   // freshest per-session context variable (engine + hooks read it)
+	ctxParts          sync.Map                              // sessionID -> ctxParts (build-time system+tools for the recount breakdown)
+	agents            *agent.Manager
 
 	appCompiler  *compiler.Compiler
 	appMgr       appmgr.Manager
@@ -93,6 +98,8 @@ type Daemon struct {
 	userSnippets *usersnippets.Store
 	mcpCatalog   *mcpCatalog       // materializes worker-hosted MCP tools as native actions
 	mcpOAuth     *mcpoauth.Service // daemon-side MCP OAuth (token store, CSRF flow); nil if the key file is unavailable
+	managedMCP   *mcpservers.Store // per-user managed MCP server store (install/list/configure); nil if the key file is unavailable
+	mcpHub       *mcphub.Client    // read-only client for the Hub's curated MCP catalog (the install-config source)
 
 	engine           runtime.Runner
 	sessionRunner    *sessionRunner // serializes + coalesces agent turns per session (user + proactive wakes)
@@ -191,9 +198,17 @@ func Build(cfg *config.Config) (*Daemon, error) {
 	// references against a catalog, and an empty catalog has nothing
 	// to validate against.
 	// Worker-hosted modules also register their manifest in the
-	// registry at startup (via the ProxyModule), so this single
-	// source covers in-proc AND worker pools.
-	appCompiler := compiler.New().WithSources(catalog.RegistrySource{Registry: mods})
+	// registry at startup (via the ProxyModule). Their proxy manifests
+	// arrive asynchronously, so we ALSO validate against the static
+	// module manifest files (manifests/) — this makes worker modules
+	// (rag, database, …) known regardless of proxy-registration timing.
+	compileSources := []catalog.ManifestSource{catalog.RegistrySource{Registry: mods}}
+	for _, dir := range manifestDirsFor() {
+		if st, err := os.Stat(dir); err == nil && st.IsDir() {
+			compileSources = append(compileSources, catalog.DirSource{Dir: dir})
+		}
+	}
+	appCompiler := compiler.New().WithSources(compileSources...)
 	appRoot := cfg.Apps.Root
 	if !filepath.IsAbs(appRoot) {
 		if abs, err := filepath.Abs(appRoot); err == nil {
@@ -222,10 +237,14 @@ func Build(cfg *config.Config) (*Daemon, error) {
 	// MCP OAuth: a process-wide sealer over a key file backs the encrypted token
 	// store. A key-file failure disables OAuth (handlers 503) without blocking boot.
 	var mcpOAuth *mcpoauth.Service
+	var mcpSrvStore *mcpservers.Store
 	if sealer, serr := mcpoauth.NewSealer(mcpoauth.DefaultKeyPath()); serr != nil {
-		logger.Warn("bootstrap: mcp oauth disabled (key file unavailable)", slog.String("error", serr.Error()))
+		logger.Warn("bootstrap: mcp oauth + managed servers disabled (key file unavailable)", slog.String("error", serr.Error()))
+		pieces.Setup(gdb, nil) // pieces still work but credentials stored unencrypted
 	} else {
 		mcpOAuth = mcpoauth.NewService(gdb, sealer)
+		mcpSrvStore = mcpservers.NewStore(gdb, sealer) // shares the process sealer
+		pieces.Setup(gdb, sealer)
 	}
 
 	d := &Daemon{
@@ -250,10 +269,13 @@ func Build(cfg *config.Config) (*Daemon, error) {
 		userSkills:      userskills.NewStore(gdb),
 		userSnippets:    usersnippets.NewStore(gdb),
 		mcpOAuth:        mcpOAuth,
+		managedMCP:      mcpSrvStore,
+		mcpHub:          mcphub.NewClient(cfg.Apps.Hub.URL, cfg.Apps.Hub.Timeout, cfg.Apps.Hub.VerifySSL),
 	}
 	// Let the bridge resolve a session's window so a joining client gets the last
 	// real context gauge on open (footer ctx used/window before any new turn).
 	bridge.BrainFor = d.brainFor
+	bridge.SessionWindowBrain = d.sessionWindowBrain
 	d.MountAPI()
 	MountAuthProxy(httpSrv.Router(), cfg.Auth.ServiceURL)
 	return d, nil
@@ -306,6 +328,23 @@ func buildSessionStore(cfg *config.Config, logger *slog.Logger) (*sessionstore.D
 		return nil, nil, sessionstore.Paths{}, err
 	}
 	return flusher, bus, paths, nil
+}
+
+// manifestDirsFor returns the candidate module-manifest directories : the
+// DIGITORN_MANIFESTS override, then `manifests/` next to the executable and the
+// working directory.
+func manifestDirsFor() []string {
+	out := []string{}
+	if v := os.Getenv("DIGITORN_MANIFESTS"); v != "" {
+		out = append(out, v)
+	}
+	if exe, err := os.Executable(); err == nil {
+		out = append(out, filepath.Join(filepath.Dir(exe), "manifests"))
+	}
+	if wd, err := os.Getwd(); err == nil {
+		out = append(out, filepath.Join(wd, "manifests"))
+	}
+	return out
 }
 
 // busAdapter exposes the daemon's ServiceBus as a module.Bus.
@@ -399,10 +438,12 @@ func (d *Daemon) buildEngine() {
 	// module registry the dispatcher executes against, so gates 2/3 see
 	// the real spec. Meta-tools and system modules bypass before any
 	// lookup, so this never blocks context_builder primitives.
-	mcpCat := newMCPCatalog(d.modules, d.appMgr)
+	mcpCat := newMCPCatalog(d.modules, d.appMgr, d.mcpOAuth)
 	d.mcpCatalog = mcpCat // shared with the OAuth handlers (server-config lookup)
 	if d.mcpOAuth != nil {
 		d.mcpOAuth.SetServerAuthLookup(d.mcpServerAuthLookup)
+		d.mcpOAuth.SetServerURLLookup(d.mcpServerURLLookup)
+		d.mcpOAuth.SetRedirectBase(d.previewBaseURL())
 	}
 	eng.PolicyEvaluator = &runtime.DefaultPolicyEvaluator{
 		Lookup: registryToolSpecs{Registry: d.modules, MCP: mcpCat},
@@ -515,6 +556,7 @@ func (d *Daemon) buildEngine() {
 		busAdapter.Blobs = blobStore
 	}
 	eng.Blobs = blobStore
+	d.blobStore = blobStore // expose for the inbound upload endpoint (any client)
 
 	// Brique 4 (live preview) : the filesystem module signals every write/edit
 	// through this notifier, which debounces per session and pushes the agent's
@@ -654,7 +696,21 @@ func (d *Daemon) buildEngine() {
 	// canonicalisation).
 	compactor := newContextCompactor(d.sessionStore, d.appMgr, d.llmClient, d.logger)
 	compactor.touch = d.touchContext // recount the exact occupancy right after a compaction
-	eng.Compactor = compactor        // mid-turn emergency recovery on context overflow
+	// CTX-8 (feature-flagged, default OFF): take the summary LLM call OFF the turn
+	// loop. The maintainer keeps a high-fidelity summary prepared in the
+	// background; the compactor applies it instantly (else truncates). When the
+	// flag is off, none of this is wired → behaviour is exactly the legacy path.
+	if contextBGSummaryEnabled() {
+		sm := newSummaryMaintainer(d.sessionStore, compactor, d.llmClient, d.logger)
+		sm.Start(2)
+		d.summaryMaintainer = sm
+		compactor.nonBlocking = true
+		compactor.prepare = sm.Touch
+		eng.PrepareSummary = sm.Touch
+		eng.MicroCompactView = true // Phase 2: elide stale bulky tool results in the view
+		d.logger.Info("context: background summary maintainer enabled (CTX-8)")
+	}
+	eng.Compactor = compactor // mid-turn emergency recovery on context overflow
 	eng.Hooks = newHookSource(d.appMgr, hooks.ActionDeps{
 		Logger:    d.logger,
 		Sink:      d.sessionStore,
@@ -802,6 +858,9 @@ func (d *Daemon) Shutdown() error {
 		}
 		if bg := d.contextBG.Load(); bg != nil {
 			bg.Stop() // drain in-flight EXACT recomputes
+		}
+		if d.summaryMaintainer != nil {
+			d.summaryMaintainer.Stop() // drain in-flight background summaries (CTX-8)
 		}
 		if d.agents != nil {
 			d.agents.Stop() // end the sub-agent reaper

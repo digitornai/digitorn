@@ -5,60 +5,54 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
+
+	"github.com/mbathepaul/digitorn/internal/indexer"
 )
 
-func TestSyncSource_IncrementalAddUpdateDelete(t *testing.T) {
+// File sources are driven by the indexation service (Tabula connector +
+// content-hash incremental diff). This proves add/update/delete through the
+// real service path + the ragSink (chunk+embed+store).
+func TestFileSource_IncrementalViaService(t *testing.T) {
 	dir := t.TempDir()
 	write := func(name, body string) {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
-	write("a.md", "alpha document")
-	write("b.md", "beta document")
+	write("a.md", "alpha document about deployment")
+	write("b.md", "beta document about backups")
 
 	cfg, _ := ParseConfig(nil)
 	be := newFakeBackend()
 	eng := NewEngine(cfg, be, fakeEmbedder{dim: 64}, nil)
+	svc := indexer.NewService(nil, 2)
+	sink := ragSink{eng: eng}
+	spec := fileSpec(SourceConfig{Type: "file", Path: dir, KnowledgeBase: "kb"}, AutoIndex{})
 	ctx := context.Background()
-	src := SourceConfig{Type: "file", Path: dir, KnowledgeBase: "kb"}
 
-	// First sync: both added.
-	rep, err := eng.SyncSource(ctx, src)
+	rep, err := svc.Sync(ctx, spec, sink)
 	if err != nil {
 		t.Fatalf("sync1: %v", err)
 	}
 	if rep.Added != 2 || rep.Updated != 0 || rep.Deleted != 0 {
-		t.Fatalf("sync1 report = %+v, want Added=2", rep)
+		t.Fatalf("sync1 = %+v, want Added=2", rep)
 	}
 
-	// Re-sync unchanged: no-op.
-	rep, _ = eng.SyncSource(ctx, src)
-	if rep.Added+rep.Updated+rep.Deleted != 0 {
+	if rep, _ = svc.Sync(ctx, spec, sink); rep.Added+rep.Updated+rep.Deleted != 0 {
 		t.Fatalf("re-sync unchanged should be no-op, got %+v", rep)
 	}
 
-	// Modify a.md → Updated (bump mtime to ensure the stat-sig changes).
-	time.Sleep(10 * time.Millisecond)
-	write("a.md", "alpha document revised with more text")
-	rep, _ = eng.SyncSource(ctx, src)
-	if rep.Updated != 1 || rep.Added != 0 {
-		t.Fatalf("after edit report = %+v, want Updated=1", rep)
+	write("a.md", "alpha document revised with more deployment text")
+	if rep, _ = svc.Sync(ctx, spec, sink); rep.Updated != 1 || rep.Added != 0 {
+		t.Fatalf("after edit = %+v, want Updated=1", rep)
 	}
 
-	// Delete b.md → Deleted, and its chunks removed from the backend.
 	if err := os.Remove(filepath.Join(dir, "b.md")); err != nil {
 		t.Fatal(err)
 	}
-	rep, _ = eng.SyncSource(ctx, src)
-	if rep.Deleted != 1 {
-		t.Fatalf("after delete report = %+v, want Deleted=1", rep)
+	if rep, _ = svc.Sync(ctx, spec, sink); rep.Deleted != 1 {
+		t.Fatalf("after delete = %+v, want Deleted=1", rep)
 	}
-	if n, _ := be.CountKB(ctx, "kb"); n == 0 {
-		t.Fatal("kb empty after delete (a.md should remain)")
-	}
-	// b.md must be gone from the backend.
 	for _, d := range be.docs["kb"] {
 		if d.Source == "b.md" {
 			t.Fatal("b.md chunks still present after delete")

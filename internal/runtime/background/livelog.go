@@ -1,10 +1,16 @@
 package background
 
-import "sync"
+import (
+	"strings"
+	"sync"
+)
 
-// maxLiveLog bounds the live tail kept per running task. A status check shows
-// the most recent output; the full output still arrives in the final result.
-const maxLiveLog = 16 << 10 // 16 KB
+// maxLiveLog bounds the live tail kept per running task. The full output still
+// arrives in the final result; this is just the rolling window an in-flight
+// status check returns. Tuned high enough that a verbose dev server (vite,
+// next, npm install) keeps several minutes of build output visible to the
+// agent without blowing the prompt budget when sliced by tail_lines.
+const maxLiveLog = 64 << 10 // 64 KB
 
 // liveLog is a thread-safe, byte-bounded sink a running task streams its output
 // into (via tool.WithLiveSink → the bash detached runner's io.MultiWriter), so a
@@ -34,4 +40,22 @@ func (l *liveLog) tail() string {
 		return string(l.buf[len(l.buf)-maxLiveLog:])
 	}
 	return string(l.buf)
+}
+
+// tailLines returns the most recent n lines of the buffered output, exactly
+// what an agent watching a build / dev-server / install wants — last 50 or 100
+// lines, formatted as a single newline-joined string so it slots into the
+// existing `log` JSON field without changing the wire shape. n<=0 means "all
+// bytes in the current window".
+func (l *liveLog) tailLines(n int) string {
+	full := l.tail()
+	if n <= 0 || full == "" {
+		return full
+	}
+	full = strings.TrimRight(full, "\n")
+	lines := strings.Split(full, "\n")
+	if len(lines) <= n {
+		return full
+	}
+	return strings.Join(lines[len(lines)-n:], "\n")
 }

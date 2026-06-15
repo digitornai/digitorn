@@ -83,10 +83,15 @@ type InvokeRequest struct {
 // stdio env var to inject under (empty for http, which uses an Authorization
 // header). It rides the wire per-call and must never be logged verbatim.
 type AuthContext struct {
-	Token       string `json:"token,omitempty"`
-	TokenType   string `json:"token_type,omitempty"`
-	EnvTokenVar string `json:"env_token_var,omitempty"`
-	ExpiresAt   int64  `json:"expires_at,omitempty"`
+	Token        string `json:"token,omitempty"`
+	TokenType    string `json:"token_type,omitempty"`
+	EnvTokenVar  string `json:"env_token_var,omitempty"`
+	ExpiresAt    int64  `json:"expires_at,omitempty"`
+	Provider     string `json:"provider,omitempty"`
+	RefreshToken string `json:"refresh_token,omitempty"`
+	Scope        string `json:"scope,omitempty"`
+	ClientID     string `json:"client_id,omitempty"`
+	ClientSecret string `json:"client_secret,omitempty"`
 }
 
 // AuthChallenge describes a missing/expired credential. The daemon turns it into
@@ -150,6 +155,12 @@ type ToolsRequest struct {
 	AgentID  string          `json:"agent_id,omitempty"`
 	UserID   string          `json:"user_id,omitempty"`
 	Config   json.RawMessage `json:"config,omitempty"`
+
+	// AuthContext is a per-user resolved credential the daemon injects so an
+	// OAuth-gated MCP server can be CONNECTED at tool-listing time (not only at
+	// invoke). Without it such a server returns 401 and lists no tools, so the
+	// agent never sees them. nil for non-MCP / unauthenticated listings.
+	AuthContext *AuthContext `json:"auth,omitempty"`
 }
 
 // ToolsResponse is the module's current tool specs (static manifest fallback for

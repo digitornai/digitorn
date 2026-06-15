@@ -54,6 +54,10 @@ func (d *Daemon) MountAPI() {
 	// Authorization is the single-use state→user binding persisted at authorize
 	// time; the handler exchanges the code and stores the token server-side.
 	r.With(d.panicRecoverer).Get("/api/apps/{app_id}/oauth/callback", d.mcpOAuthCallback)
+	// App-agnostic callback for the discovery/DCR flow: a dynamically-registered
+	// client is bound to ONE redirect URI, and the state carries app+server, so a
+	// single URI serves every app.
+	r.With(d.panicRecoverer).Get("/api/oauth/mcp/callback", d.mcpOAuthCallback)
 
 	r.Group(func(r chi.Router) {
 		r.Use(d.panicRecoverer) // first: no handler panic ever escapes (jamais crash)
@@ -62,6 +66,22 @@ func (d *Daemon) MountAPI() {
 		}
 		r.Use(authMiddleware)
 		r.Use(d.actAsMiddleware) // trusted on-behalf-of (X-Act-As-User) → effective user
+
+		// Inbound media: upload bytes → content-addressed BlobRef a message can attach.
+		// App-scoped (not session) so the blob exists before a per_event session is
+		// created. Generic — web/CLI/background channels/voice all use it.
+		r.Post("/api/apps/{app_id}/blobs", d.uploadBlob)
+
+		// ----- Automations : user-scoped window onto the background service -----
+		// The bg /ops API is admin-only ; these routes enforce per-user ownership
+		// and relay server-side, so the ops token never reaches a client.
+		r.Route("/api/automations", func(r chi.Router) {
+			r.Get("/schedules", d.listAutomationSchedules)
+			r.Post("/schedules", d.createAutomationSchedule)
+			r.Post("/schedules/{id}/enable", d.toggleAutomationSchedule(true))
+			r.Post("/schedules/{id}/disable", d.toggleAutomationSchedule(false))
+			r.Get("/runs", d.listAutomationRuns)
+		})
 
 		// ----- Sessions -----
 		r.Route("/api/apps/{app_id}/sessions", func(r chi.Router) {
@@ -122,6 +142,37 @@ func (d *Daemon) MountAPI() {
 
 		// ----- Daemon stats / observability -----
 		r.Get("/api/daemon/stats", d.daemonStats)
+
+		// ----- Activepieces connector hub (pieces module) -----
+		r.Route("/api/pieces", func(r chi.Router) {
+			r.Get("/", d.piecesList)
+			r.Post("/", d.piecesInstall)
+			r.Get("/tools", d.piecesTools)
+			r.Post("/reload", d.piecesReload)
+			r.Put("/{piece_name}", d.piecesUpdateCreds)
+			r.Delete("/{piece_name}", d.piecesUninstall)
+		})
+
+		// ----- MCP server management : discovery (Phase 1, daemon-level) -----
+		// Browse the static catalog + the official MCP registry and inspect what a
+		// server needs before installing it into an app.
+		r.Route("/api/mcp", func(r chi.Router) {
+			// Discovery (Phase 1, read-only).
+			r.Get("/catalog", d.mcpCatalogList)
+			r.Get("/catalog/{id}", d.mcpCatalogGet)
+			r.Get("/search", d.mcpSearch)
+			r.Get("/registry/browse", d.mcpRegistryBrowse)
+			r.Get("/requirements/{id}", d.mcpRequirements)
+
+			// Managed-server store (Phase 2, per-user CRUD + connectivity test).
+			r.Post("/servers", d.mcpInstallServer)
+			r.Get("/servers", d.mcpListServers)
+			r.Get("/servers/{id}", d.mcpGetServer)
+			r.Put("/servers/{id}", d.mcpUpdateServer)
+			r.Delete("/servers/{id}", d.mcpDeleteServer)
+			r.Post("/servers/{id}/test", d.mcpTestServer)
+			r.Post("/servers/{id}/connect", d.mcpConnectServer)
+		})
 
 		// ----- App manager (install, list, get, lifecycle, serving) -----
 		d.mountAppRoutes(r)

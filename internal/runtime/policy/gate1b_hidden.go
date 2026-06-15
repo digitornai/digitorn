@@ -35,9 +35,9 @@ func Gate1bHidden(inv Invocation, pc PolicyContext) Decision {
 	}
 	caps := pc.Capabilities
 
-	// Whole-module hidden ?
+	// Whole-module hidden ? (`mcp` hides every mcp_<server> — see moduleMatches.)
 	for _, m := range caps.HiddenModules {
-		if m == inv.Module {
+		if moduleMatches(m, inv.Module) {
 			return deny(GateHidden,
 				"module "+inv.Module+" is in hidden_modules (LLM-invisible)")
 		}
@@ -45,7 +45,7 @@ func Gate1bHidden(inv Invocation, pc PolicyContext) Decision {
 
 	// Per-(module, action) hidden ?
 	for _, g := range caps.HiddenActions {
-		if g.Module != inv.Module {
+		if !moduleMatches(g.Module, inv.Module) {
 			continue
 		}
 		tools := g.EffectiveTools()

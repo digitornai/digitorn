@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/mbathepaul/digitorn/internal/appmgr"
 	"github.com/mbathepaul/digitorn/internal/compiler/schema"
@@ -43,6 +45,16 @@ type contextCompactor struct {
 	// tools + kept messages) lands promptly instead of waiting for the next turn
 	// — the gauge must show the real freed context, not an estimate, ASAP.
 	touch func(sessionID string)
+
+	// nonBlocking (CTX-8 feature flag) makes the summarize strategy NEVER call the
+	// LLM on the turn loop: it applies a background-PREPARED summary when one is
+	// ready and advances the cutoff, else truncates instantly. false = legacy
+	// behaviour (inline LLM summarize, which can block the loop for seconds).
+	nonBlocking bool
+	// prepare nudges the background summary maintainer to (re)prepare a
+	// high-fidelity summary for the session, carrying the turn's user JWT for
+	// gateway-mode auth. nil = maintainer disabled (legacy path).
+	prepare func(sessionID, jwt string)
 }
 
 func newContextCompactor(store *sessionstore.Bus, apps appmgr.Manager, client chatLLM, logger *slog.Logger) *contextCompactor {
@@ -132,12 +144,25 @@ func (c *contextCompactor) CompactSession(ctx context.Context, sessionID, strate
 	var res contextcompact.Result
 	switch strategy {
 	case contextcompact.StrategySummarize:
-		s := &llmSummarizer{client: c.llm, brain: brain, sessionID: sessionID, byok: byok, userJWT: llm.UserJWTFromContext(ctx), logger: c.logger}
-		prior := ""
-		if snap.ContextCompaction != nil {
-			prior = snap.ContextCompaction.Summary
+		// Fast path : when the background maintainer already has a high-fidelity
+		// summary ready, apply it instantly (no LLM call this turn). Fidelity is
+		// never traded for it — when nothing is ready we summarise inline below,
+		// not truncate. Summarising blocks only THIS agent's turn goroutine (a
+		// snapshot copy, no shared lock), never the daemon or other sessions.
+		applied := false
+		if c.nonBlocking {
+			if r, ok := c.tryApplyPrepared(snap); ok {
+				res, applied = r, true
+			}
 		}
-		res = contextcompact.Summarize(ctx, snap.Messages, keepRecent, s, summaryMax, snap.Goal, prior)
+		if !applied {
+			s := &llmSummarizer{client: c.llm, brain: brain, sessionID: sessionID, byok: byok, userJWT: llm.UserJWTFromContext(ctx), logger: c.logger}
+			prior := ""
+			if snap.ContextCompaction != nil {
+				prior = snap.ContextCompaction.Summary
+			}
+			res = contextcompact.Summarize(ctx, snap.Messages, keepRecent, s, summaryMax, snap.Goal, prior)
+		}
 	default:
 		res = contextcompact.TruncateBudget(snap.Messages, keepRecent, msgBudget, snap.Goal)
 	}
@@ -212,6 +237,24 @@ func (c *contextCompactor) CompactSession(ctx context.Context, sessionID, strate
 			slog.Int("dropped", res.Dropped),
 			slog.Uint64("cutoff_seq", res.CutoffSeq))
 	}
+	// Auto-promote the summary's KEY FACTS into the lossless, never-compacted
+	// working-memory channel (snap.Facts) so they survive verbatim across every
+	// future compaction — independent of the (faithful but lossy) recap and
+	// without the agent having to record them. Deduped against existing facts.
+	// Best-effort : a fact-promotion failure must never fail the compaction.
+	for _, fact := range contextcompact.ExtractNewKeyFacts(res.Summary, snap.Facts) {
+		if _, ferr := c.store.AppendDurable(ctx, sessionstore.Event{
+			Type:      sessionstore.EventMemoryFactAdded,
+			SessionID: sessionID,
+			AppID:     snap.AppID,
+			UserID:    snap.UserID,
+			Memory:    &sessionstore.MemoryPayload{Fact: fact},
+		}); ferr != nil && c.logger != nil {
+			c.logger.Warn("compactor: key-fact promotion failed (non-fatal)",
+				slog.String("session_id", sessionID), slog.String("err", ferr.Error()))
+			break
+		}
+	}
 	// Kick an immediate EXACT recount so the gauge converges to the real
 	// post-compaction occupancy (system + tools + kept messages) within the
 	// recount latency, instead of lingering on the informational estimate until
@@ -220,7 +263,42 @@ func (c *contextCompactor) CompactSession(ctx context.Context, sessionID, strate
 	if c.touch != nil {
 		c.touch(sessionID)
 	}
+	// CTX-8 : nudge the maintainer to prepare a fresh high-fidelity summary for
+	// the NEXT compaction (off the loop), carrying the turn's JWT for gateway auth.
+	if c.prepare != nil {
+		c.prepare(sessionID, llm.UserJWTFromContext(ctx))
+	}
 	return nil
+}
+
+// tryApplyPrepared is the CTX-8 fast path : when the background maintainer has a
+// high-fidelity summary ready that advances the cutoff AND is orphan-safe against
+// the live messages, apply it instantly (no LLM call this turn). Returns ok=false
+// when nothing usable is ready — the caller then summarises inline, never
+// truncates, so fidelity is preserved regardless of maintainer timing.
+func (c *contextCompactor) tryApplyPrepared(snap sessionstore.SessionSnapshot) (contextcompact.Result, bool) {
+	prep := snap.PreparedSummary
+	if prep == nil {
+		return contextcompact.Result{}, false
+	}
+	curCutoff := uint64(0)
+	if snap.ContextCompaction != nil {
+		curCutoff = snap.ContextCompaction.CutoffSeq
+	}
+	if prep.CoversSeq <= curCutoff {
+		return contextcompact.Result{}, false
+	}
+	view, dropped, ok := contextcompact.ApplyPrepared(snap.Messages, prep.CoversSeq, prep.Summary)
+	if !ok {
+		return contextcompact.Result{}, false
+	}
+	return contextcompact.Result{
+		Messages:  view,
+		Dropped:   dropped,
+		CutoffSeq: prep.CoversSeq,
+		Summary:   prep.Summary,
+		Strategy:  contextcompact.StrategySummarize,
+	}, true
 }
 
 // contextMessageBudget is the token room left for the kept conversation : the
@@ -343,20 +421,21 @@ func buildSummarizerPrompt(maxTokens int) string {
 	if words < 80 {
 		words = 80
 	}
-	return fmt.Sprintf(`You are compacting an AI agent's working session so the agent can continue WITHOUT the full conversation history. Produce a dense, factual HANDOFF — never a vague paragraph. The agent must be able to resume seamlessly, as if no compaction happened.
+	return fmt.Sprintf(`You are compacting an AI agent's working session. This handoff will become the agent's ONLY memory of everything before now — the full conversation is being permanently deleted and the agent continues with NOTHING but what you write here. Anything you omit is lost forever and the agent will act as if it never happened. So capture EVERYTHING needed to continue the task seamlessly; when in doubt, KEEP it. For anything important, completeness beats brevity — dropping a needed detail is far worse than running slightly long.
 
-Use EXACTLY these sections, each a short header followed by tight bullet points. Omit a section only if it is truly empty:
+Produce a dense, factual HANDOFF — never a vague paragraph. Use EXACTLY these sections, each a short header followed by tight bullet points. Omit a section only if it is truly empty:
 
-MISSION: the user's overall goal and intent, in the user's own words where possible.
-TASK & PLAN: what is being worked on right now, and the chosen approach/strategy — how the agent intended to proceed (steps, sequencing, key design decisions).
+KEY FACTS: every concrete fact, value, or instruction the user stated or asked to be remembered — codewords, credentials, identifiers, names, numbers, dates, URLs, file paths, exact values, requirements, preferences, decisions, agreements, and explicit constraints — recorded VERBATIM. This is the MOST IMPORTANT section and is MANDATORY: never drop, paraphrase away, generalise, or compress these, and NEVER dismiss a user-stated fact as "filler", "no task", or irrelevant, even if the rest of the session is idle chatter or test content. If the user said "remember X" or gave any specific value, it goes here verbatim.
+MISSION: the user's overall goal and intent in their own words, AND their most recent request / what they want next.
+TASK & PLAN: what is being worked on right now, the chosen approach/strategy, the steps and sequencing, and the key design decisions and why.
 PROGRESS: what has been done, what now works, and the key decisions made and WHY.
-FILES & ARTIFACTS: files or resources created/modified and their role.
-OPEN ITEMS: what remains, blockers, and the immediate next step.
+FILES & ARTIFACTS: files or resources created/modified, their role, and any important paths or contents.
+OPEN ITEMS: what remains, blockers, unanswered questions, and the immediate next step.
 PITFALLS: errors hit and how they were fixed, hard constraints, and things to avoid.
 
-LENGTH BUDGET: keep the ENTIRE handoff under about %d words so it is COMPLETE and never cut off mid-sentence. Be concise. If you cannot fit everything, shorten PROGRESS/FILES/PITFALLS first and always keep MISSION, OPEN ITEMS and the immediate next step intact — they matter most for resuming.
+LENGTH BUDGET: aim to keep the handoff under about %d words so it is COMPLETE and never cut off mid-sentence. If everything does not fit, compress WORDING — never drop information: tighten PROGRESS/FILES/PITFALLS phrasing first, but ALWAYS keep KEY FACTS complete and verbatim, plus MISSION, OPEN ITEMS and the immediate next step.
 
-Preserve concrete specifics: names, paths, identifiers, numbers, exact user requirements and wording. Invent nothing that is not in the conversation. If the input begins with a prior recap, MERGE it with the newer messages into one up-to-date handoff — do not just append. No preamble, no sign-off — output only the sections.`, words)
+Preserve concrete specifics: names, paths, identifiers, numbers, exact user requirements and wording. Invent nothing that is not in the conversation. If the input begins with a prior recap, MERGE it with the newer messages into one up-to-date handoff — do not just append, and carry EVERY prior KEY FACT and open item forward UNCHANGED (re-summarising must never lose a fact an earlier pass kept). No preamble, no sign-off — output only the sections.`, words)
 }
 
 // llmSummarizer calls the summary brain to recap a dropped slice. It
@@ -441,20 +520,113 @@ func (s *llmSummarizer) Summarize(ctx context.Context, dropped []sessionstore.Me
 	return resp.Content, nil
 }
 
-// renderTranscript flattens messages into "role: text" lines.
+// renderTranscript flattens messages for the summary brain (CTX-8 Phase 3).
+// Beyond plain text it describes the actual WORK done — which tools were called
+// (name + arg summary) and what they returned (named via the call id, with any
+// error) — so the handoff captures decisions and outcomes, not just chatter.
+// Big tool outputs are clipped so the summariser input stays bounded.
 func renderTranscript(msgs []sessionstore.Message) string {
+	// call id → tool name, so a result can name the tool that produced it.
+	names := map[string]string{}
+	for i := range msgs {
+		for _, p := range msgs[i].Parts {
+			if p.Type == sessionstore.PartTypeToolCall && p.ToolCall != nil && p.ToolCall.ID != "" {
+				names[p.ToolCall.ID] = p.ToolCall.Name
+			}
+		}
+	}
 	var b strings.Builder
 	for i := range msgs {
-		txt := strings.TrimSpace(plainText(msgs[i]))
-		if txt == "" {
-			continue
+		if line := transcriptLine(msgs[i], names); line != "" {
+			b.WriteString(line)
+			b.WriteByte('\n')
 		}
-		b.WriteString(msgs[i].Role)
-		b.WriteString(": ")
-		b.WriteString(txt)
-		b.WriteByte('\n')
 	}
 	return b.String()
+}
+
+func transcriptLine(m sessionstore.Message, names map[string]string) string {
+	if res := toolResultOf(m); res != nil {
+		var b strings.Builder
+		b.WriteString("tool")
+		if n := names[res.ToolCallID]; n != "" {
+			b.WriteString(" ")
+			b.WriteString(n)
+		}
+		b.WriteString(" result: ")
+		if res.Error != "" {
+			b.WriteString("[ERROR] ")
+			b.WriteString(clipStr(res.Error, 300))
+			b.WriteString(" ")
+		}
+		b.WriteString(clipStr(strings.TrimSpace(plainText(m)), 2000))
+		return strings.TrimSpace(b.String())
+	}
+	txt := strings.TrimSpace(plainText(m))
+	calls := toolCallLines(m)
+	if txt == "" && len(calls) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(m.Role)
+	b.WriteString(": ")
+	b.WriteString(txt)
+	for _, c := range calls {
+		b.WriteString("\n  → called ")
+		b.WriteString(c)
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func toolResultOf(m sessionstore.Message) *sessionstore.ToolResultSpec {
+	for _, p := range m.Parts {
+		if p.Type == sessionstore.PartTypeToolResult && p.ToolResult != nil {
+			return p.ToolResult
+		}
+	}
+	return nil
+}
+
+func toolCallLines(m sessionstore.Message) []string {
+	var out []string
+	for _, p := range m.Parts {
+		if p.Type == sessionstore.PartTypeToolCall && p.ToolCall != nil && p.ToolCall.Name != "" {
+			out = append(out, p.ToolCall.Name+"("+argsSummary(p.ToolCall.Args)+")")
+		}
+	}
+	return out
+}
+
+func argsSummary(args map[string]any) string {
+	if len(args) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(args))
+	for k := range args {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	for i, k := range keys {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(k)
+		b.WriteString("=")
+		b.WriteString(clipStr(fmt.Sprintf("%v", args[k]), 80))
+	}
+	return clipStr(b.String(), 300)
+}
+
+func clipStr(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	cut := max
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "…"
 }
 
 func plainText(m sessionstore.Message) string {

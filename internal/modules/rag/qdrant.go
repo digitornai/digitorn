@@ -84,6 +84,18 @@ func (q *qdrantBackend) CountKB(ctx context.Context, kb string) (int, error) {
 	return int(n), nil
 }
 
+func (q *qdrantBackend) KBInfo(ctx context.Context, kb string) (KBStats, error) {
+	info, err := q.cli.GetCollectionInfo(ctx, kb)
+	if err != nil || info == nil {
+		return KBStats{Exists: false}, nil
+	}
+	return KBStats{
+		Exists: true,
+		Dim:    int(info.GetConfig().GetParams().GetVectorsConfig().GetParams().GetSize()),
+		Count:  int(info.GetPointsCount()),
+	}, nil
+}
+
 func (q *qdrantBackend) Upsert(ctx context.Context, kb string, docs []Document) error {
 	points := make([]*qdrant.PointStruct, len(docs))
 	for i, d := range docs {
@@ -291,7 +303,11 @@ func newBackend(cfg Config) (VectorBackend, error) {
 	switch strings.ToLower(strings.TrimSpace(cfg.Backend.Type)) {
 	case "", "qdrant":
 		return newQdrantBackend(cfg.Backend)
+	case "pgvector", "postgres", "postgresql", "pg":
+		return newPgvectorBackend(cfg.Backend)
+	case "elasticsearch", "elastic", "es":
+		return newElasticBackend(cfg.Backend)
 	default:
-		return nil, fmt.Errorf("rag: backend %q not supported yet (qdrant only in this phase)", cfg.Backend.Type)
+		return nil, fmt.Errorf("rag: backend %q not supported (have: qdrant, pgvector, elasticsearch)", cfg.Backend.Type)
 	}
 }

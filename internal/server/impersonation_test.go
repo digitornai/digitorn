@@ -18,6 +18,7 @@ func TestCallerCanImpersonate(t *testing.T) {
 		{"empty", &VerifierClaims{UserID: "svc"}, false},
 		{"perm", &VerifierClaims{Permissions: []string{"read", permImpersonate}}, true},
 		{"role", &VerifierClaims{Roles: []string{"user", roleService}}, true},
+		{"wildcard perm", &VerifierClaims{Permissions: []string{permWildcard}}, true},
 		{"other only", &VerifierClaims{Permissions: []string{"read"}, Roles: []string{"user"}}, false},
 	}
 	for _, tc := range cases {
@@ -65,6 +66,13 @@ func TestActAsMiddleware_StrictRequiresGrant(t *testing.T) {
 	}
 	if code, _, _ := runActAs(t, d, "bob", "svc", &VerifierClaims{UserID: "svc"}); code != http.StatusForbidden {
 		t.Fatalf("ungranted impersonation must be 403, got %d", code)
+	}
+	// A superuser token (perms:["*"], as the daemon issues to admins) impersonates :
+	// this is the real background-service path — the bg presents such a token and the
+	// wake runs AS the end-user. Before the wildcard fix this was a wrongful 403.
+	star := &VerifierClaims{UserID: "svc", Permissions: []string{permWildcard}}
+	if code, user, actor := runActAs(t, d, "bob", "svc", star); code != 200 || user != "bob" || actor != "svc" {
+		t.Fatalf("wildcard impersonation: code=%d user=%q actor=%q (want 200/bob/svc)", code, user, actor)
 	}
 }
 

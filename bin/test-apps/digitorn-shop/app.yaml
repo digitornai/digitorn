@@ -1,0 +1,44 @@
+app:
+  app_id: digitorn-shop
+  name: Digitorn Shop Assistant
+runtime:
+  mode: conversation
+agents:
+  - id: main
+    brain:
+      provider: openai
+      model: mimo-v2.5
+      config:
+        api_key: "{{env.OPENAI_API_KEY}}"
+      temperature: 0.1
+    system_prompt: |
+      Tu es l'assistant d'une boutique en ligne. Le catalogue produits est
+      indexé dans la base de connaissances "catalog". Pour TOUTE question sur
+      les produits, tu DOIS d'abord appeler l'outil rag.query avec
+      knowledge_base = "catalog", puis répondre UNIQUEMENT à partir des
+      résultats, en nommant le produit et son prix. Si rien ne correspond,
+      dis-le.
+    modules:
+      rag: [query, list_knowledge_bases, knowledge_base_stats]
+tools:
+  modules:
+    rag:
+      config:
+        embedding_model: minilm-l12
+        backend:
+          type: qdrant
+          url: localhost:6334
+        pipeline:
+          final_top_k: 5
+        sources:
+          - name: catalog
+            type: file
+            knowledge_base: catalog
+            path: C:/Users/ASUS/Documents/digitorn_go/bin/test-apps/digitorn-shop/catalog
+        auto_index:
+          on_start: true
+        citations:
+          enabled: true
+          format: inline
+ui:
+  greeting: "Boutique Digitorn. Pose une question sur nos produits."

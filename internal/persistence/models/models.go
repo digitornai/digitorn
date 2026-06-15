@@ -79,6 +79,22 @@ type OAuthState struct {
 
 func (OAuthState) TableName() string { return "oauth_state" }
 
+// OAuthClient is a client dynamically registered (RFC 7591) with one OAuth
+// authorization server, keyed by issuer. It is reused across users, apps and
+// daemon restarts so dynamic registration runs once per authorization server.
+// ClientSecret is sealed at rest (empty for public clients).
+type OAuthClient struct {
+	Issuer          string `gorm:"size:512;primaryKey"`
+	ClientID        string `gorm:"size:512;not null"`
+	ClientSecret    []byte `gorm:"type:text"`
+	RegistrationURI string `gorm:"size:512"`
+	Metadata        []byte `gorm:"type:text"`
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+}
+
+func (OAuthClient) TableName() string { return "oauth_clients" }
+
 // AuditLog records all sensitive actions for compliance.
 type AuditLog struct {
 	ID        uint64    `gorm:"primaryKey;autoIncrement"`
@@ -142,3 +158,48 @@ type UserSnippet struct {
 }
 
 func (UserSnippet) TableName() string { return "user_snippets" }
+
+// ManagedMCPServer is an MCP server a user installed once and reuses across
+// their apps (an app opts in by referencing the server id). It lives in the
+// daemon's metadata DB — NOT an app bundle — so it survives app upgrades and is
+// layered into an app's MCP config per user at runtime. The (user_id, server_id)
+// pair is unique : a user can't shadow their own server id, but two users hold
+// independent servers under the same id. Secrets (token / api-key VALUES) are
+// sealed at rest; Env holds only non-secret config (hosts, ports, flags).
+type ManagedMCPServer struct {
+	ID          string            `gorm:"size:64;primaryKey"`
+	UserID      string            `gorm:"size:128;not null;uniqueIndex:idx_mcpsrv_user_server,priority:1"`
+	ServerID    string            `gorm:"size:128;not null;uniqueIndex:idx_mcpsrv_user_server,priority:2"`
+	DisplayName string            `gorm:"size:200;not null;default:''"`
+	Source      string            `gorm:"size:32;not null;default:''"` // catalog | registry | custom
+	Transport   string            `gorm:"size:32;not null;default:'stdio'"`
+	Command     string            `gorm:"size:512"`
+	Args        []string          `gorm:"serializer:json"`
+	URL         string            `gorm:"size:1024"`
+	Env         map[string]string `gorm:"serializer:json"` // non-secret env (IMAP_HOST, ports, flags)
+	Secrets     []byte            `gorm:"type:text"`       // sealed JSON map[name]value (token / api-key values)
+	AuthType    string            `gorm:"size:32;not null;default:''"` // "" | oauth2 | token
+	Package     string            `gorm:"size:256"`
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+func (ManagedMCPServer) TableName() string { return "managed_mcp_servers" }
+
+// InstalledPiece is a per-user Activepieces connector with its sealed
+// credentials. The (user_id, piece_name) pair is unique — one credential set
+// per piece per user, shared across all apps the user uses the piece in.
+// SealedAuth stores the JSON-marshalled credential map, sealed with mcpoauth.Sealer.
+type InstalledPiece struct {
+	ID         uint      `gorm:"primaryKey;autoIncrement"`
+	UserID     string    `gorm:"size:128;not null;uniqueIndex:idx_installed_piece_user_name,priority:1"`
+	PieceName  string    `gorm:"size:128;not null;uniqueIndex:idx_installed_piece_user_name,priority:2"`
+	Version    string    `gorm:"size:64;not null;default:''"`
+	AuthType   string    `gorm:"size:32;not null;default:'none'"` // secret_text|custom|oauth2|basic|none
+	SealedAuth []byte    `gorm:"type:text"`
+	Enabled    bool      `gorm:"not null;default:true"`
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+}
+
+func (InstalledPiece) TableName() string { return "installed_pieces" }

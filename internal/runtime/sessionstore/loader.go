@@ -165,6 +165,7 @@ func hydrateFromSnapshot(s *SessionState, snap *SessionSnapshot) {
 	s.Errors = append(s.Errors[:0], snap.Errors...)
 	s.Compactions = append(s.Compactions[:0], snap.Compactions...)
 	s.ContextCompaction = cloneContextCompaction(snap.ContextCompaction)
+	s.PreparedSummary = clonePreparedSummary(snap.PreparedSummary)
 	// The snapshot carries the FULL transcript (lossless), but the live in-memory
 	// window must load bounded to the model's view : if a context compaction had
 	// already happened, drop the pre-cutoff messages here. Post-snapshot
