@@ -39,9 +39,21 @@ func NewManager(st *store.Store, reg *adapter.Registry) *Manager {
 	return &Manager{store: st, registry: reg, routes: map[string]route{}}
 }
 
-// Arm persists a trigger (idempotent on id) and registers its provider→trigger
-// route so inbound events from that provider land on the right activation.
+// Arm persists a channel trigger (idempotent on id) and registers its
+// provider→trigger route so inbound events from that provider land on the right
+// activation.
 func (m *Manager) Arm(ctx context.Context, spec TriggerSpec) (string, error) {
+	return m.arm(ctx, spec, "channel")
+}
+
+// ArmSchedule arms a user-programmed session wake-up: same persist + route as a
+// channel trigger, but marked Kind="schedule" so the ops surface lists/manages it
+// separately. The spec's Activation binds the session to wake (Session/Owner).
+func (m *Manager) ArmSchedule(ctx context.Context, spec TriggerSpec) (string, error) {
+	return m.arm(ctx, spec, "schedule")
+}
+
+func (m *Manager) arm(ctx context.Context, spec TriggerSpec, kind string) (string, error) {
 	cfg, err := json.Marshal(spec)
 	if err != nil {
 		return "", err
@@ -53,6 +65,7 @@ func (m *Manager) Arm(ctx context.Context, spec TriggerSpec) (string, error) {
 		Adapter:    spec.Adapter,
 		ConfigJSON: string(cfg),
 		Enabled:    true,
+		Kind:       kind,
 	}
 	if err := m.store.UpsertTrigger(ctx, tr); err != nil {
 		return "", err

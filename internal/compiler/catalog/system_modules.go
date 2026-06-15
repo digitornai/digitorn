@@ -220,11 +220,42 @@ func systemModuleManifests() []module.Manifest {
 				low("get_tool", "Fetch one tool's full schema."),
 				low("execute_tool", "Execute a discovered tool by name."),
 				low("run_parallel", "Run several tool calls concurrently."),
-				low("background_run", "Launch / manage a background task."),
+				low("background_run",
+					"Launch / monitor / cancel a background task. Five modes: "+
+						"(1) LAUNCH: {name, params, settle_seconds?} → returns {task_id, settled?}; "+
+						"(2) STATUS: {task_id, tail_lines?} → returns {state, log, log_lines, result?, error?}; "+
+						"(3) WAIT: {task_id, wait:true, timeout?, tail_lines?} → blocks until done; "+
+						"(4) LIST: {list_tasks:true} → all tasks for this session; "+
+						"(5) CANCEL: {task_id, cancel:true} → kill the task tree. "+
+						"The `log` field is the LIVE TAIL of the task's stdout+stderr (sliced to the last `tail_lines` lines, default 100; pass tail_lines:0 to get the full 64KB window). Use it to spot startup errors, watch a build progress, or confirm a server is serving. The `log_lines` field tells you how many lines you got back.",
+					strOpt("name", "Tool to launch in the background (launch mode only)."),
+					tool.ParamSpec{Name: "params", Type: "object", Description: "Args for the launched tool (launch mode)."},
+					strOpt("task_id", "Task id returned by an earlier launch (status / wait / cancel)."),
+					boolp("list_tasks", "List every task in this session."),
+					boolp("wait", "Block until the task finishes (combine with task_id)."),
+					boolp("cancel", "Kill the task tree (combine with task_id)."),
+					tool.ParamSpec{Name: "timeout", Type: "number", Description: "Seconds to wait when wait:true (0 = no timeout)."},
+					tool.ParamSpec{Name: "settle_seconds", Type: "number", Description: "On launch, hold for N seconds to catch fast-failing startup. 0 disables. Default ~2s."},
+					tool.ParamSpec{Name: "tail_lines", Type: "integer", Description: "Last N lines of live output to return on status / wait. Default 100; 0 = full 64KB window."},
+				),
 				low("use_skill", "Load a /command skill's instructions."),
 				low("call_app", "Invoke another deployed app as a sub-tool."),
 				askUser,
 			},
+		},
+		{
+			// channels is a BACKGROUND-only module : the background service (not
+			// the daemon) reads tools.modules.channels.config from the installed
+			// bundle to arm inbound adapters (webhook / cron / telegram / discord /
+			// …) AND declarative schedules (a cron provider whose activation carries
+			// message + reports + input attachments + owner). The daemon runs the
+			// woken turns but loads no "channels" module — yet an app must be able
+			// to DECLARE its background config in the SAME app.yaml. Seeding it here
+			// (tool-less, config opaque) lets that declaration validate at compile
+			// time, so one file declares the agent AND its background schedules.
+			ID:          "channels",
+			Version:     "1.0.0",
+			Description: "Background channels & schedules (inbound adapters + declarative cron with message/reports/attachments) — read by the background service.",
 		},
 	}
 }

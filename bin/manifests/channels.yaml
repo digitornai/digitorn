@@ -1,0 +1,16 @@
+id: channels
+version: 1.0.0
+description: Multi-provider outbound channels (webhook, Slack, Gmail, Discord, voice...).
+config_schema:
+  providers: { type: object }
+tools:
+  - { name: send, description: Send a message via a configured channel., risk_level: medium, params: [{name: provider, type: string, required: true}, {name: target, type: string}, {name: body, type: string, required: true}] }
+  - { name: send_message, description: Alias for send., risk_level: medium, params: [{name: provider, type: string, required: true}, {name: body, type: string, required: true}] }
+  - { name: broadcast, description: Send to multiple targets., risk_level: medium, params: [{name: provider, type: string, required: true}, {name: targets, type: array, required: true}, {name: body, type: string, required: true}] }
+  - { name: list_providers, description: List configured providers., risk_level: low, params: [] }
+  - { name: test, description: Test a channel provider., risk_level: low, params: [{name: provider, type: string, required: true}] }
+  - { name: stats, description: Per-provider statistics., risk_level: low, params: [{name: provider, type: string}] }
+  - { name: pause_provider, description: Pause a provider., risk_level: medium, params: [{name: provider, type: string, required: true}] }
+  - { name: resume_provider, description: Resume a paused provider., risk_level: medium, params: [{name: provider, type: string, required: true}] }
+  - { name: simulate_event, description: Simulate an inbound event., risk_level: low, params: [{name: provider, type: string, required: true}, {name: payload, type: object}] }
+  - { name: provider_history, description: Fetch recent events for a provider., risk_level: low, params: [{name: provider, type: string, required: true}, {name: limit, type: integer}] }

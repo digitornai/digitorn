@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/mbathepaul/digitorn/internal/codeast"
 )
 
 // graphStats summarises a built graph : how many files carry definitions,
@@ -38,7 +40,7 @@ func dirStats(root string, maxBytes int64) (files int, bytes int64) {
 			}
 			return nil
 		}
-		if _, ok := langForExt(filepath.Ext(path)); !ok {
+		if !codeast.Supported(filepath.Ext(path)) {
 			return nil
 		}
 		info, e := d.Info()

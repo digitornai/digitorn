@@ -31,9 +31,10 @@ func TestBuildSummarizerPrompt_StatesScaledBudget(t *testing.T) {
 func TestBuildSummarizerPrompt_KeepsStructureAndPriority(t *testing.T) {
 	p := buildSummarizerPrompt(2048)
 	for _, want := range []string{
-		"MISSION:", "TASK & PLAN:", "PROGRESS:", "FILES & ARTIFACTS:", "OPEN ITEMS:", "PITFALLS:",
+		"KEY FACTS:", "MISSION:", "TASK & PLAN:", "PROGRESS:", "FILES & ARTIFACTS:", "OPEN ITEMS:", "PITFALLS:",
 		"LENGTH BUDGET:", "never cut off mid-sentence",
-		"always keep MISSION, OPEN ITEMS and the immediate next step",
+		"VERBATIM",
+		"MISSION, OPEN ITEMS and the immediate next step",
 		"MERGE it with the newer messages",
 	} {
 		if !strings.Contains(p, want) {

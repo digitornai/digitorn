@@ -74,6 +74,7 @@ type resolvedAuth struct {
 	TokenAuthMethod string
 	ExtraAuthorize  map[string]string
 	EnvTokenVar     string
+	Resource        string
 }
 
 // resolveAuth applies the §5.3 merge: table fills empty URLs; PKCE override fires
@@ -97,6 +98,7 @@ func resolveAuth(cfg *schema.MCPAuthConfig) resolvedAuth {
 		TokenAuthMethod: cfg.TokenAuthMethod,
 		EnvTokenVar:     cfg.EnvTokenVar,
 		ExtraAuthorize:  stringMap(cfg.ExtraParams),
+		Resource:        cfg.Resource,
 	}
 	if ra.TokenAuthMethod == "" {
 		ra.TokenAuthMethod = "body"
@@ -168,6 +170,11 @@ func buildAuthorizeURL(ra resolvedAuth, state, codeChallenge string) string {
 		params.Set("code_challenge", codeChallenge)
 		params.Set("code_challenge_method", "S256")
 	}
+	// RFC 8707 resource indicator — binds the issued token to the MCP server, as
+	// the MCP authorization spec requires (without it the server 401s the token).
+	if ra.Resource != "" {
+		params.Set("resource", ra.Resource)
+	}
 	for k, v := range ra.ExtraAuthorize {
 		params.Set(k, v)
 	}
@@ -192,14 +199,21 @@ func (f *Flow) exchange(ctx context.Context, ra resolvedAuth, code, redirectURI,
 	if verifier != "" {
 		body["code_verifier"] = verifier
 	}
+	if ra.Resource != "" {
+		body["resource"] = ra.Resource
+	}
 	return f.postToken(ctx, ra, body)
 }
 
 func (f *Flow) refresh(ctx context.Context, ra resolvedAuth, refreshToken string) (*Token, error) {
-	return f.postToken(ctx, ra, map[string]string{
+	body := map[string]string{
 		"grant_type":    "refresh_token",
 		"refresh_token": refreshToken,
-	})
+	}
+	if ra.Resource != "" {
+		body["resource"] = ra.Resource
+	}
+	return f.postToken(ctx, ra, body)
 }
 
 // refreshIfNeeded refreshes within a 300s buffer of expiry. On any failure it
@@ -277,7 +291,12 @@ func (f *Flow) postToken(ctx context.Context, ra resolvedAuth, body map[string]s
 			form.Set(k, v)
 		}
 		form.Set("client_id", ra.ClientID)
-		form.Set("client_secret", ra.ClientSecret)
+		// Omit an empty client_secret: a dynamically-registered public client
+		// authenticates with PKCE only, and some token endpoints reject a blank
+		// client_secret parameter.
+		if ra.ClientSecret != "" {
+			form.Set("client_secret", ra.ClientSecret)
+		}
 		req, err = http.NewRequestWithContext(ctx, http.MethodPost, ra.TokenURL, strings.NewReader(form.Encode()))
 		if err != nil {
 			return nil, err

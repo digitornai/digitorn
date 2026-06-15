@@ -1,0 +1,12 @@
+id: context_builder
+version: 1.0.0
+description: Meta-tools for discovery and adaptive tool injection.
+tools:
+  - { name: search_tools, description: Search tools by description., risk_level: low, params: [{name: query, type: string, required: true}] }
+  - { name: get_tool, description: Fetch a tool's schema., risk_level: low, params: [{name: name, type: string, required: true}] }
+  - { name: execute_tool, description: Execute a tool by name., risk_level: medium, params: [{name: name, type: string, required: true}, {name: params, type: object}] }
+  - { name: list_categories, description: List tool categories., risk_level: low, params: [] }
+  - { name: browse_category, description: List tools in a category., risk_level: low, params: [{name: category, type: string, required: true}] }
+  - { name: ask_user, description: Pause and ask the user a question., risk_level: low, params: [{name: question, type: string, required: true}] }
+  - { name: use_skill, description: Activate a skill for the next turn., risk_level: low, params: [{name: command, type: string, required: true}] }
+  - { name: call_app, description: Invoke another Digitorn app., risk_level: medium, params: [{name: app_id, type: string, required: true}, {name: input, type: string}] }

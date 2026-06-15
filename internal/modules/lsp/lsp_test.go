@@ -49,8 +49,12 @@ func TestPathToURI(t *testing.T) {
 			t.Errorf("windows uri = %q", got)
 		}
 	}
-	if cacheKey("file:///A") == cacheKey("file:///a") && runtime.GOOS != "windows" {
-		t.Error("cacheKey should be case-sensitive off Windows")
+	// cacheKey folds case on case-insensitive filesystems (Windows, macOS) and
+	// preserves it on case-sensitive ones (Linux ext4/xfs/btrfs/zfs).
+	caseInsensitive := runtime.GOOS == "windows" || runtime.GOOS == "darwin"
+	folded := cacheKey("file:///A") == cacheKey("file:///a")
+	if folded != caseInsensitive {
+		t.Errorf("cacheKey case-folding on %s: got folded=%v, want %v", runtime.GOOS, folded, caseInsensitive)
 	}
 }
 

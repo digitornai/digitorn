@@ -1,6 +1,10 @@
 package lsp
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"strings"
+	"unicode/utf8"
+)
 
 // LSP wire types (the diagnostics subset). Positions are 0-based per the spec.
 
@@ -83,4 +87,58 @@ func jsonString(raw json.RawMessage) (string, error) {
 	var s string
 	err := json.Unmarshal(raw, &s)
 	return s, err
+}
+
+// toDiagnosticsBytes is the production conversion: it normalizes diagnostic
+// columns to BYTES regardless of the position encoding the server uses.
+//
+//   - server speaks "utf-8" → columns are already byte offsets; no conversion.
+//   - server speaks "utf-16" (LSP default) → columns are UTF-16 code units; we
+//     walk the file content to map them to byte offsets so a diagnostic past an
+//     emoji or a surrogate pair points at the right byte, not a few units off.
+//
+// When content is empty (we never received it for this file), we fall back to
+// the raw value — better an approximate column than no diagnostic at all.
+func toDiagnosticsBytes(file string, raw []lspDiagnostic, content, encoding string) []Diagnostic {
+	out := toDiagnostics(file, raw)
+	if encoding == "utf-8" || content == "" {
+		return out
+	}
+	lines := strings.Split(content, "\n")
+	for i := range out {
+		if i >= len(raw) {
+			break
+		}
+		line0 := raw[i].Range.Start.Line
+		if line0 < 0 || line0 >= len(lines) {
+			continue
+		}
+		utf16Col := raw[i].Range.Start.Character
+		out[i].Column = utf16ColumnToByteColumn(lines[line0], utf16Col) + 1
+	}
+	return out
+}
+
+// utf16ColumnToByteColumn maps a UTF-16 code-unit offset within one line to a
+// byte offset within the same line. Required because LSP's default position
+// encoding measures Character in UTF-16 code units (a surrogate pair = 2 units
+// = 4 bytes), but downstream consumers want bytes.
+func utf16ColumnToByteColumn(line string, utf16Col int) int {
+	if utf16Col <= 0 {
+		return 0
+	}
+	byteOffset := 0
+	utf16Count := 0
+	for _, r := range line {
+		if utf16Count >= utf16Col {
+			break
+		}
+		size := 1
+		if r > 0xFFFF {
+			size = 2 // outside the BMP → surrogate pair in UTF-16
+		}
+		utf16Count += size
+		byteOffset += utf8.RuneLen(r)
+	}
+	return byteOffset
 }

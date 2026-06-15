@@ -23,6 +23,10 @@ type Config struct {
 	LeaseTTL time.Duration
 
 	// For BG-3 (the daemon client): how to reach the daemon + the service identity.
+	// ServiceJWT must be a dedicated SERVICE token (role "service" or permission
+	// "sessions:impersonate") so the daemon authorises waking a session AS its
+	// end-user (X-Act-As-User) — never a human/admin token. A mis-scoped token is
+	// flagged at boot (CanImpersonate) and 403s every user-owned wake.
 	DaemonURL  string
 	ServiceJWT string
 
@@ -30,6 +34,11 @@ type Config struct {
 	// re-scan them to pick up installs / channel-config changes.
 	AppsDir   string
 	RescanSec int
+
+	// OpsToken, when set, is required as a Bearer credential on every /ops route
+	// (the management + observability API). Empty → /ops is open, matching the
+	// existing localhost /stats surface; set it for a network-reachable deployment.
+	OpsToken string
 }
 
 // FromEnv builds a Config from DIGITORN_BG_* env vars with sane defaults.
@@ -44,6 +53,7 @@ func FromEnv() Config {
 		ServiceJWT: os.Getenv("DIGITORN_BG_SERVICE_JWT"),
 		AppsDir:    env("DIGITORN_BG_APPS_DIR", defaultAppsDir()),
 		RescanSec:  envInt("DIGITORN_BG_RESCAN_SEC", 60),
+		OpsToken:   os.Getenv("DIGITORN_BG_OPS_TOKEN"),
 	}
 }
 

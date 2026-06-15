@@ -26,10 +26,13 @@ type Inbound interface {
 }
 
 // Setup is what the caller's build func returns: the job processor (built from
-// the freshly-opened store) and, optionally, the inbound side.
+// the freshly-opened store) and, optionally, the inbound side + a Rearm hook for
+// runtime trigger programming (POST /ops/triggers). Rearm needs access to the
+// adapters, which only the caller has, so it is injected here.
 type Setup struct {
 	Processor runner.Processor
 	Inbound   Inbound
+	Rearm     func(context.Context, CreateTriggerRequest) (store.Trigger, error)
 }
 
 // Service is the assembled background service: durable store + worker pool + an
@@ -43,6 +46,7 @@ type Service struct {
 	closeDB func() error
 	started time.Time
 	inbound Inbound
+	rearm   func(context.Context, CreateTriggerRequest) (store.Trigger, error)
 }
 
 // New opens the DB (SQLite or Postgres, by config), migrates, lets the caller
@@ -84,6 +88,7 @@ func New(cfg Config, build func(*store.Store) (Setup, error), log *slog.Logger) 
 		closeDB: closeDB,
 		started: time.Now(),
 		inbound: setup.Inbound,
+		rearm:   setup.Rearm,
 	}
 	s.httpd = &http.Server{Addr: cfg.HTTPAddr, Handler: s.mux(), ReadHeaderTimeout: 5 * time.Second}
 	return s, nil
@@ -131,8 +136,13 @@ func (s *Service) mux() http.Handler {
 			"uptime_sec": int(time.Since(s.started).Seconds()),
 		})
 	})
+	// Ops / admin API (management + observability over the durable store): list
+	// triggers/jobs/runs, per-trigger execution reports, enable/disable/replay.
+	// Purely additive — never touches YAML-driven discovery. Mounted under /ops
+	// (more specific than the catch-all), Bearer-gated when OpsToken is set.
+	m.Handle("/ops/", http.StripPrefix("/ops", opsRoutes(s.store, OpsConfig{Token: s.cfg.OpsToken, Rearm: s.rearm})))
 	// Inbound adapter HTTP routes (webhook). Mounted as the catch-all; the
-	// specific /healthz and /stats above take precedence (ServeMux longest-match).
+	// specific /healthz, /stats and /ops above take precedence (ServeMux longest-match).
 	if s.inbound != nil {
 		if h := s.inbound.Handler(); h != nil {
 			m.Handle("/", h)

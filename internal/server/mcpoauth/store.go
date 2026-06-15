@@ -81,6 +81,34 @@ func (s *Store) Set(ctx context.Context, userID, provider string, tok *Token) er
 	}).Create(&row).Error
 }
 
+// AnyForProvider returns ANY user's token for a provider (the most recently
+// updated), plus that user's id. It is used to CONNECT an OAuth server to LIST
+// its tools at materialization time — tool specs are user-independent, and each
+// user still needs their own token to INVOKE. Returns (nil, "", nil) when no user
+// has authorized this provider yet.
+func (s *Store) AnyForProvider(ctx context.Context, provider string) (*Token, string, error) {
+	var row models.Credential
+	err := s.db.WithContext(ctx).
+		Where("provider = ?", provider).
+		Order("updated_at DESC").
+		First(&row).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, "", nil
+	}
+	if err != nil {
+		return nil, "", err
+	}
+	plain, err := s.sealer.Open(string(row.Fields))
+	if err != nil {
+		return nil, "", err
+	}
+	var tok Token
+	if err := json.Unmarshal(plain, &tok); err != nil {
+		return nil, "", err
+	}
+	return &tok, row.UserID, nil
+}
+
 // Delete removes ONLY the (userID, provider) token (never other users' rows).
 func (s *Store) Delete(ctx context.Context, userID, provider string) error {
 	return s.db.WithContext(ctx).

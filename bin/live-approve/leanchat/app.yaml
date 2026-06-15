@@ -1,0 +1,22 @@
+schema_version: 2
+
+app:
+  app_id: leanchat
+  name: Lean Chat
+  version: "0.1.0"
+  description: "Minimal kimi chat, no tools — fits the model budget so turns reliably produce a reply."
+  author: "live-test@digitorn.local"
+  category: "coding"
+
+agents:
+  - id: main
+    role: worker
+    brain:
+      provider: openai
+      model: moonshotai/Kimi-K2.6
+      temperature: 0.3
+      max_tokens: 256
+      config:
+        api_key: "{{env.OPENAI_API_KEY}}"
+    system_prompt: |
+      Tu es un assistant concis. Réponds brièvement, en une ou deux phrases.

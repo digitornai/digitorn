@@ -1,0 +1,98 @@
+name: Deploy daemon to Hetzner
+
+# Build the Go daemon + workers as static linux/amd64 binaries, ship them to the
+# box, and cut over from the legacy Python daemon. Runs on every push to main;
+# skips changes that cannot affect the running daemon.
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'examples/**'
+      - 'clients/**'
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-prod-go
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: build + ship + cut over
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build static linux/amd64 bundle
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 make dist
+
+      - name: Sanity - required secrets are set
+        env:
+          HOST: ${{ secrets.HETZNER_HOST }}
+          USER: ${{ secrets.HETZNER_USER }}
+          KEY:  ${{ secrets.HETZNER_SSH_KEY }}
+        run: |
+          missing=()
+          [ -z "$HOST" ] && missing+=("HETZNER_HOST")
+          [ -z "$USER" ] && missing+=("HETZNER_USER")
+          [ -z "$KEY" ]  && missing+=("HETZNER_SSH_KEY")
+          if [ ${#missing[@]} -ne 0 ]; then
+            echo "::error::Missing repo secrets: ${missing[*]}"
+            exit 1
+          fi
+
+      - name: Load SSH key into the agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.HETZNER_SSH_KEY }}
+
+      - name: Trust the box's host key
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          ssh-keyscan -H "${{ secrets.HETZNER_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Ship the release + scripts to the box
+        env:
+          HOST: ${{ secrets.HETZNER_HOST }}
+          USER: ${{ secrets.HETZNER_USER }}
+          SHA:  ${{ github.sha }}
+        run: |
+          REL="/opt/digitorn-go/releases/$SHA"
+          BUNDLE="$(ls -d dist/digitorn-*/ | head -1)"   # make dist -> dist/digitorn-<version>/
+          test -x "${BUNDLE}digitornd" || { echo "::error::bundle missing digitornd"; exit 1; }
+          ssh -o BatchMode=yes "$USER@$HOST" "sudo mkdir -p '$REL'"
+          rsync -az --delete --rsync-path="sudo rsync" "$BUNDLE" "$USER@$HOST:$REL/"
+          rsync -az --rsync-path="sudo rsync" deploy/deploy.sh "$USER@$HOST:/opt/digitorn-go/deploy.sh"
+          rsync -az --rsync-path="sudo rsync" deploy/digitorn-go.service "$USER@$HOST:/etc/systemd/system/digitorn-go.service"
+          ssh -o BatchMode=yes "$USER@$HOST" "sudo chmod +x /opt/digitorn-go/deploy.sh"
+
+      - name: Activate the release (cut over + rollback on failure)
+        env:
+          HOST: ${{ secrets.HETZNER_HOST }}
+          USER: ${{ secrets.HETZNER_USER }}
+          SHA:  ${{ github.sha }}
+        run: |
+          ssh -o ConnectTimeout=10 -o BatchMode=yes "$USER@$HOST" \
+            "sudo /opt/digitorn-go/deploy.sh /opt/digitorn-go/releases/$SHA"
+
+      - name: Public health check (api.digitorn.ai through Caddy)
+        env:
+          DOMAIN: api.digitorn.ai
+        run: |
+          for i in $(seq 1 10); do
+            if curl -fsS --max-time 5 "https://$DOMAIN/health" | grep -q '"status":"ok"'; then
+              echo "✓ public health check passed"
+              exit 0
+            fi
+            [ "$i" -eq 10 ] && { echo "::error::public /health check failed"; exit 1; }
+            sleep 2
+          done

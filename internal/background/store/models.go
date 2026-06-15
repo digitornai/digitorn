@@ -35,9 +35,13 @@ type Trigger struct {
 	// Enabled has NO gorm default: a default would make GORM omit a false value
 	// on insert (the zero-value gotcha) and silently re-enable a disabled trigger.
 	// Callers (config discovery) set it explicitly when arming.
-	Enabled    bool `gorm:"not null;index"`
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
+	Enabled bool `gorm:"not null;index"`
+	// Kind separates an app channel listener ("channel", the default) from a
+	// user-programmed session wake-up ("schedule"). Schedules are listed/managed
+	// on a distinct ops surface and bind a specific session to wake.
+	Kind      string `gorm:"size:16;index"`
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 func (Trigger) TableName() string { return "bg_triggers" }
@@ -65,3 +69,30 @@ type Job struct {
 }
 
 func (Job) TableName() string { return "bg_jobs" }
+
+// Run is the durable execution report of ONE processing attempt of a job: the
+// "rapport d'exécution" the ops surface exposes. A retried job has several runs
+// (one per attempt), so the rows are the full per-attempt history. Recorded
+// best-effort after each Process call — never on the durable hot path, so a run
+// write failing can't fail the job. Outcome is the high-level verdict; SessionID,
+// reply preview and duration make the report actionable (which session ran, what
+// it answered, how long it took).
+type Run struct {
+	ID           string `gorm:"size:64;primaryKey"`
+	JobID        string `gorm:"size:64;index;not null"`
+	AppID        string `gorm:"size:128;index;not null"`
+	TriggerID    string `gorm:"size:64;index"`
+	Provider     string `gorm:"size:128"`
+	Adapter      string `gorm:"size:64"`
+	Attempt      int    `gorm:"not null"`
+	Outcome      string `gorm:"size:16;index"` // ok | failed | retrying | filtered | pushed
+	SessionID    string `gorm:"size:128;index"`
+	ReplyChars   int
+	ReplyPreview string    `gorm:"type:text"` // capped excerpt of the delivered reply
+	Error        string    `gorm:"type:text"`
+	StartedAt    time.Time `gorm:"index"`
+	EndedAt      time.Time
+	DurationMs   int64
+}
+
+func (Run) TableName() string { return "bg_runs" }

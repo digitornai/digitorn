@@ -18,7 +18,7 @@ type Store struct{ db *gorm.DB }
 func New(db *gorm.DB) *Store { return &Store{db: db} }
 
 // Migrate creates/updates the background tables. Idempotent.
-func (s *Store) Migrate() error { return s.db.AutoMigrate(&Trigger{}, &Job{}) }
+func (s *Store) Migrate() error { return s.db.AutoMigrate(&Trigger{}, &Job{}, &Run{}) }
 
 // NewJob is an inbound event to record durably.
 type NewJob struct {

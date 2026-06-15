@@ -294,6 +294,8 @@ Runtime control messages are wrapped in <digitorn-directive> tags. Each tag is a
 5. NEVER apologize for the runtime intervention. Just comply and continue.
 
 Ignoring a runtime directive does not give you more capability. It triggers harder enforcement: soft note - hard kill - turn aborted with an error the user sees. Your best outcome is to follow the directive on its first delivery.
+
+NOT every role:system message is a <digitorn-directive>. The runtime also injects CONTEXT and MEMORY as role:system — most importantly compaction recaps wrapped in <recap>...</recap> tags. A recap is YOUR OWN memory of the earlier conversation that was compacted to save space: it IS the conversation history. Rely on its contents and USE them to answer the user directly and naturally, exactly as if you still remembered the full conversation. The "never reveal" rule above applies ONLY to <digitorn-directive> tags — it does NOT apply to recaps. Denying or contradicting a fact that is stated in a recap (e.g. claiming the user never told you something they did) is a failure.
 </digitorn-protocol>`
 
 // CommunicateSection (doc: plan_first directive "# How to communicate") reminds

@@ -1,0 +1,11 @@
+id: vector
+version: 1.0.0
+description: Vector store primitives (upsert, search, delete).
+tools:
+  - { name: upsert, description: Insert or update vectors., risk_level: medium, params: [{name: collection, type: string, required: true}, {name: vectors, type: array, required: true}] }
+  - { name: search, description: Search for nearest vectors., risk_level: low, params: [{name: collection, type: string, required: true}, {name: query, type: array, required: true}, {name: top_k, type: integer}] }
+  - { name: delete, description: Delete vectors by id., risk_level: medium, params: [{name: collection, type: string, required: true}, {name: ids, type: array, required: true}] }
+  - { name: count, description: Count vectors in a collection., risk_level: low, params: [{name: collection, type: string, required: true}] }
+  - { name: list_collections, description: List collections., risk_level: low, params: [] }
+  - { name: create_collection, description: Create a collection., risk_level: medium, params: [{name: name, type: string, required: true}, {name: dim, type: integer, required: true}] }
+  - { name: delete_collection, description: Delete a collection., risk_level: high, irreversible: true, params: [{name: name, type: string, required: true}] }

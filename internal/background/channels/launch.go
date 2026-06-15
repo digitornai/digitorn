@@ -11,9 +11,12 @@ func (a Activation) ToLaunchSpec(appID string) daemonclient.LaunchSpec {
 	return daemonclient.LaunchSpec{
 		AppID:        appID,
 		SessionID:    a.Session,
+		OwnerUserID:  a.Owner,
 		Message:      a.Message,
 		EntryAgent:   a.Agent,
 		Context:      a.Context,
+		Model:        a.Model,
 		WaitForReply: a.Reply == ReplyAuto,
+		StreamReply:  a.Reply == ReplyStream,
 	}
 }

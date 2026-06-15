@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/mbathepaul/digitorn/internal/embeddings"
+	"github.com/mbathepaul/digitorn/internal/indexer"
 	"github.com/mbathepaul/digitorn/pkg/module"
 )
 
@@ -218,8 +219,6 @@ func TestRAG_E2E_ConfigSources(t *testing.T) {
 	cfg, _ := ParseConfig(map[string]any{
 		"embedding_model": "minilm-l12",
 		"backend":         map[string]any{"type": "qdrant", "url": url},
-		"sources":         []any{map[string]any{"type": "file", "path": dir, "knowledge_base": "cfgsrc"}},
-		"auto_index":      map[string]any{"on_start": true},
 	})
 	be, err := newBackend(cfg)
 	if err != nil {
@@ -229,9 +228,11 @@ func TestRAG_E2E_ConfigSources(t *testing.T) {
 	_ = be.DeleteKB(context.Background(), "cfgsrc")
 
 	eng := NewEngine(cfg, be, onnxEmbedder{mgr: mgr}, nil)
-	rep, err := eng.SyncAll(context.Background())
+	svc := indexer.NewService(nil, 2)
+	spec := fileSpec(SourceConfig{Type: "file", Path: dir, KnowledgeBase: "cfgsrc"}, AutoIndex{})
+	rep, err := svc.Sync(context.Background(), spec, ragSink{eng: eng})
 	if err != nil {
-		t.Fatalf("syncall: %v", err)
+		t.Fatalf("sync: %v", err)
 	}
 	if rep.Added != 2 {
 		t.Fatalf("sync report = %+v, want Added=2", rep)
@@ -244,6 +245,71 @@ func TestRAG_E2E_ConfigSources(t *testing.T) {
 		t.Fatalf("top hit = %+v, want deploy.md", hits)
 	}
 	_ = be.DeleteKB(context.Background(), "cfgsrc")
+}
+
+// ACL filter-first against REAL Qdrant in pure semantic mode : every hit
+// comes from Qdrant itself, so a clean result proves the owner filter is
+// enforced AT the vector layer, not post-filtered in Go. Two users ingest
+// the SAME (equally relevant) document into one KB ; each retrieves only
+// their own.
+func TestRAG_E2E_ACLIsolation(t *testing.T) {
+	url := os.Getenv("QDRANT_URL")
+	if url == "" {
+		t.Skip("set QDRANT_URL to run the ACL isolation E2E")
+	}
+	mgr := embeddings.NewManager("", embeddings.ModeONNX, false, nil)
+	defer mgr.Close()
+
+	m := New()
+	base := context.Background()
+	base = module.WithAppID(base, "e2e-acl")
+	base = module.WithEmbedder(base, onnxEmbedder{mgr: mgr})
+	base = module.WithModuleConfig(base, map[string]any{
+		"embedding_model": "minilm-l12",
+		"backend":         map[string]any{"type": "qdrant", "url": url},
+		"pipeline":        map[string]any{"retrieval": "semantic"},
+		"acl":             map[string]any{"enabled": true},
+	})
+	alice := module.WithUserID(base, "alice")
+	bob := module.WithUserID(base, "bob")
+
+	_, _ = m.deleteKB(alice, raw(`{"name":"acl"}`))
+
+	doc := "How to deploy an application to the production server, step by step."
+	if res, _ := m.ingest(alice, raw(`{"knowledge_base":"acl","source":"alice.md","text":`+jsonStr(doc+" alice copy")+`}`)); !res.Success {
+		t.Fatalf("alice ingest: %s", res.Error)
+	}
+	if res, _ := m.ingest(bob, raw(`{"knowledge_base":"acl","source":"bob.md","text":`+jsonStr(doc+" bob copy")+`}`)); !res.Success {
+		t.Fatalf("bob ingest: %s", res.Error)
+	}
+
+	q := `{"knowledge_base":"acl","query":"how to deploy an application to the server","top_k":10}`
+
+	aRes, _ := m.query(alice, raw(q))
+	aResults, _ := aRes.Data.(map[string]any)["results"].([]map[string]any)
+	if len(aResults) == 0 {
+		t.Fatal("alice retrieved nothing")
+	}
+	for _, r := range aResults {
+		if src, _ := r["source"].(string); src != "alice.md" {
+			t.Errorf("ACL LEAK (vector layer): alice retrieved %q", src)
+		}
+	}
+	t.Logf("alice sees %d chunk(s), all alice.md", len(aResults))
+
+	bRes, _ := m.query(bob, raw(q))
+	bResults, _ := bRes.Data.(map[string]any)["results"].([]map[string]any)
+	if len(bResults) == 0 {
+		t.Fatal("bob retrieved nothing")
+	}
+	for _, r := range bResults {
+		if src, _ := r["source"].(string); src != "bob.md" {
+			t.Errorf("ACL LEAK (vector layer): bob retrieved %q", src)
+		}
+	}
+	t.Logf("bob sees %d chunk(s), all bob.md", len(bResults))
+
+	_, _ = m.deleteKB(alice, raw(`{"name":"acl"}`))
 }
 
 func raw(s string) json.RawMessage { return json.RawMessage(s) }

@@ -25,6 +25,10 @@ const (
 	maxRoots    = 4
 	ttl         = 5 * time.Minute
 	budgetChars = 6000
+	// firstBuildWait bounds how long the FIRST repo-map build may block the turn
+	// that triggered it, so the opening turn gets the map instead of a blank. A
+	// repo that overruns it keeps building in the background and lands next turn.
+	firstBuildWait = 4 * time.Second
 )
 
 func pagerank(adj [][]int, iters int, damp float64) []float64 {
@@ -222,7 +226,7 @@ func Get(root string) string {
 	e.mu.Unlock()
 
 	if kick {
-		go func() {
+		build := func() {
 			defer func() {
 				recover()
 				e.mu.Lock()
@@ -236,7 +240,24 @@ func Get(root string) string {
 			e.dirty = false
 			e.builtAt = time.Now()
 			e.mu.Unlock()
-		}()
+		}
+		if out == "" {
+			// FIRST build, nothing cached yet : briefly WAIT so the very first turn
+			// gets the map instead of a blank (the turn that matters most for
+			// orientation). Bounded — a huge repo that overruns the wait just keeps
+			// building in the background and lands on the next turn, never hanging.
+			done := make(chan struct{})
+			go func() { build(); close(done) }()
+			select {
+			case <-done:
+			case <-time.After(firstBuildWait):
+			}
+			e.mu.Lock()
+			out = e.rendered
+			e.mu.Unlock()
+		} else {
+			go build() // stale refresh : serve the cached map now, refresh off-turn
+		}
 	}
 	return out
 }

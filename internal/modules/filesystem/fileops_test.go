@@ -62,11 +62,36 @@ func TestRead_DetectsBinaryImagePDF(t *testing.T) {
 	}
 }
 
-func TestRead_DirectoryIsError(t *testing.T) {
+func TestRead_DirectoryReturnsTree(t *testing.T) {
 	m, ws := setupFS(t)
 	writeFile(t, ws, "d/keep.txt", "x")
-	if _, err := m.read(context.Background(), mustJSON(map[string]any{"path": "d"})); err == nil {
-		t.Error("reading a directory must error")
+	writeFile(t, ws, "d/sub/deep.go", "package sub")
+	res, err := m.read(context.Background(), mustJSON(map[string]any{"path": "d"}))
+	if err != nil {
+		t.Fatalf("reading a directory must NOT error (it returns a tree): %v", err)
+	}
+	out, _ := res.Data.(string)
+	for _, want := range []string{"keep.txt", "sub/", "deep.go", "tree"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("directory tree missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestRead_DirectoryOutline(t *testing.T) {
+	m, ws := setupFS(t)
+	writeFile(t, ws, "a.go", "package a\n\nfunc Alpha() {}\ntype Bravo struct{}\n")
+	writeFile(t, ws, "sub/b.go", "package sub\n\nfunc Charlie() {}\n")
+	writeFile(t, ws, "data.bin", "\x00\x01\x02not text")
+	res, err := m.read(context.Background(), mustJSON(map[string]any{"path": ".", "outline": true}))
+	if err != nil {
+		t.Fatalf("outline of a directory must not error: %v", err)
+	}
+	out, _ := res.Data.(string)
+	for _, want := range []string{"a.go", "func Alpha", "type Bravo", "sub/b.go", "func Charlie"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("dir outline missing %q:\n%s", want, out)
+		}
 	}
 }
 

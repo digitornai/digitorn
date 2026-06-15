@@ -1,0 +1,52 @@
+schema_version: 2
+app:
+  app_id: mcp-multi-oauth
+  name: MCP Multi-Provider OAuth (by URL)
+  version: "0.1.0"
+  description: "Proves the generic zero-config OAuth flow works for ANY server: Sentry, Linear, Asana declared by URL only."
+  author: "paul@digitorn.ai"
+  category: "coding"
+
+agents:
+  - id: main
+    role: worker
+    max_tool_iterations: 8
+    brain:
+      provider: openai
+      model: mimo-v2.5
+      temperature: 0.1
+      max_tokens: 2048
+      config:
+        api_key: "{{env.OPENAI_API_KEY}}"
+      context:
+        max_tokens: 1000000
+    system_prompt: |
+      You are connected to several real SaaS tools via MCP servers. Their tools are
+      in your tool list. Use them exactly as listed. No emoji, no preamble.
+    modules:
+      - mcp
+
+tools:
+  modules:
+    mcp:
+      config:
+        servers:
+          sentry:
+            transport: streamable_http
+            url: https://mcp.sentry.dev/mcp
+            auth: { type: oauth2 }
+            sandbox: { permissions: [net.http] }
+          linear:
+            transport: streamable_http
+            url: https://mcp.linear.app/mcp
+            auth: { type: oauth2 }
+            sandbox: { permissions: [net.http] }
+          asana:
+            transport: streamable_http
+            url: https://mcp.asana.com/mcp
+            auth: { type: oauth2 }
+            sandbox: { permissions: [net.http] }
+  capabilities:
+    default_policy: auto
+    grant:
+      - module: mcp

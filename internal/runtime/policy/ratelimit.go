@@ -14,8 +14,13 @@ const rateWindow = 60 * time.Second
 // once a key's configured limit is reached. Concurrency-safe (the runtime
 // dispatches tool calls in parallel).
 //
-// Limit keys: an exact "module.action" FQN, or "*" for a default applied to
-// every key without an explicit entry. A limit <= 0 means unlimited.
+// Limit keys: an exact "module.action" FQN, a bare "module" (a MODULE-LEVEL
+// aggregate over every action of that module — how an MCP server's
+// rate_limit_rpm caps total calls to mcp_<server>), or "*" for a default
+// applied to every action key without an explicit entry. A limit <= 0 means
+// unlimited. A call must satisfy BOTH its module-level and its action-level
+// limit; a denial by either records nothing (so a blocked call never consumes
+// future budget).
 //
 // Stateful by design — this is why gate 6 lives in RunGates (runtime-only)
 // and not in the pure gateChain : it must NOT run at schema-build time, where
@@ -46,22 +51,15 @@ func NewRateLimiter(limits map[string]int) *RateLimiter {
 	}
 }
 
-// Check records an allowed call and returns "" when the action is within its
-// limit. When the action is over its limit it returns a non-empty reason and
-// does NOT record the call (so a denied call doesn't consume future budget).
+// Check records an allowed call and returns "" when the call is within BOTH its
+// module-level and action-level limit. When either is exceeded it returns a
+// non-empty reason and records NOTHING (so a denied call doesn't consume future
+// budget). A bare-"module" entry in limits is the aggregate cap over every
+// action of that module (e.g. an MCP server's rate_limit_rpm).
 func (r *RateLimiter) Check(module, action string) string {
 	if r == nil {
 		return ""
 	}
-	key := module + "." + action
-	limit, ok := r.limits[key]
-	if !ok {
-		limit = r.def
-	}
-	if limit <= 0 {
-		return ""
-	}
-
 	clock := r.now
 	if clock == nil {
 		clock = time.Now
@@ -69,9 +67,40 @@ func (r *RateLimiter) Check(module, action string) string {
 	now := clock()
 	cutoff := now.Add(-rateWindow)
 
+	aKey := module + "." + action
+	aLimit, ok := r.limits[aKey]
+	if !ok {
+		aLimit = r.def
+	}
+	mLimit := r.limits[module] // module-level: explicit only (no "*" default)
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	// Peek both windows BEFORE recording: deny without consuming budget.
+	if reason := r.peekLocked(module, mLimit, now, cutoff); reason != "" {
+		return reason
+	}
+	if reason := r.peekLocked(aKey, aLimit, now, cutoff); reason != "" {
+		return reason
+	}
+	// Both within limit → record both (only the ones that are actually limited).
+	if mLimit > 0 {
+		r.windows[module] = append(r.windows[module], now)
+	}
+	if aLimit > 0 {
+		r.windows[aKey] = append(r.windows[aKey], now)
+	}
+	return ""
+}
+
+// peekLocked trims the window for key and reports a deny reason if it is at/over
+// limit, WITHOUT recording the current call. limit <= 0 means unlimited (always
+// ""). The caller holds r.mu.
+func (r *RateLimiter) peekLocked(key string, limit int, now, cutoff time.Time) string {
+	if limit <= 0 {
+		return ""
+	}
 	w := r.windows[key]
 	drop := 0
 	for drop < len(w) && w[drop].Before(cutoff) {
@@ -80,15 +109,13 @@ func (r *RateLimiter) Check(module, action string) string {
 	if drop > 0 {
 		w = append(w[:0], w[drop:]...)
 	}
-
+	r.windows[key] = w
 	if len(w) >= limit {
-		r.windows[key] = w
 		wait := int(rateWindow.Seconds() - now.Sub(w[0]).Seconds())
 		if wait < 0 {
 			wait = 0
 		}
 		return fmt.Sprintf("rate limit exceeded for %q: %d calls/minute (wait ~%ds before retrying)", key, limit, wait)
 	}
-	r.windows[key] = append(w, now)
 	return ""
 }

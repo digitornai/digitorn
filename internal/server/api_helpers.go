@@ -141,6 +141,78 @@ func ClaimsOf(ctx context.Context) *VerifierClaims {
 	return v
 }
 
+// ── On-behalf-of impersonation ───────────────────────────────────────────────
+//
+// A trusted service (its JWT carrying permImpersonate or roleService) may create /
+// act on sessions on behalf of an end-user by presenting the X-Act-As-User header.
+// The daemon then treats the EFFECTIVE user as that end-user, so ALL existing
+// per-user isolation (ownership, listing, workdir, quota) applies to the real user
+// automatically — while the actor (the service) is recorded for audit. This is how
+// the background service launches per-end-user sessions without a per-user token.
+
+const (
+	permImpersonate = "sessions:impersonate"
+	permWildcard    = "*" // superuser : carries every permission, impersonation included
+	roleService     = "service"
+	actAsHeader     = "X-Act-As-User"
+)
+
+type actorKey struct{}
+
+func withActor(ctx context.Context, actor string) context.Context {
+	return context.WithValue(ctx, actorKey{}, actor)
+}
+
+// actorOf returns the real caller identity when the request impersonates another
+// user ("" otherwise).
+func actorOf(ctx context.Context) string {
+	v, _ := ctx.Value(actorKey{}).(string)
+	return v
+}
+
+// callerCanImpersonate reports whether the authenticated caller may act on behalf
+// of another user : it must carry the impersonation permission or the service role.
+func callerCanImpersonate(c *VerifierClaims) bool {
+	if c == nil {
+		return false
+	}
+	for _, p := range c.Permissions {
+		if p == permImpersonate || p == permWildcard {
+			return true
+		}
+	}
+	for _, r := range c.Roles {
+		if r == roleService {
+			return true
+		}
+	}
+	return false
+}
+
+// actAsMiddleware resolves trusted impersonation. When X-Act-As-User is present :
+//   - auth ON  : the caller MUST carry the impersonation grant, else 403.
+//   - auth OFF (dev) : honored unconditionally (no real identity to protect).
+//
+// On success the effective ctx user becomes the end-user and the original caller is
+// stashed as the actor. Absent header → untouched (byte-identical to before).
+func (d *Daemon) actAsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		actAs := strings.TrimSpace(r.Header.Get(actAsHeader))
+		if actAs == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		authOn := d.cfg != nil && d.cfg.Auth.Enabled
+		if authOn && !callerCanImpersonate(ClaimsOf(r.Context())) {
+			writeError(w, http.StatusForbidden, "forbidden", "impersonation not permitted for this caller")
+			return
+		}
+		ctx := withActor(r.Context(), userIDOf(r.Context()))
+		ctx = withUserID(ctx, actAs)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
 func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

@@ -118,23 +118,23 @@ tools:
 	servers, _ := schema.NormalizeServers(block.Config["servers"])
 	m := New()
 
-	st, ok := m.resolveServer("sequential_thinking", servers["sequential_thinking"], false)
+	st, ok := m.resolveServer(context.Background(), "sequential_thinking", servers["sequential_thinking"], false)
 	if !ok || st.Command != "npx" || st.Args[1] != "@modelcontextprotocol/server-sequential-thinking" {
 		t.Fatalf("sequential_thinking (bare npm) resolution: %+v ok=%v", st, ok)
 	}
-	gh, ok := m.resolveServer("github", servers["github"], false)
+	gh, ok := m.resolveServer(context.Background(), "github", servers["github"], false)
 	if !ok || gh.Env["GITHUB_PERSONAL_ACCESS_TOKEN"] != "ghp_example" {
 		t.Fatalf("github (shorthand) resolution: %+v ok=%v", gh, ok)
 	}
-	pg, ok := m.resolveServer("postgres", servers["postgres"], false)
+	pg, ok := m.resolveServer(context.Background(), "postgres", servers["postgres"], false)
 	if !ok || pg.Args[len(pg.Args)-1] != "postgresql://u:p@h:5432/db" {
 		t.Fatalf("postgres (arg-append) resolution: %+v ok=%v", pg, ok)
 	}
-	sm, ok := m.resolveServer("hosted", servers["hosted"], false)
+	sm, ok := m.resolveServer(context.Background(), "hosted", servers["hosted"], false)
 	if !ok || sm.Transport != "streamable_http" || sm.Headers["Authorization"] != "Bearer sk-smithery" {
 		t.Fatalf("hosted (smithery) resolution: %+v ok=%v", sm, ok)
 	}
-	lv, ok := m.resolveServer("live", servers["live"], false)
+	lv, ok := m.resolveServer(context.Background(), "live", servers["live"], false)
 	if !ok || lv.URL != liveURL {
 		t.Fatalf("live (explicit http) resolution: %+v ok=%v", lv, ok)
 	}

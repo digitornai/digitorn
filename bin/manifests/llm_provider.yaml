@@ -1,0 +1,11 @@
+id: llm_provider
+version: 1.0.0
+description: Abstraction over LLM providers (OpenAI, Anthropic, Ollama, ...).
+config_schema:
+  providers: { type: object }
+tools:
+  - { name: complete, description: Run a chat completion., risk_level: low, params: [{name: messages, type: array, required: true}, {name: model, type: string}] }
+  - { name: stream, description: Stream a chat completion., risk_level: low, params: [{name: messages, type: array, required: true}, {name: model, type: string}] }
+  - { name: embed, description: Generate embeddings., risk_level: low, params: [{name: input, type: string, required: true}, {name: model, type: string}] }
+  - { name: list_models, description: List available models., risk_level: low, params: [{name: provider, type: string}] }
+  - { name: list_providers, description: List configured providers., risk_level: low, params: [] }

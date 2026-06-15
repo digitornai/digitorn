@@ -35,10 +35,22 @@ type Activation struct {
 	// deterministic per-delivery id → idempotent retries, the durable fix over
 	// Python's random-uuid double-fire).
 	SessionStrategy string
+	Owner           string // end-user the session belongs to (resolved); "" = launcher owns it
 	Message         string
 	Context         string // extra system-prompt context (rendered)
+	Model           string // per-session model override for the entry agent; "" = app default
 	Reply           string // auto | none | explicit
 	ExposeData      bool
+	// Deliver is the resolved proactive-push destination (nil = reactive: reply to
+	// the inbound originator). When set, the processor delivers the result here.
+	Deliver *Destination
+}
+
+// Destination is a resolved, transport-agnostic channel address for delivery: the
+// adapter name + the transport handle (the same map an adapter's Send consumes).
+type Destination struct {
+	Adapter string
+	Ref     map[string]any
 }
 
 // PrepareInvoker runs a prepare step's "module.action" and returns its result.
@@ -85,19 +97,69 @@ func Process(ctx context.Context, ev Event, ac ActivationConfig, mod ModuleConfi
 		agent = mod.DefaultAgent
 	}
 
-	// 4. session strategy.
+	// 4. session strategy + owner (the end-user the session belongs to).
 	session, strat := resolveSession(ac.Session, ev, scope)
+	owner := resolveOwner(ac.Owner, ev, scope)
 
-	// 5. message + context.
+	// 5. message + context + delivery destination.
 	return Activation{
 		Agent:           agent,
 		Session:         session,
 		SessionStrategy: strat,
+		Owner:           owner,
 		Message:         buildMessage(ac, ev, scope),
 		Context:         Render(ac.Context, scope),
+		Model:           strings.TrimSpace(Render(ac.Model, scope)),
 		Reply:           replyOr(ac.Reply),
 		ExposeData:      ac.ExposeData,
+		Deliver:         resolveDeliver(ac.Deliver, scope),
 	}, nil
+}
+
+// resolveDeliver renders a configured push destination over the event scope (so a
+// webhook/cron payload can target a specific channel). Returns nil when unset.
+func resolveDeliver(dc *DeliverConfig, scope map[string]any) *Destination {
+	if dc == nil {
+		return nil
+	}
+	adapter := strings.TrimSpace(Render(dc.Adapter, scope))
+	if adapter == "" {
+		return nil
+	}
+	ref := make(map[string]any, len(dc.Ref))
+	for k, v := range dc.Ref {
+		ref[k] = Render(v, scope)
+	}
+	return &Destination{Adapter: adapter, Ref: ref}
+}
+
+// resolveOwner derives the end-user a launched session belongs to. Per-user
+// ownership is OPT-IN : an app declares an `owner` template (e.g.
+// "{{event.payload.from.id}}", or "{{event.provider}}:{{event.source}}" for the
+// channel's natural sender). When unset, "" is returned → the launcher (service)
+// owns the session, exactly as before (back-compat ; no impersonation grant needed).
+func resolveOwner(owner string, _ Event, scope map[string]any) string {
+	s := strings.TrimSpace(owner)
+	if s == "" {
+		return ""
+	}
+	return sanitizeOwner(Render(s, scope))
+}
+
+func sanitizeOwner(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if isAlnum(r) || r == '-' || r == '_' || r == '.' || r == ':' || r == '@' {
+			b.WriteRune(r)
+		} else {
+			b.WriteRune('-')
+		}
+	}
+	out := b.String()
+	if len(out) > 128 {
+		out = out[:128]
+	}
+	return out
 }
 
 func buildScope(ev Event) map[string]any {

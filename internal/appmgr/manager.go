@@ -27,6 +27,13 @@ type App struct {
 	Icon        string `json:"icon,omitempty"`
 	Color       string `json:"color,omitempty"`
 	Enabled     bool   `json:"enabled"`
+	// Mode is the runtime execution model (conversation | background |
+	// one_shot | pipeline), derived from the compiled manifest. Background is
+	// true when the app is trigger/channel-driven — the signal the web client
+	// uses to open the ops dashboard instead of the chat surface. Both are
+	// populated from the snapshot for enabled apps ; empty/false otherwise.
+	Mode       string `json:"mode,omitempty"`
+	Background bool   `json:"background"`
 	// BYOK ("bring your own key") routes this app's LLM traffic directly
 	// to the provider using the brain-declared credential, bypassing the
 	// digitorn LLM gateway. Default false : the daemon uses the gateway
@@ -220,5 +227,44 @@ func metaFromRow(r *models.App) *App {
 		BYOK:        r.BYOK,
 		InstalledAt: r.InstalledAt,
 		UpdatedAt:   r.UpdatedAt,
+	}
+}
+
+// deriveMode reads the runtime execution model from a compiled definition.
+// background is true for non-conversation modes OR when the app declares a
+// channels module or runtime triggers (the channels-based apps leave
+// runtime.mode empty, so mode alone is not a reliable discriminant).
+func deriveMode(def *schema.AppDefinition) (mode string, background bool) {
+	if def == nil {
+		return "", false
+	}
+	mode = string(def.App.Mode)
+	if def.Runtime != nil && def.Runtime.Mode != "" {
+		mode = string(def.Runtime.Mode)
+	}
+	switch mode {
+	case "background", "one_shot", "pipeline":
+		background = true
+	}
+	if def.Tools != nil {
+		if _, ok := def.Tools.Modules["channels"]; ok {
+			background = true
+		}
+	}
+	if def.Runtime != nil && len(def.Runtime.Triggers) > 0 {
+		background = true
+	}
+	return mode, background
+}
+
+// enrichMeta fills Mode/Background on a public App from the live snapshot
+// (enabled apps only). Disabled apps absent from the snapshot keep the zero
+// values — the dashboard only opens enabled apps.
+func (m *gormManager) enrichMeta(meta *App) {
+	if meta == nil {
+		return
+	}
+	if ra, ok := m.readSnapshot().apps[meta.AppID]; ok && ra != nil {
+		meta.Mode, meta.Background = deriveMode(ra.Definition)
 	}
 }

@@ -21,6 +21,8 @@ package adapter
 import (
 	"context"
 	"fmt"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/mbathepaul/digitorn/internal/llm"
 	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
@@ -45,6 +47,12 @@ type Reporter interface {
 type Options struct {
 	LoadBlob BlobLoader
 	Report   Reporter
+	// ExtractDoc, when set, turns a binary DOCUMENT blob (PDF, DOCX, …) into
+	// plain text so it reaches every model as readable content rather than an
+	// opaque file block. Keyed by content hash so the impl can cache. Returns
+	// ok=false for anything it can't extract — the part then keeps its native
+	// (file) block. Optional: nil disables document extraction.
+	ExtractDoc func(hash, mime string, data []byte) (string, bool)
 }
 
 // MessagesToLLM converts the projected session-store message list into
@@ -385,11 +393,89 @@ func loadBinaryPart(ctx context.Context, p sessionstore.MessagePart, opts Option
 		warn(opts, "adapter: blob is empty", "hash", p.Blob.Hash)
 		return llm.ContentPart{}, false
 	}
+	// A TEXTUAL document attachment must reach EVERY model as readable text — not
+	// an opaque "file" block that vision-less providers silently drop (the model
+	// then behaves as if nothing was attached). This is the single, universal
+	// state→wire boundary, so decoding textual blobs into a labelled, bounded text
+	// part here makes every app and every provider benefit, once and for all.
+	// (Genuinely binary files — images, audio, PDFs — keep their native block.)
+	if isTextualMime(p.Blob.Mime) && utf8.Valid(data) {
+		return llm.ContentPart{
+			Type: llm.ContentTypeText,
+			Text: inlineTextAttachment(p.Blob.Mime, data),
+		}, true
+	}
+	// A binary DOCUMENT (PDF, DOCX, …) is extracted to text by the same primitive
+	// so it reaches every model. Only a successful, non-empty extraction replaces
+	// the native block — a scanned/unsupported file keeps its file block.
+	if opts.ExtractDoc != nil {
+		if txt, ok := opts.ExtractDoc(p.Blob.Hash, p.Blob.Mime, data); ok {
+			return llm.ContentPart{
+				Type: llm.ContentTypeText,
+				Text: inlineTextAttachment(p.Blob.Mime, []byte(txt)),
+			}, true
+		}
+	}
 	return llm.ContentPart{
 		Type: contentTypeFor(p.Type),
 		Mime: p.Blob.Mime,
 		Data: data,
 	}, true
+}
+
+// maxInlinedTextBytes caps how much of a text attachment is inlined into the
+// prompt, so a huge log / CSV / transcript can't blow the context window.
+// Beyond it the content is truncated on a UTF-8 boundary with a visible marker.
+const maxInlinedTextBytes = 256 << 10 // 256 KiB
+
+// isTextualMime reports whether a blob is human/LLM-readable text that should be
+// inlined as a TEXT block rather than an opaque file block. Covers text/* plus
+// the common textual application/* types (json, xml, yaml, csv, code…). The
+// optional "; charset=…" suffix is ignored.
+func isTextualMime(mime string) bool {
+	mime = strings.ToLower(strings.TrimSpace(mime))
+	if i := strings.IndexByte(mime, ';'); i >= 0 {
+		mime = strings.TrimSpace(mime[:i])
+	}
+	if strings.HasPrefix(mime, "text/") {
+		return true
+	}
+	switch mime {
+	case "application/json", "application/ld+json", "application/xml",
+		"application/xhtml+xml", "application/yaml", "application/x-yaml",
+		"application/csv", "application/javascript", "application/ecmascript",
+		"application/x-ndjson", "application/toml", "application/x-sh",
+		"application/sql", "application/graphql", "application/x-www-form-urlencoded":
+		return true
+	}
+	return false
+}
+
+// inlineTextAttachment wraps a decoded text blob in a clearly delimited block so
+// the model knows it is an attached document, truncating oversize content on a
+// rune boundary.
+func inlineTextAttachment(mime string, data []byte) string {
+	truncated := false
+	if len(data) > maxInlinedTextBytes {
+		data = data[:maxInlinedTextBytes]
+		for len(data) > 0 && !utf8.Valid(data) { // back off to a complete rune
+			data = data[:len(data)-1]
+		}
+		truncated = true
+	}
+	var b strings.Builder
+	b.WriteString("[Attached document")
+	if m := strings.TrimSpace(mime); m != "" {
+		b.WriteString(" (")
+		b.WriteString(m)
+		b.WriteByte(')')
+	}
+	b.WriteString("]\n")
+	b.Write(data)
+	if truncated {
+		b.WriteString("\n[… document truncated …]")
+	}
+	return b.String()
 }
 
 func contentTypeFor(partType string) string {

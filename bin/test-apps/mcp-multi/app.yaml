@@ -1,0 +1,50 @@
+schema_version: 2
+app:
+  app_id: mcp-multi
+  name: MCP Multi-Server E2E
+  version: "0.1.0"
+  description: "Proves a live agent uses tools from SEVERAL MCP servers in one turn."
+  author: "paul@digitorn.ai"
+  category: "coding"
+
+agents:
+  - id: main
+    role: worker
+    max_tool_iterations: 12
+    brain:
+      provider: openai
+      model: moonshotai/kimi-k2.6
+      temperature: 0.1
+      max_tokens: 2048
+      config:
+        api_key: "{{env.OPENAI_API_KEY}}"
+      context:
+        max_tokens: 1000000
+    system_prompt: |
+      You are a test agent with tools from several MCP servers in your tool list.
+      Do EXACTLY what the user asks, using the appropriate tool for each step. Never
+      fabricate a result. Report verbatim what each tool returned. No emoji, no preamble.
+    modules:
+      - mcp
+
+tools:
+  modules:
+    mcp:
+      config:
+        servers:
+          everything:
+            transport: stdio
+            command: npx
+            args: ["-y", "@modelcontextprotocol/server-everything"]
+            sandbox:
+              permissions: [process.exec, net.http]
+          memory:
+            transport: stdio
+            command: npx
+            args: ["-y", "@modelcontextprotocol/server-memory"]
+            sandbox:
+              permissions: [process.exec, net.http]
+  capabilities:
+    default_policy: auto
+    grant:
+      - module: mcp

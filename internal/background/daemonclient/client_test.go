@@ -76,7 +76,28 @@ func (f *fakeDaemon) handle(w http.ResponseWriter, r *http.Request) {
 			}
 			msgs = held
 		}
-		writeJSONT(w, 200, map[string]any{"messages": msgs})
+		// Model the real daemon: turn_active reads false the WHOLE time for an async
+		// background turn; completion is the durable turn_ended event, emitted only once
+		// an assistant reply exists. Each assistant message is mirrored as an event so
+		// the client reads its reply text from the durable stream, not the projection.
+		var events []map[string]any
+		hasAssistant := false
+		var maxSeq uint64
+		for _, m := range msgs {
+			if m.Seq > maxSeq {
+				maxSeq = m.Seq
+			}
+			if m.Role == "assistant" {
+				hasAssistant = true
+				events = append(events, map[string]any{"seq": m.Seq, "type": "assistant_message", "payload": map[string]any{"content": m.Content}})
+			} else {
+				events = append(events, map[string]any{"seq": m.Seq, "type": m.Role + "_message"})
+			}
+		}
+		if hasAssistant {
+			events = append(events, map[string]any{"seq": maxSeq + 1, "type": "turn_ended"})
+		}
+		writeJSONT(w, 200, map[string]any{"messages": msgs, "events": events, "turn_active": false})
 
 	case r.Method == http.MethodPost && strings.HasSuffix(path, "/messages"):
 		f.posts++
@@ -256,6 +277,68 @@ func TestWaitForReply_TimesOut_NoResend(t *testing.T) {
 	var to *ErrReplyTimeout
 	if err == nil || !errorsAs(err, &to) {
 		t.Fatalf("want ErrReplyTimeout, got %v", err)
+	}
+}
+
+// TestWaitForReply_ReturnsFinalNotPreamble locks the turn_active trap: an async
+// background turn keeps turn_active=false the WHOLE time while it emits a preamble
+// ("let me look…"), runs a tool, then emits the FINAL answer and turn_ended. The
+// client must deliver the final answer, never the preamble. (Gating on !turn_active
+// returned the preamble — the original "je reçois seulement la première réponse" bug.)
+func TestWaitForReply_ReturnsFinalNotPreamble(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// turn_active is FALSE on every poll — the durable turn_ended event is the only
+		// honest completion signal.
+		writeJSONT(w, 200, map[string]any{
+			"turn_active": false,
+			"messages": []map[string]any{
+				{"seq": 10, "role": "assistant", "content": "Laisse-moi regarder le répertoire…"},
+				{"seq": 30, "role": "assistant", "content": "Voici les 3 fichiers trouvés."},
+			},
+			"events": []map[string]any{
+				{"seq": 8, "type": "turn_started"},
+				{"seq": 10, "type": "assistant_message", "payload": map[string]any{"content": "Laisse-moi regarder le répertoire…"}},
+				{"seq": 20, "type": "tool_result", "payload": map[string]any{"name": "filesystem.glob", "status": "ok"}},
+				{"seq": 30, "type": "assistant_message", "payload": map[string]any{"content": "Voici les 3 fichiers trouvés."}},
+				{"seq": 31, "type": "turn_ended"},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "", WithPollInterval(2*time.Millisecond))
+	msg, err := c.WaitForReply(context.Background(), "demo", "sess-1", 5)
+	if err != nil {
+		t.Fatalf("WaitForReply: %v", err)
+	}
+	if msg.Content != "Voici les 3 fichiers trouvés." {
+		t.Fatalf("must return the FINAL answer, not the preamble: got %q", msg.Content)
+	}
+	if msg.Seq != 30 {
+		t.Fatalf("final answer seq should be 30, got %d", msg.Seq)
+	}
+}
+
+// TestWaitForReply_TurnEndsNoText: a turn that ends without producing assistant text
+// (e.g. tool-only) is an honest no-reply — ErrReplyTimeout, not a hang.
+func TestWaitForReply_TurnEndsNoText(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSONT(w, 200, map[string]any{
+			"turn_active": false,
+			"events": []map[string]any{
+				{"seq": 8, "type": "turn_started"},
+				{"seq": 20, "type": "tool_result", "payload": map[string]any{"name": "filesystem.write", "status": "ok"}},
+				{"seq": 21, "type": "turn_ended"},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "", WithPollInterval(2*time.Millisecond))
+	_, err := c.WaitForReply(context.Background(), "demo", "sess-2", 5)
+	var to *ErrReplyTimeout
+	if err == nil || !errorsAs(err, &to) {
+		t.Fatalf("want ErrReplyTimeout when turn ends with no text, got %v", err)
 	}
 }
 

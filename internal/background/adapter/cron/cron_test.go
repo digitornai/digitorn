@@ -99,3 +99,66 @@ func TestAdapter_Fires(t *testing.T) {
 	}
 	cancel()
 }
+
+// TestAdapter_RuntimeArmFires proves the hot "program a cron at runtime" path: a
+// schedule added via Arm AFTER Start fires without a restart.
+func TestAdapter_RuntimeArmFires(t *testing.T) {
+	s := mustParse(t, "* * * * *")
+	a := New(nil) // no providers at boot
+	a.now = func() time.Time { return time.Date(2020, 1, 1, 0, 0, 30, 0, time.UTC) }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch := make(chan adapter.Event, 1)
+	sink := func(c context.Context, ev adapter.Event) error {
+		select {
+		case ch <- ev:
+		case <-c.Done():
+		}
+		return nil
+	}
+	go func() { _ = a.Start(ctx, sink) }()
+
+	// Keep calling Arm (idempotent) until the runtime schedule actually fires —
+	// robust to the Start/Arm ordering without a flaky fixed sleep.
+	deadline := time.After(2 * time.Second)
+	for {
+		a.Arm(Provider{Name: "rt", Schedule: s})
+		select {
+		case ev := <-ch:
+			if ev.Provider != "rt" {
+				t.Fatalf("wrong provider fired: %+v", ev)
+			}
+			cancel()
+			return
+		case <-time.After(5 * time.Millisecond):
+		case <-deadline:
+			t.Fatal("runtime-armed cron never fired")
+		}
+	}
+}
+
+// TestAdapter_ArmIdempotent: once a name is armed (by Start or Arm), re-arming it
+// is a no-op — no second goroutine for one schedule. Real clock (no fire) keeps it
+// a pure bookkeeping check.
+func TestAdapter_ArmIdempotent(t *testing.T) {
+	s := mustParse(t, "* * * * *")
+	a := New(nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = a.Start(ctx, func(context.Context, adapter.Event) error { return nil }) }()
+
+	isArmed := func() bool { a.mu.Lock(); defer a.mu.Unlock(); return a.armed["dup"] }
+	deadline := time.After(2 * time.Second)
+	for !isArmed() {
+		a.Arm(Provider{Name: "dup", Schedule: s})
+		select {
+		case <-time.After(2 * time.Millisecond):
+		case <-deadline:
+			t.Fatal("dup was never armed")
+		}
+	}
+	if a.Arm(Provider{Name: "dup", Schedule: s}) {
+		t.Fatal("re-arming an already-armed name must not launch a second goroutine")
+	}
+}

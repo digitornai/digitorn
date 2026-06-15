@@ -121,11 +121,28 @@ type createSessionRequest struct {
 	// clients, which keeps behaviour byte-identical to before.
 	EntryAgent string `json:"entry_agent,omitempty"`
 	Context    string `json:"context,omitempty"`
+	// Model, when set, overrides the entry agent's model for this session (applied
+	// to every turn). Used by non-human launchers (a channel trigger) to pick a
+	// model ; empty for human clients. Validated against the gateway/brain kind.
+	Model string `json:"model,omitempty"`
+	// Attachments are inbound media (already in the blob store) the inline first
+	// message carries — the multipart adapter turns them into vision content.
+	Attachments []sessionstore.BlobRef `json:"attachments,omitempty"`
 }
 
 func (d *Daemon) createSession(w http.ResponseWriter, r *http.Request) {
 	appID := chi.URLParam(r, "app_id")
 	userID := userIDOf(r.Context())
+
+	// Reject up front if the app isn't installed/enabled : otherwise we'd persist an
+	// orphan session whose first turn dies later with "app not found".
+	if d.appMgr != nil {
+		if app, err := d.appMgr.Get(r.Context(), appID); err != nil || app == nil {
+			writeError(w, http.StatusNotFound, "app_not_found",
+				"app \""+appID+"\" is not installed or not enabled")
+			return
+		}
+	}
 
 	var req createSessionRequest
 	if r.ContentLength > 0 {
@@ -165,6 +182,7 @@ func (d *Daemon) createSession(w http.ResponseWriter, r *http.Request) {
 			Workdir:      resolvedWD,
 			EntryAgent:   req.EntryAgent,
 			ContextExtra: req.Context,
+			Actor:        actorOf(r.Context()), // who launched, when owner ≠ caller (impersonation)
 		},
 	}
 	ctxApp, cancelApp := appendCtx(r.Context())
@@ -183,6 +201,24 @@ func (d *Daemon) createSession(w http.ResponseWriter, r *http.Request) {
 	// Snapshot the workspace's starting state (git baseline) in the background
 	// so the agent's later changes diff cleanly against it. Never blocks.
 	d.baselineWorkspaceAsync(resolvedWD)
+	// A launcher-supplied model override : pin the entry agent's model for the whole
+	// session BEFORE the first turn fires, so the inline message already runs on it.
+	// The gateway re-validates the model at turn time, so no kind-check is needed here.
+	if req.Model != "" && d.appMgr != nil {
+		if def, derr := d.appMgr.GetManifest(r.Context(), appID); derr == nil {
+			if agentID, _ := resolveEntryAgent(def, req.EntryAgent); agentID != "" {
+				if _, merr := d.sessionStore.AppendDurable(ctxApp, sessionstore.Event{
+					Type:      sessionstore.EventModelChanged,
+					SessionID: sid,
+					AppID:     appID,
+					UserID:    userID,
+					Meta:      &sessionstore.MetaPayload{Model: req.Model, AgentID: agentID},
+				}); merr != nil {
+					d.logger.Warn("createSession: model override failed", "sid", sid, "err", merr.Error())
+				}
+			}
+		}
+	}
 	// Inline first message : web clients send it with the create call. Append
 	// the user message and kick the turn, exactly as POST /messages would.
 	var firstMsgSeq uint64
@@ -192,7 +228,7 @@ func (d *Daemon) createSession(w http.ResponseWriter, r *http.Request) {
 			SessionID: sid,
 			AppID:     appID,
 			UserID:    userID,
-			Message:   &sessionstore.MessagePayload{Role: "user", Content: req.Message, ClientMessageID: req.ClientMessageID},
+			Message:   &sessionstore.MessagePayload{Role: "user", Content: req.Message, ClientMessageID: req.ClientMessageID, Attachments: req.Attachments},
 		})
 		if err != nil {
 			writeError(w, appendErrStatus(err), "append_failed", err.Error())
@@ -473,7 +509,6 @@ func (d *Daemon) postMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, errStatus(err), errCode(err), err.Error())
 		return
 	}
-	_ = state
 
 	var req postMessageRequest
 	if err := readJSONLenient(r, &req); err != nil {
@@ -494,6 +529,15 @@ func (d *Daemon) postMessage(w http.ResponseWriter, r *http.Request) {
 	role := req.Role
 	if role == "" {
 		role = "user"
+	}
+	// Idempotency : a re-delivery with the same client_message_id (a background-job
+	// retry, a client resend) must NOT append a duplicate message or fire a second
+	// turn. Return the original message's seq as a no-op success.
+	if seq, ok := state.SeenClientMessage(req.ClientMessageID); ok {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"session_id": sid, "seq": seq, "role": role, "idempotent": true,
+		})
+		return
 	}
 	ev := sessionstore.Event{
 		Type:      sessionstore.EventUserMessage,

@@ -2,12 +2,14 @@ package injection
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 
 	"github.com/mbathepaul/digitorn/internal/compiler/schema"
 	"github.com/mbathepaul/digitorn/internal/domain/tool"
 	"github.com/mbathepaul/digitorn/internal/llm"
 	"github.com/mbathepaul/digitorn/internal/runtime/context/index"
+	"github.com/mbathepaul/digitorn/internal/runtime/toolname"
 )
 
 // sanitizeToolName converts a dotted FQN like "filesystem.read" to
@@ -29,6 +31,80 @@ func sanitizeToolName(name string) string {
 		return name
 	}
 	return name[:idx] + "__" + name[idx+1:]
+}
+
+// mcpModulePrefix marks the synthetic module id of an MCP virtual tool.
+const mcpModulePrefix = "mcp_"
+
+// mcpWireAlias gives an MCP virtual tool a short, model-friendly wire name —
+// the bare tool/action name ("echo") — instead of the long
+// "mcp_<server>__<tool>" form. That long form is not just verbose: some
+// providers' tool-calling (observed on moonshotai/kimi-k2) derail on the
+// "mcp_<x>__<y>" token shape and emit garbage or unparsed tokens. Returns the
+// alias plus the canonical dotted FQN to dispatch to, and ok=false for any
+// non-MCP tool (which keeps the standard sanitizeToolName wire form).
+// Collisions (two servers exposing the same tool, or an alias shadowing a
+// native/builtin name) are resolved by disambiguateMCPAliases once the full
+// toolset is assembled.
+func mcpWireAlias(fqn string) (alias, canonical string, ok bool) {
+	canonical = toolname.Canonicalize(fqn) // mcp_<server>__<tool> -> mcp_<server>.<tool>
+	if !strings.HasPrefix(canonical, mcpModulePrefix) {
+		return "", "", false
+	}
+	dot := strings.IndexByte(canonical, '.')
+	if dot < 0 || dot+1 >= len(canonical) {
+		return "", "", false
+	}
+	return canonical[dot+1:], canonical, true
+}
+
+// mcpServerOf extracts the server id from a canonical MCP FQN
+// "mcp_<server>.<tool>" — used to qualify a colliding alias.
+func mcpServerOf(canonical string) string {
+	s := strings.TrimPrefix(canonical, mcpModulePrefix)
+	if dot := strings.IndexByte(s, '.'); dot >= 0 {
+		return s[:dot]
+	}
+	return s
+}
+
+// disambiguateMCPAliases guarantees every wire Name in the assembled toolset is
+// unique. Non-MCP tools (builtins + native modules) own their names and are
+// never renamed. An MCP tool keeps its bare alias only when no fixed tool owns
+// it AND it is the sole MCP claimant; otherwise it falls back to
+// "<tool>_<server>", then "<tool>_<server>_<n>". The canonical FQN carried on
+// the spec is untouched, so dispatch and the inbound mapping stay correct.
+func disambiguateMCPAliases(specs []llm.ToolSpec) {
+	fixed := make(map[string]bool, len(specs))
+	mcpCount := make(map[string]int, len(specs))
+	for i := range specs {
+		if specs[i].Canonical == "" {
+			fixed[specs[i].Name] = true
+		} else {
+			mcpCount[specs[i].Name]++
+		}
+	}
+	taken := make(map[string]bool, len(specs))
+	for name := range fixed {
+		taken[name] = true
+	}
+	for i := range specs {
+		if specs[i].Canonical == "" {
+			continue
+		}
+		name := specs[i].Name
+		if !fixed[name] && mcpCount[name] == 1 {
+			taken[name] = true
+			continue
+		}
+		server := mcpServerOf(specs[i].Canonical)
+		cand := name + "_" + server
+		for n := 2; taken[cand]; n++ {
+			cand = name + "_" + server + "_" + strconv.Itoa(n)
+		}
+		specs[i].Name = cand
+		taken[cand] = true
+	}
 }
 
 // Planner is the stateless decision-maker. Construct one per daemon
@@ -135,10 +211,15 @@ func buildDirectSchemas(idx *index.ToolIndex) []llm.ToolSpec {
 		if t == nil {
 			continue
 		}
+		name, canonical := sanitizeToolName(t.FQN), ""
+		if alias, canon, ok := mcpWireAlias(t.FQN); ok {
+			name, canonical = alias, canon
+		}
 		out = append(out, llm.ToolSpec{
-			Name:        sanitizeToolName(t.FQN),
+			Name:        name,
 			Description: t.Description,
 			Parameters:  paramsToJSONSchema(t.Params),
+			Canonical:   canonical,
 		})
 	}
 	return out
@@ -163,9 +244,14 @@ func buildCompactSchemas(idx *index.ToolIndex) []llm.ToolSpec {
 		if i := indexOf(desc, '.'); i > 0 && i < 120 {
 			desc = desc[:i+1] // keep first sentence
 		}
+		name, canonical := sanitizeToolName(t.FQN), ""
+		if alias, canon, ok := mcpWireAlias(t.FQN); ok {
+			name, canonical = alias, canon
+		}
 		out = append(out, llm.ToolSpec{
-			Name:        sanitizeToolName(t.FQN),
+			Name:        name,
 			Description: desc,
+			Canonical:   canonical,
 		})
 	}
 	return out
@@ -189,12 +275,14 @@ func assembleToolList(mode Mode, direct []llm.ToolSpec, idx *index.ToolIndex) []
 		out := make([]llm.ToolSpec, 0, len(builtins)+len(direct))
 		out = append(out, builtins...)
 		out = append(out, direct...)
+		disambiguateMCPAliases(out)
 		return out
 	case ModeCompactDirect:
 		compact := buildCompactSchemas(idx)
 		out := make([]llm.ToolSpec, 0, len(builtins)+len(compact))
 		out = append(out, builtins...)
 		out = append(out, compact...)
+		disambiguateMCPAliases(out)
 		return out
 	case ModeDiscovery:
 		// Only the meta-tools — domain tools sit behind execute_tool.

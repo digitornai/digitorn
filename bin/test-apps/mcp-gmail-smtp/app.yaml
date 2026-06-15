@@ -1,0 +1,55 @@
+schema_version: 2
+app:
+  app_id: mcp-gmail-smtp
+  name: MCP Gmail (local SMTP) E2E
+  version: "0.1.0"
+  description: "Agent sends a real Gmail via a LOCAL mcp-mail-server (npx, SMTP+IMAP, Gmail app password)."
+  author: "paul@digitorn.ai"
+  category: "coding"
+
+agents:
+  - id: main
+    role: worker
+    max_tool_iterations: 10
+    brain:
+      provider: openai
+      model: mimo-v2.5
+      temperature: 0.1
+      max_tokens: 2048
+      config:
+        api_key: "{{env.OPENAI_API_KEY}}"
+      context:
+        max_tokens: 1000000
+    system_prompt: |
+      You can send and read email through a local mail MCP server in your tool list
+      (send_email, get_messages, search_by_sender, ...). When asked to send an email,
+      call send_email exactly as it appears in your tool list (never invent a name),
+      passing the exact to / subject / text. After it returns, report what it returned.
+      No emoji.
+    modules:
+      - mcp
+
+tools:
+  modules:
+    mcp:
+      config:
+        servers:
+          mail:
+            transport: stdio
+            command: npx
+            args: ["-y", "mcp-mail-server"]
+            env:
+              IMAP_HOST: imap.gmail.com
+              IMAP_PORT: "993"
+              IMAP_SECURE: "true"
+              SMTP_HOST: smtp.gmail.com
+              SMTP_PORT: "465"
+              SMTP_SECURE: "true"
+              EMAIL_USER: "{{env.GMAIL_USER}}"
+              EMAIL_PASS: "{{env.GMAIL_APP_PASSWORD}}"
+            sandbox:
+              permissions: [process.exec, net.http]
+  capabilities:
+    default_policy: auto
+    grant:
+      - module: mcp

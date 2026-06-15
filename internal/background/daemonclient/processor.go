@@ -21,19 +21,34 @@ type LaunchSpec struct {
 	// is appended). When empty, the processor derives a deterministic per-job id
 	// so a lease-expiry retry is idempotent (never a duplicate session/turn).
 	SessionID string `json:"session_id,omitempty"`
-	Message   string `json:"message"`
-	Title     string `json:"title,omitempty"`
-	Workdir   string `json:"workdir,omitempty"`
-	Mode      string `json:"mode,omitempty"`
+	// OwnerUserID is the end-user the session belongs to. When set, the client
+	// sends X-Act-As-User so the daemon owns the session under that real user
+	// (the service must carry the impersonation grant). Empty → the service owns it.
+	OwnerUserID string `json:"owner_user_id,omitempty"`
+	Message     string `json:"message"`
+	Title       string `json:"title,omitempty"`
+	Workdir     string `json:"workdir,omitempty"`
+	Mode        string `json:"mode,omitempty"`
 	// EntryAgent pins the app agent that handles the session; Context is extra
 	// system-prompt text. Both are honored only on session creation (the daemon
 	// stores them in session meta and applies them to every turn).
 	EntryAgent string `json:"entry_agent,omitempty"`
 	Context    string `json:"context,omitempty"`
+	// Model overrides the entry agent's model for the session (set on creation,
+	// applied to every turn). Empty → the app's declared default.
+	Model string `json:"model,omitempty"`
+	// Attachments are inbound media (BlobRefs already uploaded to the daemon) the
+	// launching message carries — images/docs the model sees (vision).
+	Attachments []BlobRef `json:"attachments,omitempty"`
 	// WaitForReply blocks the job until the agent replies (for outbound adapters
 	// that must relay the answer). ReplyTimeout bounds the wait.
 	WaitForReply bool          `json:"wait_for_reply,omitempty"`
 	ReplyTimeout time.Duration `json:"reply_timeout,omitempty"`
+	// StreamReply asks the caller to relay the WHOLE agentic turn live (each
+	// assistant message + tool activity) via StreamReplies, instead of only the
+	// final answer. Launch does not wait when this is set — it returns after the
+	// post so the caller can stream from res.UserSeq.
+	StreamReply bool `json:"stream_reply,omitempty"`
 }
 
 // LaunchResult reports what the invocation did.
@@ -57,6 +72,9 @@ func (c *Client) Launch(ctx context.Context, spec LaunchSpec, perJobSessionID st
 		return LaunchResult{}, errors.New("daemonclient: empty app id")
 	}
 
+	// Own the session under the end-user (impersonation) for every sub-call.
+	ctx = withActAs(ctx, spec.OwnerUserID)
+
 	shared := spec.SessionID != ""
 	sid := spec.SessionID
 	if !shared {
@@ -79,6 +97,8 @@ func (c *Client) Launch(ctx context.Context, spec LaunchSpec, perJobSessionID st
 			Mode:            spec.Mode,
 			EntryAgent:      spec.EntryAgent,
 			Context:         spec.Context,
+			Model:           spec.Model,
+			Attachments:     spec.Attachments,
 			ClientMessageID: perJobSessionID,
 		})
 		if err != nil {
@@ -92,10 +112,18 @@ func (c *Client) Launch(ctx context.Context, spec LaunchSpec, perJobSessionID st
 		res.Idempotent = true
 		return res, nil
 	default:
-		// Shared session that already exists → append this event's message.
+		// Shared session that already exists → (re)apply the trigger's model override
+		// (the create path sets it inline; an existing session was created without it),
+		// then append this event's message so the turn runs on the right model.
+		if spec.Model != "" {
+			if err := c.SetModel(ctx, spec.AppID, sid, spec.Model); err != nil {
+				return LaunchResult{}, err
+			}
+		}
 		pm, err := c.PostMessage(ctx, spec.AppID, sid, PostMessageRequest{
 			Message:         spec.Message,
 			Mode:            spec.Mode,
+			Attachments:     spec.Attachments,
 			ClientMessageID: perJobSessionID,
 		})
 		if err != nil {

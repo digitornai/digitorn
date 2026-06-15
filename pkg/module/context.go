@@ -43,6 +43,7 @@ const (
 	keyModuleConfig
 	keyReranker
 	keyAuthContext
+	keyListingAuth
 )
 
 func WithSessionID(ctx context.Context, id string) context.Context {
@@ -141,12 +142,20 @@ func ModuleConfigFrom(ctx context.Context) map[string]any {
 
 // AuthContext is a resolved per-call credential the daemon injects for an MCP
 // tool. Token is decrypted; EnvTokenVar names the stdio env var to inject under
-// (empty for http, which uses an Authorization header). Never log Token.
+// (empty for http, which uses an Authorization header). The remaining fields let
+// the module apply richer, config-driven auth STYLES generically — e.g. the
+// Google "keyfile" style (write gcp-oauth.keys.json + credentials file) needs
+// the client credentials + the refresh token + scope. Never log any token.
 type AuthContext struct {
-	Token       string
-	TokenType   string
-	EnvTokenVar string
-	ExpiresAt   int64
+	Token        string
+	TokenType    string
+	EnvTokenVar  string
+	ExpiresAt    int64 // unix seconds, 0 = unknown
+	Provider     string
+	RefreshToken string
+	Scope        string
+	ClientID     string
+	ClientSecret string
 }
 
 // WithAuthContext carries a resolved credential into the call so a worker-hosted
@@ -159,4 +168,18 @@ func WithAuthContext(ctx context.Context, ac AuthContext) context.Context {
 func AuthContextFrom(ctx context.Context) (AuthContext, bool) {
 	v, ok := ctx.Value(keyAuthContext).(AuthContext)
 	return v, ok
+}
+
+// WithListingAuth carries a PER-SERVER credential map for tool LISTING, so a
+// module that connects several authenticated servers at once (e.g. an app wiring
+// multiple OAuth MCP servers) authenticates EACH with its own token — the single
+// AuthContext above can't express that. Keyed by server id.
+func WithListingAuth(ctx context.Context, byServer map[string]AuthContext) context.Context {
+	return context.WithValue(ctx, keyListingAuth, byServer)
+}
+
+// ListingAuthFrom returns the per-server listing credential map (nil if none).
+func ListingAuthFrom(ctx context.Context) map[string]AuthContext {
+	v, _ := ctx.Value(keyListingAuth).(map[string]AuthContext)
+	return v
 }

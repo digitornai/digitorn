@@ -22,7 +22,9 @@ import (
 	"github.com/mbathepaul/digitorn/internal/llm"
 	"github.com/mbathepaul/digitorn/internal/module/gateway"
 	"github.com/mbathepaul/digitorn/internal/module/proxy"
+	"github.com/mbathepaul/digitorn/internal/ocr"
 	"github.com/mbathepaul/digitorn/internal/runtime/contextcompact"
+	"github.com/mbathepaul/digitorn/internal/runtime/docextract"
 	"github.com/mbathepaul/digitorn/internal/runtime/contextsvc"
 	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
 	"github.com/mbathepaul/digitorn/internal/tokenizer"
@@ -58,10 +60,44 @@ func (d *Daemon) startWorkers(ctx context.Context) {
 				slog.String("err", err.Error()))
 		}
 	}
+	// OCR fallback for SCANNED documents : a pluggable, config-selected backend
+	// installed once into the document extractor (no subprocess). Backend "none"
+	// leaves OCR off — a scanned doc keeps its native file block.
+	d.startOCR()
 	// Service gateway : the worker→daemon bridge. Started after the
 	// embeddings client is wired (synchronously above) so worker-hosted
 	// modules (RAG) can embed. No-op when embeddings is disabled.
 	d.startServiceGateway()
+}
+
+// startOCR installs the configured OCR backend into the document extractor so a
+// scanned PDF (no text layer) is recognised to text and reaches the model like
+// any document. The engine is fully config-driven (workers.ocr.backend / .model
+// / .endpoint / …) — nothing hardcoded; "none" leaves OCR off. The backend runs
+// only as an async, cached fallback, never on the turn loop.
+func (d *Daemon) startOCR() {
+	c := d.cfg.Workers.OCR
+	be, err := ocr.New(ocr.Config{
+		Backend:   c.Backend,
+		Model:     c.Model,
+		Endpoint:  c.Endpoint,
+		APIKey:    c.APIKey,
+		Languages: c.Languages,
+		MaxPages:  c.MaxPages,
+		Timeout:   c.Timeout,
+		Headers:   c.Headers,
+	})
+	if err != nil {
+		d.logger.Error("daemon: OCR backend config invalid; scanned-document OCR disabled",
+			slog.String("err", err.Error()))
+		return
+	}
+	if be == nil {
+		return // none / disabled — graceful
+	}
+	docextract.SetOCR(be)
+	d.logger.Info("daemon: OCR backend enabled for scanned documents",
+		slog.String("backend", strings.ToLower(c.Backend)))
 }
 
 // startServiceGateway brings up the worker→daemon service bridge and
@@ -301,7 +337,7 @@ func (d *Daemon) onContextRecomputed(r contextsvc.Result) {
 	// CALIBRATED total + breakdown — it leads the durable projection, so the
 	// per-round guard / hooks see the real context without the event round-trip.
 	if d.contextTracker != nil {
-		view := contextsvc.ViewFromSnapshot(snap, d.brainFor(snap.AppID)).
+		view := contextsvc.ViewFromSnapshot(snap, d.sessionWindowBrain(snap)).
 			WithExactTotal(total, system, tools, messages)
 		if old, ok := d.contextTracker.Get(r.SessionID); ok && old.EstimateRatio > 0 {
 			view.EstimateRatio = old.EstimateRatio
@@ -318,7 +354,7 @@ func (d *Daemon) onContextRecomputed(r contextsvc.Result) {
 	// background. The window denominator is resolved the way compaction does
 	// (configured context.max_tokens, else the model's documented window) so the
 	// gauge's denominator matches the daemon's pressure denominator exactly.
-	res := contextsvc.Resolve(snap, d.brainFor(snap.AppID))
+	res := contextsvc.Resolve(snap, d.sessionWindowBrain(snap))
 	_, _ = d.sessionStore.Append(context.Background(), sessionstore.Event{
 		Type:      sessionstore.EventContextTokens,
 		SessionID: r.SessionID,
@@ -345,6 +381,39 @@ func (d *Daemon) brainFor(appID string) schema.Brain {
 		return schema.Brain{}
 	}
 	return app.Definition.Agents[0].Brain
+}
+
+// sessionWindowBrain resolves the brain whose window the context gauge reports for
+// THIS session : the entry agent's brain, but with the per-session SELECTED model
+// (override) applied, and its window pinned to the gateway's documented window
+// (max_context_tokens) when known. Falls back to the app's configured
+// context.max_tokens, then the model's static window — so the gauge denominator
+// tracks the model the user actually picked, not the YAML-static brain default.
+func (d *Daemon) sessionWindowBrain(snap sessionstore.SessionSnapshot) schema.Brain {
+	base := d.brainFor(snap.AppID)
+	if d.appMgr == nil || snap.AppID == "" {
+		return base
+	}
+	app, err := d.appMgr.Get(context.Background(), snap.AppID)
+	if err != nil || app == nil || app.Definition == nil {
+		return base
+	}
+	entryID, brain := resolveEntryAgent(app.Definition, snap.EntryAgent)
+	if brain == nil {
+		return base
+	}
+	eff := *brain
+	if ov := snap.ModelOverrides[entryID]; ov != "" {
+		eff.Model = ov
+	}
+	if w := d.gatewayModelWindow(eff.Model); w > 0 {
+		reserved := 0
+		if eff.Context != nil {
+			reserved = eff.Context.OutputReserved
+		}
+		eff.Context = &schema.ContextConfig{MaxTokens: w, OutputReserved: reserved}
+	}
+	return eff
 }
 
 // recordContextRatio stores the engine's self-calibrated provider/estimate

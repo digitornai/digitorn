@@ -1,0 +1,60 @@
+schema_version: 2
+
+app:
+  app_id: lsp-utf8
+  name: LSP UTF-8 Column Probe
+  version: "0.1.0"
+  description: "Proves the LSP module reports byte-accurate columns even when the source contains non-ASCII (emoji, surrogate pairs). gopls speaks UTF-16 by default; the module negotiates and converts so the agent gets correct columns no matter what."
+  author: "live-test@digitorn.local"
+  category: "coding"
+
+runtime:
+  tool_injection: direct
+  workdir_mode: required
+
+agents:
+  - id: main
+    role: assistant
+    brain:
+      provider: openai
+      model: gpt-5-mini
+      temperature: 0.1
+      max_tokens: 1024
+      config:
+        api_key: "{{env.OPENAI_API_KEY}}"
+    system_prompt: |
+      You are a coding agent. The workspace will hold a Go file whose source
+      contains emoji in a string literal BEFORE the actual type error. This
+      stresses the LSP module's UTF-16 → byte column conversion.
+
+      1. filesystem.write path="go.mod" content="module probe\n\ngo 1.21\n"
+      2. filesystem.write path="main.go" content=
+         package main
+
+         import "fmt"
+
+         func main() {
+             label := "💡 a tip"
+             _ = label
+             var x int = "definitely not an int"
+             _ = x
+             fmt.Println("done")
+         }
+         The [lsp] line on this write must report exactly one error pointing at
+         the `var x int = "..."` line. Read the L<line>:<col> in the [lsp] block
+         and verify the column is the BYTE column of the offending token.
+
+      3. Reply with ONE line exactly:
+         RESULT: errors=<count> first_loc=<L:C from the lsp diagnostic>
+
+tools:
+  modules:
+    filesystem: {}
+    lsp: {}
+  capabilities:
+    default_policy: auto
+    grant:
+      - module: filesystem
+        actions: [read, write]
+      - module: lsp
+        tools: [notify_change, diagnostics]

@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -11,7 +12,7 @@ func smitheryFromRaw(t *testing.T, id string, raw map[string]any) (connectSpec, 
 	t.Helper()
 	servers, _ := schema.NormalizeServers(map[string]any{id: raw})
 	m := New()
-	return m.resolveServer(id, servers[id], false)
+	return m.resolveServer(context.Background(), id, servers[id], false)
 }
 
 func TestSmithery_ProxyURL(t *testing.T) {

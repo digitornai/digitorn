@@ -1,0 +1,45 @@
+schema_version: 2
+app:
+  app_id: mcp-fs
+  name: MCP Filesystem E2E
+  version: "0.1.0"
+  description: "Proves a live LLM uses a real filesystem MCP server end to end."
+  author: "paul@digitorn.ai"
+  category: "coding"
+
+agents:
+  - id: main
+    role: worker
+    max_tool_iterations: 10
+    brain:
+      provider: openai
+      model: moonshotai/kimi-k2.6
+      temperature: 0.1
+      max_tokens: 2048
+      config:
+        api_key: "{{env.OPENAI_API_KEY}}"
+      context:
+        max_tokens: 1000000
+    system_prompt: |
+      You are a test agent. A filesystem MCP server is connected; its tools appear
+      in your tool list. When asked about files, you MUST use those tools — list the
+      directory to find the file, then read it. Never fabricate contents. Report back
+      verbatim what the tool returned. No emoji, no preamble.
+    modules:
+      - mcp
+
+tools:
+  modules:
+    mcp:
+      config:
+        servers:
+          fs:
+            transport: stdio
+            command: npx
+            args: ["-y", "@modelcontextprotocol/server-filesystem", "C:\\tmp\\mcp-fs-test"]
+            sandbox:
+              permissions: [process.exec, net.http]
+  capabilities:
+    default_policy: auto
+    grant:
+      - module: mcp

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mbathepaul/digitorn/internal/background/adapter"
@@ -125,15 +126,22 @@ type Provider struct {
 	Schedule *Schedule
 }
 
-// Adapter fires Events on schedules. It is inbound-only (Send is a no-op).
+// Adapter fires Events on schedules. It is inbound-only (Send is a no-op). It
+// supports RUNTIME arming (Arm): the ops API can add a new schedule to the live
+// adapter without a restart. State is mutex-guarded since Arm races Start.
 type Adapter struct {
+	mu        sync.Mutex
 	providers []Provider
+	armed     map[string]bool // provider names with a running goroutine
 	now       func() time.Time
+	ctx       context.Context // non-nil once Start is running
+	sink      adapter.Sink
 }
 
-// New builds a cron adapter over the given providers.
+// New builds a cron adapter over the given providers (may be empty — schedules
+// can be added later via Arm).
 func New(providers []Provider) *Adapter {
-	return &Adapter{providers: providers, now: time.Now}
+	return &Adapter{providers: providers, armed: map[string]bool{}, now: time.Now}
 }
 
 func (a *Adapter) Name() string { return "cron" }
@@ -143,13 +151,45 @@ func (a *Adapter) Send(context.Context, map[string]any, string) error { return n
 
 // Start runs one timer goroutine per provider until ctx is cancelled. Each fire
 // is an Event whose DedupKey is the fire minute, so a duplicate wake at the same
-// minute is de-duplicated by the durable intake.
+// minute is de-duplicated by the durable intake. After Start, Arm can add more.
 func (a *Adapter) Start(ctx context.Context, sink adapter.Sink) error {
+	a.mu.Lock()
+	a.ctx, a.sink = ctx, sink
 	for _, p := range a.providers {
-		go a.run(ctx, p, sink)
+		if !a.armed[p.Name] {
+			a.armed[p.Name] = true
+			go a.run(ctx, p, sink)
+		}
 	}
+	a.mu.Unlock()
 	<-ctx.Done()
 	return nil
+}
+
+// Arm adds (or, before Start, queues) a schedule on the live adapter — the hot
+// "program a cron at runtime" path. Idempotent by provider name: an already-armed
+// name is left running unchanged (re-scheduling needs a restart). Returns true
+// when a new firing goroutine was launched.
+func (a *Adapter) Arm(p Provider) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	replaced := false
+	for i := range a.providers {
+		if a.providers[i].Name == p.Name {
+			a.providers[i] = p
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		a.providers = append(a.providers, p)
+	}
+	if a.ctx == nil || a.armed[p.Name] {
+		return false // not started yet (will arm on Start), or already firing
+	}
+	a.armed[p.Name] = true
+	go a.run(a.ctx, p, a.sink)
+	return true
 }
 
 func (a *Adapter) run(ctx context.Context, p Provider, sink adapter.Sink) {

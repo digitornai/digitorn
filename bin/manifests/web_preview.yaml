@@ -1,0 +1,13 @@
+id: web_preview
+version: 1.0.0
+description: Web preview server for in-app iframes.
+tools:
+  - { name: serve, description: Start serving a directory., risk_level: medium, params: [{name: path, type: string, required: true}, {name: port, type: integer}] }
+  - { name: get_port, description: Return the active port., risk_level: low, params: [] }
+  - { name: stop, description: Stop the preview server., risk_level: low, params: [] }
+  - { name: reload, description: Force a reload., risk_level: low, params: [] }
+  - { name: open, description: Open a URL., risk_level: low, params: [{name: url, type: string, required: true}] }
+  - { name: proxy, description: Proxy a request., risk_level: medium, params: [{name: url, type: string, required: true}] }
+  - { name: list, description: List preview sessions., risk_level: low, params: [] }
+  - { name: detach, description: Detach a preview session., risk_level: low, params: [{name: id, type: string, required: true}] }
+  - { name: attach, description: Attach to a preview session., risk_level: low, params: [{name: id, type: string, required: true}] }

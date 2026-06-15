@@ -262,6 +262,22 @@ func (p *ProxyModule) Tools(ctx context.Context) []tool.Spec {
 			req.Config = b
 		}
 	}
+	// Forward a daemon-resolved listing credential (set for OAuth-gated MCP
+	// servers) so the worker can CONNECT and list their tools — without it the
+	// server 401s and the agent sees no tools.
+	if ac, ok := pkgmodule.AuthContextFrom(ctx); ok && ac.Token != "" {
+		req.AuthContext = &service.AuthContext{
+			Token:        ac.Token,
+			TokenType:    ac.TokenType,
+			EnvTokenVar:  ac.EnvTokenVar,
+			ExpiresAt:    ac.ExpiresAt,
+			Provider:     ac.Provider,
+			RefreshToken: ac.RefreshToken,
+			Scope:        ac.Scope,
+			ClientID:     ac.ClientID,
+			ClientSecret: ac.ClientSecret,
+		}
+	}
 	out := new(service.ToolsResponse)
 	if err := conn.GRPC().Invoke(ctx,
 		"/"+service.ServiceName+"/"+service.MethodTools,

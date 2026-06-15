@@ -61,6 +61,11 @@ type SocketIOBridge struct {
 	// then a no-op, never fatal).
 	BrainFor func(appID string) schema.Brain
 
+	// SessionWindowBrain resolves the window-bearing brain for a SESSION (entry
+	// agent + per-session selected model + gateway window), so the on-open gauge
+	// matches the live recount. Set by bootstrap ; falls back to BrainFor when nil.
+	SessionWindowBrain func(snap sessionstore.SessionSnapshot) schema.Brain
+
 	// Per-client state. Keyed by client.ID().
 	clients sync.Map
 
@@ -386,7 +391,11 @@ func (b *SocketIOBridge) emitContextOnJoin(c ports.RealtimeClient, sessionID, ap
 		return
 	}
 	snap := st.Snapshot()
-	view := contextsvc.Resolve(snap, b.BrainFor(appID))
+	brain := b.BrainFor(appID)
+	if b.SessionWindowBrain != nil {
+		brain = b.SessionWindowBrain(snap)
+	}
+	view := contextsvc.Resolve(snap, brain)
 	// Emit as long as the REAL window is known (resolved from the brain), even
 	// when used==0 (a fresh session) — so the client shows the true denominator
 	// immediately instead of falling back to a guessed window. used==0 is honest

@@ -121,6 +121,7 @@ func passesAllGates(inv Invocation, pc PolicyContext) bool {
 var gateChain = []func(Invocation, PolicyContext) Decision{
 	Gate0Inactive,
 	Gate1aModule,
+	Gate1cMCPServer,
 	Gate1bHidden,
 	Gate2Risk,
 	Gate3Permissions,

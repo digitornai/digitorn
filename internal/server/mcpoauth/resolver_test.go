@@ -20,7 +20,7 @@ func newTestService(t *testing.T) *Service {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	if err := gdb.AutoMigrate(&models.Credential{}, &models.OAuthState{}); err != nil {
+	if err := gdb.AutoMigrate(&models.Credential{}, &models.OAuthState{}, &models.OAuthClient{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	sealer, err := NewSealer(filepath.Join(t.TempDir(), "server.key"))

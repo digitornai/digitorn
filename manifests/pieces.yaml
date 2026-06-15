@@ -1,0 +1,5 @@
+id: pieces
+version: 1.0.0
+description: 715+ Activepieces connectors as native agent tools. Install pieces from the hub and their actions appear automatically.
+declared_permissions: [network.http]
+tools: []

@@ -84,10 +84,15 @@ func (s *moduleService) Invoke(ctx context.Context, req *service.InvokeRequest) 
 	// never cached; the module applies it as an http header or stdio env.
 	if req.AuthContext != nil {
 		ctx = pkgmodule.WithAuthContext(ctx, pkgmodule.AuthContext{
-			Token:       req.AuthContext.Token,
-			TokenType:   req.AuthContext.TokenType,
-			EnvTokenVar: req.AuthContext.EnvTokenVar,
-			ExpiresAt:   req.AuthContext.ExpiresAt,
+			Token:        req.AuthContext.Token,
+			TokenType:    req.AuthContext.TokenType,
+			EnvTokenVar:  req.AuthContext.EnvTokenVar,
+			ExpiresAt:    req.AuthContext.ExpiresAt,
+			Provider:     req.AuthContext.Provider,
+			RefreshToken: req.AuthContext.RefreshToken,
+			Scope:        req.AuthContext.Scope,
+			ClientID:     req.AuthContext.ClientID,
+			ClientSecret: req.AuthContext.ClientSecret,
 		})
 	}
 
@@ -137,6 +142,21 @@ func (s *moduleService) Tools(ctx context.Context, req *service.ToolsRequest) (*
 		if json.Unmarshal(req.Config, &cfg) == nil && len(cfg) > 0 {
 			ctx = pkgmodule.WithModuleConfig(ctx, cfg)
 		}
+	}
+	// Per-user credential so an OAuth-gated server can be CONNECTED while listing
+	// its tools (mirrors Invoke) — otherwise it 401s and the agent sees no tools.
+	if req.AuthContext != nil {
+		ctx = pkgmodule.WithAuthContext(ctx, pkgmodule.AuthContext{
+			Token:        req.AuthContext.Token,
+			TokenType:    req.AuthContext.TokenType,
+			EnvTokenVar:  req.AuthContext.EnvTokenVar,
+			ExpiresAt:    req.AuthContext.ExpiresAt,
+			Provider:     req.AuthContext.Provider,
+			RefreshToken: req.AuthContext.RefreshToken,
+			Scope:        req.AuthContext.Scope,
+			ClientID:     req.AuthContext.ClientID,
+			ClientSecret: req.AuthContext.ClientSecret,
+		})
 	}
 	mod, ok := s.bus.Get(req.ModuleID)
 	if !ok {

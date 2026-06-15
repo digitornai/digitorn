@@ -6,6 +6,7 @@ import (
 	"math"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -39,6 +40,7 @@ func (f fakeEmbedder) EmbedModel(_ context.Context, _, _ string, texts []string)
 
 // fakeBackend is an in-memory VectorBackend with cosine search.
 type fakeBackend struct {
+	mu   sync.Mutex
 	dims map[string]int
 	docs map[string][]Document
 }
@@ -48,6 +50,8 @@ func newFakeBackend() *fakeBackend {
 }
 
 func (b *fakeBackend) EnsureKB(_ context.Context, kb string, dim int) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	if d, ok := b.dims[kb]; ok && d != dim {
 		return errDimMismatch
 	}
@@ -55,19 +59,35 @@ func (b *fakeBackend) EnsureKB(_ context.Context, kb string, dim int) error {
 	return nil
 }
 func (b *fakeBackend) DeleteKB(_ context.Context, kb string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	delete(b.dims, kb)
 	delete(b.docs, kb)
 	return nil
 }
 func (b *fakeBackend) ListKBs(context.Context) ([]string, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	ks := make([]string, 0, len(b.dims))
 	for k := range b.dims {
 		ks = append(ks, k)
 	}
 	return ks, nil
 }
-func (b *fakeBackend) CountKB(_ context.Context, kb string) (int, error) { return len(b.docs[kb]), nil }
+func (b *fakeBackend) CountKB(_ context.Context, kb string) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return len(b.docs[kb]), nil
+}
+func (b *fakeBackend) KBInfo(_ context.Context, kb string) (KBStats, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	d, ok := b.dims[kb]
+	return KBStats{Exists: ok, Dim: d, Count: len(b.docs[kb])}, nil
+}
 func (b *fakeBackend) Upsert(_ context.Context, kb string, docs []Document) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	byID := map[string]int{}
 	for i, d := range b.docs[kb] {
 		byID[d.ID] = i
@@ -81,9 +101,14 @@ func (b *fakeBackend) Upsert(_ context.Context, kb string, docs []Document) erro
 	}
 	return nil
 }
-func (b *fakeBackend) Search(_ context.Context, kb string, vec []float32, topK int) ([]SearchHit, error) {
+func (b *fakeBackend) Search(_ context.Context, kb string, vec []float32, topK int, filter Filter) ([]SearchHit, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	var hits []SearchHit
 	for _, d := range b.docs[kb] {
+		if !filter.Empty() && !metaMatches(d.Meta, filter) {
+			continue
+		}
 		hits = append(hits, SearchHit{Document: d, Score: cosf(vec, d.Vector)})
 	}
 	sort.Slice(hits, func(i, j int) bool { return hits[i].Score > hits[j].Score })
@@ -93,6 +118,8 @@ func (b *fakeBackend) Search(_ context.Context, kb string, vec []float32, topK i
 	return hits, nil
 }
 func (b *fakeBackend) DeleteBySource(_ context.Context, kb, source string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	kept := b.docs[kb][:0]
 	for _, d := range b.docs[kb] {
 		if d.Source != source {
@@ -103,9 +130,11 @@ func (b *fakeBackend) DeleteBySource(_ context.Context, kb, source string) error
 	return nil
 }
 func (b *fakeBackend) Scan(_ context.Context, kb string) ([]Document, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	out := make([]Document, 0, len(b.docs[kb]))
 	for _, d := range b.docs[kb] {
-		out = append(out, Document{ID: d.ID, Text: d.Text, Source: d.Source, Chunk: d.Chunk})
+		out = append(out, Document{ID: d.ID, Text: d.Text, Source: d.Source, Chunk: d.Chunk, Meta: d.Meta})
 	}
 	return out, nil
 }

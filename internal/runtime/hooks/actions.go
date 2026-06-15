@@ -509,8 +509,10 @@ func resolveEditedPath(params map[string]any, p Payload) string {
 }
 
 // formatLSPDiagnostics turns the lsp tool's result into a concise, readable
-// error list to inject — or "" when the file is clean, so a passing edit adds no
-// noise.
+// error list to inject — or "" when the file is clean AND the project is
+// clean, so a passing edit adds no noise. When the edit ripples into other
+// files, those are listed under a "[lsp] project" section so the agent sees
+// the WHOLE project state after every edit, not just the focal file.
 func formatLSPDiagnostics(path, raw string) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -525,26 +527,47 @@ func formatLSPDiagnostics(path, raw string) string {
 			Severity string `json:"severity"`
 			Message  string `json:"message"`
 		} `json:"diagnostics"`
+		Project *struct {
+			TotalErrors   int `json:"total_errors"`
+			TotalWarnings int `json:"total_warnings"`
+			AffectedFiles []struct {
+				File     string `json:"file"`
+				Errors   int    `json:"errors"`
+				Warnings int    `json:"warnings"`
+			} `json:"affected_files"`
+		} `json:"project"`
 	}
 	if err := json.Unmarshal([]byte(raw), &r); err != nil {
-		// Unknown shape: skip if it clearly reports no problems, else surface raw.
 		if strings.Contains(raw, `"ok":true`) || strings.Contains(raw, `"count":0`) {
 			return ""
 		}
 		return "[lsp] diagnostics for " + path + " after your edit:\n" + raw
 	}
-	if r.Errors == 0 && r.Warnings == 0 {
-		return "" // clean — say nothing
+	projectHasIssues := r.Project != nil && (r.Project.TotalErrors > 0 || r.Project.TotalWarnings > 0)
+	if r.Errors == 0 && r.Warnings == 0 && !projectHasIssues {
+		return "" // clean here AND across the project — say nothing
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "[lsp] %s — %d error(s), %d warning(s) after your edit:",
-		filepath.Base(path), r.Errors, r.Warnings)
-	for _, d := range r.Diagnostics {
-		sev := d.Severity
-		if sev == "" {
-			sev = "error"
+	if r.Errors > 0 || r.Warnings > 0 {
+		fmt.Fprintf(&b, "[lsp] %s — %d error(s), %d warning(s) after your edit:",
+			filepath.Base(path), r.Errors, r.Warnings)
+		for _, d := range r.Diagnostics {
+			sev := d.Severity
+			if sev == "" {
+				sev = "error"
+			}
+			fmt.Fprintf(&b, "\n  L%d:%d %s: %s", d.Line, d.Column, sev, strings.TrimSpace(d.Message))
 		}
-		fmt.Fprintf(&b, "\n  L%d:%d %s: %s", d.Line, d.Column, sev, strings.TrimSpace(d.Message))
+	}
+	if projectHasIssues {
+		if b.Len() > 0 {
+			b.WriteString("\n\n")
+		}
+		fmt.Fprintf(&b, "[lsp] project — %d error(s), %d warning(s) in %d other file(s):",
+			r.Project.TotalErrors, r.Project.TotalWarnings, len(r.Project.AffectedFiles))
+		for _, f := range r.Project.AffectedFiles {
+			fmt.Fprintf(&b, "\n  %s (%d error, %d warning)", f.File, f.Errors, f.Warnings)
+		}
 	}
 	return b.String()
 }

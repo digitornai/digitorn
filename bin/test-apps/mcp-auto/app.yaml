@@ -1,0 +1,41 @@
+schema_version: 2
+app:
+  app_id: mcp-auto
+  name: MCP Auto-Config E2E
+  version: "0.1.0"
+  description: "Proves a bare unknown server auto-configures from the registry, live, via the worker."
+  author: "paul@digitorn.ai"
+  category: "coding"
+
+agents:
+  - id: main
+    role: worker
+    max_tool_iterations: 8
+    brain:
+      provider: openai
+      model: moonshotai/kimi-k2.6
+      temperature: 0.1
+      max_tokens: 2048
+      config:
+        api_key: "{{env.OPENAI_API_KEY}}"
+      context:
+        max_tokens: 1000000
+    system_prompt: |
+      You are a test agent. A calculator MCP server is connected and its tools are in
+      your tool list. Do EXACTLY what the user asks using the tools. Never fabricate a
+      result. Report verbatim what the tool returned. No emoji, no preamble.
+    modules:
+      - mcp
+
+tools:
+  modules:
+    mcp:
+      config:
+        servers:
+          # BARE id, no command/url — the daemon must auto-configure it from the
+          # official MCP registry (registry.modelcontextprotocol.io).
+          calculator: {}
+  capabilities:
+    default_policy: auto
+    grant:
+      - module: mcp

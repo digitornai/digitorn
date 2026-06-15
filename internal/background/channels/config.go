@@ -33,15 +33,57 @@ type ProviderConfig struct {
 
 // ActivationConfig mirrors the Python ActivationConfig (module.py:90).
 type ActivationConfig struct {
-	Agent      string            `yaml:"agent"`
+	Agent string `yaml:"agent"`
+	// Owner is the end-user the launched session belongs to (a template over the
+	// event, e.g. "{{event.payload.from.id}}"). Empty → derived from the event's
+	// sender, namespaced by provider. The background service forwards it so the
+	// daemon owns the session under the real user (X-Act-As-User).
+	Owner      string            `yaml:"owner"`
 	Session    string            `yaml:"session"` // "" | per_event | shared | <template>
 	Message    string            `yaml:"message"`
 	Context    string            `yaml:"context"`
+	Model      string            `yaml:"model"` // per-session model override for the entry agent
+	// Reports, when true, gives the agent a dated output folder under its workdir
+	// (attachments/<stamp>/) and instructs it — at EVERY fire (injected into the
+	// per-turn message, so it survives on a persistent session) — to write any file
+	// or report it produces there, preserved and downloadable via the workspace
+	// routes. Opt-in : apps that produce no files leave it off.
+	Reports    bool              `yaml:"reports"`
+	// Attachments are INPUT media the schedule carries to EVERY fire (the CV in a
+	// "match jobs to my CV every morning" schedule). They are content-addressed
+	// blobs already in the app's blob store, so the same ref rides each wake and
+	// the daemon resolves it into vision/document content for the model.
+	Attachments []AttachmentRef   `yaml:"attachments"`
 	ExposeData bool              `yaml:"expose_data"`
 	Filter     []FilterCondition `yaml:"filter"`
 	Prepare    []PrepareStep     `yaml:"prepare"`
 	Route      *RouteConfig      `yaml:"route"`
 	Reply      string            `yaml:"reply"` // auto | none | explicit
+	// Deliver is the PROACTIVE-push destination: where to send the result when the
+	// triggering event carries no inbound reply handle (a cron tick, a CI webhook).
+	// When set, the reply (reply:auto → the agent's answer) or the rendered Message
+	// (reply:none → a raw, no-LLM announcement) is delivered HERE instead of back to
+	// the originator. Decouples "where it goes" from "where the event came from", so
+	// any adapter with Send (Discord, Telegram, …) is a push target — zero new code.
+	Deliver *DeliverConfig `yaml:"deliver"`
+}
+
+// AttachmentRef is a content-addressed blob already stored in the app's blob
+// store (hash + mime + size) — the wire shape the daemon's message attachments
+// use. Carried verbatim from the schedule to each fire's wake message.
+type AttachmentRef struct {
+	Hash string `yaml:"hash" json:"hash"`
+	Mime string `yaml:"mime" json:"mime"`
+	Size int64  `yaml:"size" json:"size"`
+}
+
+// DeliverConfig addresses a channel for a proactive push: which transport (Adapter,
+// e.g. "discord") and the transport handle (Ref, e.g. {provider, channel_id}). Both
+// the adapter name and every Ref value are templated over the event scope, so a
+// webhook payload can carry the target channel.
+type DeliverConfig struct {
+	Adapter string            `yaml:"adapter"`
+	Ref     map[string]string `yaml:"ref"`
 }
 
 // FilterCondition mirrors the Python FilterCondition (module.py:67). A nil field
@@ -78,8 +120,9 @@ type RouteRule struct {
 // Reply modes.
 const (
 	ReplyNone     = "none"
-	ReplyAuto     = "auto"
+	ReplyAuto     = "auto" // final answer only
 	ReplyExplicit = "explicit"
+	ReplyStream   = "stream" // relay the whole agentic loop live (messages + tool activity)
 )
 
 // Session strategies.
@@ -158,12 +201,20 @@ func (m *ModuleConfig) Validate() error {
 			return err
 		}
 		switch p.Activation.Reply {
-		case "", ReplyNone, ReplyAuto, ReplyExplicit:
+		case "", ReplyNone, ReplyAuto, ReplyExplicit, ReplyStream:
 		default:
-			return fmt.Errorf("provider %q: invalid reply %q (auto|none|explicit)", name, p.Activation.Reply)
+			return fmt.Errorf("provider %q: invalid reply %q (auto|none|explicit|stream)", name, p.Activation.Reply)
 		}
 		if r := p.Activation.Route; r != nil && strings.TrimSpace(r.Field) == "" {
 			return fmt.Errorf("provider %q: route.field is required when route is set", name)
+		}
+		if d := p.Activation.Deliver; d != nil {
+			if strings.TrimSpace(d.Adapter) == "" {
+				return fmt.Errorf("provider %q: deliver.adapter is required when deliver is set", name)
+			}
+			if len(d.Ref) == 0 {
+				return fmt.Errorf("provider %q: deliver.ref is required when deliver is set", name)
+			}
 		}
 	}
 	return nil

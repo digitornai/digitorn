@@ -1,0 +1,12 @@
+id: agent_spawn
+version: 1.0.0
+description: Spawn and supervise sub-agents (background, blocking, parallel).
+tools:
+  - { name: spawn, description: Spawn a sub-agent., risk_level: medium, params: [{name: agent, type: string, required: true}, {name: prompt, type: string, required: true}, {name: mode, type: string}] }
+  - { name: status, description: Query sub-agent status., risk_level: low, params: [{name: task_id, type: string, required: true}] }
+  - { name: wait, description: Wait for a sub-agent to finish., risk_level: low, params: [{name: task_id, type: string, required: true}] }
+  - { name: cancel, description: Cancel a sub-agent., risk_level: medium, params: [{name: task_id, type: string, required: true}] }
+  - { name: list, description: List active sub-agents., risk_level: low, params: [] }
+  - { name: reassign, description: Reassign a task to a different agent., risk_level: medium, params: [{name: task_id, type: string, required: true}, {name: agent, type: string, required: true}] }
+  - { name: agent, description: Convenience spawn-and-wait., risk_level: medium, params: [{name: agent, type: string, required: true}, {name: prompt, type: string, required: true}] }
+  - { name: run_parallel, description: Run several agents in parallel., risk_level: medium, params: [{name: jobs, type: array, required: true}] }

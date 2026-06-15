@@ -6,7 +6,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -62,7 +64,7 @@ func (m *Module) Init(ctx context.Context, cfg map[string]any) error {
 	servers, _ := schema.NormalizeServers(cfg["servers"])
 	autoInstall := autoInstallEnabled(cfg)
 	for id, sc := range servers {
-		spec, ok := m.resolveServer(id, sc, autoInstall)
+		spec, ok := m.resolveServer(ctx, id, sc, autoInstall)
 		if !ok {
 			continue
 		}
@@ -102,7 +104,7 @@ func (m *Module) Invoke(ctx context.Context, toolName string, params []byte) (to
 		return tool.Result{Success: false, Error: "mcp: unroutable tool " + toolName},
 			fmt.Errorf("mcp: unroutable tool %q", toolName)
 	}
-	m.ensureConnected(ctx)
+	m.ensureConnected(ctx, server)
 	// Route to the physical connection: bare server id for http/non-auth, or a
 	// per-user key for an authenticated stdio server (its token rides its env).
 	key := m.routeKey(ctx, server)
@@ -135,7 +137,17 @@ func (m *Module) Invoke(ctx context.Context, toolName string, params []byte) (to
 
 	res, err := m.pool.callTool(ctx, key, action, args)
 	if err != nil {
-		return failResult(err), nil
+		// The connection was dropped, stale, or never came up (a transport error —
+		// tool-level errors ride res.IsError, not err). Reconnect the target once
+		// and retry, so a dead pooled connection self-heals instead of failing every
+		// call until a restart. A permanent fault (bad auth, missing server) fails
+		// the reconnect fast (non-retryable short-circuit), so this never loops.
+		if _, rerr := m.pool.reconnect(ctx, key); rerr == nil {
+			res, err = m.pool.callTool(ctx, key, action, args)
+		}
+		if err != nil {
+			return failResult(err), nil
+		}
 	}
 	return wrapResult(server, action, res), nil
 }
@@ -174,15 +186,6 @@ func callerUserID(ctx context.Context) string {
 		return id.UserID
 	}
 	return ""
-}
-
-func injectTokenEnv(env map[string]string, ac module.AuthContext) map[string]string {
-	out := make(map[string]string, len(env)+1)
-	for k, v := range env {
-		out[k] = v
-	}
-	out[ac.EnvTokenVar] = ac.Token
-	return out
 }
 
 func toStringMap(v any) map[string]string {
@@ -232,7 +235,11 @@ func toConnectSpec(sc schema.MCPServerConfig) (connectSpec, bool) {
 // per-call config. http / non-auth servers share one connection (left alone once
 // up). An authenticated stdio server gets a per-user subprocess with its token
 // baked into the env; if the user's token changed, it is reconnected.
-func (m *Module) ensureConnected(ctx context.Context) {
+// ensureConnected lazily connects the calling app's declared servers. With
+// onlyServer set it connects JUST that server (the invoke path — so a tool call
+// never connects sibling servers with the wrong per-call token); with "" it
+// connects them all (the listing path).
+func (m *Module) ensureConnected(ctx context.Context, onlyServer string) {
 	cfg := module.ModuleConfigFrom(ctx)
 	if len(cfg) == 0 {
 		return
@@ -241,29 +248,62 @@ func (m *Module) ensureConnected(ctx context.Context) {
 	autoInstall := autoInstallEnabled(cfg)
 	userID := callerUserID(ctx)
 	authCtx, _ := module.AuthContextFrom(ctx)
+	listingAuth := module.ListingAuthFrom(ctx)
 	for id, sc := range servers {
-		spec, ok := m.resolveServer(id, sc, autoInstall)
+		if onlyServer != "" && id != onlyServer {
+			continue
+		}
+		spec, ok := m.resolveServer(ctx, id, sc, autoInstall)
 		if !ok {
 			continue
 		}
 		key := physicalKey(id, sc, userID)
 		stdioAuth := userID != "" && isStdioOAuth(sc)
-		if stdioAuth && authCtx.Token != "" && authCtx.EnvTokenVar != "" {
-			spec.Env = injectTokenEnv(spec.Env, authCtx)
+		if stdioAuth {
+			ce, _ := catalogLookup(id)
+			spec = m.applyServerAuth(spec, id, sc, ce, authCtx)
 		}
+		// Per-server listing credential: bake THIS server's own token into its
+		// connection headers so an app wiring several OAuth servers materializes
+		// every one (each with its own credential), not just the first.
+		listingAuthed := false
+		if ac, has := listingAuth[id]; has && ac.Token != "" {
+			spec = withListingAuthHeader(spec, ac)
+			listingAuthed = true
+		}
+		authed := stdioAuth || listingAuthed
 		if existing, up := m.pool.get(key); up {
-			if !stdioAuth {
+			if !authed {
 				continue // http / non-auth: leave as-is
 			}
-			if existing.spec.Env[authCtx.EnvTokenVar] == authCtx.Token {
-				continue // same user, unchanged token
+			if existing.spec.AuthFP == spec.AuthFP {
+				continue // unchanged credential
 			}
-			// token rotated → fall through to reconnect with the new env
+			// credential changed or only now available → reconnect (also refreshes
+			// a connection cached in a failed/empty state before authorization)
 		} else if stdioAuth {
 			m.pool.evictOldestUserConn(userKeySep, maxUserPools)
 		}
 		_, _ = m.pool.connect(ctx, key, spec)
 	}
+}
+
+// withListingAuthHeader bakes a per-server credential into the connection's
+// Authorization header (canonical "Bearer" scheme) and fingerprints it, so each
+// server in a multi-server listing connects with its own token and a connection
+// cached before the token appeared is reconnected. Copies Headers (never mutates
+// the caller's map).
+func withListingAuthHeader(spec connectSpec, ac module.AuthContext) connectSpec {
+	scheme := ac.TokenType
+	if scheme == "" || strings.EqualFold(scheme, "bearer") {
+		scheme = "Bearer"
+	}
+	h := make(map[string]string, len(spec.Headers)+1)
+	maps.Copy(h, spec.Headers)
+	h["Authorization"] = scheme + " " + ac.Token
+	spec.Headers = h
+	spec.AuthFP = ac.Token
+	return spec
 }
 
 func (m *Module) startHealth() {

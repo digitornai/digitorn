@@ -137,6 +137,15 @@ func aliasMCPTool(moduleID, action string) (string, string) {
 	return moduleID, action
 }
 
+// aliasPiecesTool routes ap_<piece>.<action> to the single pieces module as
+// (pieces, ap_<piece>__<action>); the module re-derives piece + action.
+func aliasPiecesTool(moduleID, action string) (string, string) {
+	if strings.HasPrefix(moduleID, "ap_") {
+		return "pieces", moduleID + "__" + action
+	}
+	return moduleID, action
+}
+
 // callBus runs the module call through the per-app onion when one is wired,
 // else straight through. The terminal closure is what the innermost layer
 // (or the no-onion fast path) ultimately invokes.
@@ -202,6 +211,7 @@ func (a *BusAdapter) Dispatch(ctx context.Context, call runtime.ToolInvocation) 
 	// workspace module's git tools are NOT file-ops, so they keep routing here.
 	moduleID = aliasLegacyToolModule(moduleID, actionName)
 	moduleID, actionName = aliasMCPTool(moduleID, actionName)
+	moduleID, actionName = aliasPiecesTool(moduleID, actionName)
 
 	raw, err := json.Marshal(call.Args)
 	if err != nil {

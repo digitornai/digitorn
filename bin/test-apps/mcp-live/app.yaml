@@ -1,0 +1,49 @@
+schema_version: 2
+app:
+  app_id: mcp-live
+  name: MCP Live E2E
+  version: "0.1.0"
+  description: "Proves a live LLM picks and calls an MCP virtual tool end to end."
+  author: "paul@digitorn.ai"
+  category: "coding"
+
+agents:
+  - id: main
+    role: worker
+    max_tool_iterations: 8
+    brain:
+      provider: openai
+      model: moonshotai/kimi-k2.6
+      temperature: 0.1
+      max_tokens: 2048
+      config:
+        api_key: "{{env.OPENAI_API_KEY}}"
+      context:
+        max_tokens: 1000000
+    system_prompt: |
+      You are a test agent. An MCP server is connected and its tools are available
+      to you as ordinary tools in your tool list.
+
+      When the user asks you to echo a string, you MUST call the echo tool from your
+      tool list to do it — never fabricate the result yourself, and never invent a
+      tool name: use exactly the tool as it appears in your available tools. Pass the
+      exact string. After the tool returns, report back verbatim what it gave you.
+      No emoji, no preamble.
+    modules:
+      - mcp
+
+tools:
+  modules:
+    mcp:
+      config:
+        servers:
+          everything:
+            transport: stdio
+            command: npx
+            args: ["-y", "@modelcontextprotocol/server-everything"]
+            sandbox:
+              permissions: [process.exec, net.http]
+  capabilities:
+    default_policy: auto
+    grant:
+      - module: mcp

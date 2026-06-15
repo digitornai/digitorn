@@ -193,6 +193,12 @@ func (p *pool) reconnect(ctx context.Context, id string) (serverSnapshot, error)
 		c, err := p.dialFn(ctx, spec)
 		if err != nil {
 			lastErr = err
+			// A permanent failure (bad auth, 404, missing command) will NEVER
+			// recover by retrying — stop now instead of burning the whole backoff
+			// budget and re-failing every health cycle.
+			if te, ok := err.(*MCPTransportError); ok && !te.Retryable {
+				break
+			}
 			continue
 		}
 		ent := &serverEntry{id: id, spec: spec, conn: c, status: statusConnected, createdAt: p.now(), lastPing: p.now()}

@@ -1,0 +1,66 @@
+app:
+  app_id: dcapprove
+
+tools:
+  modules:
+    channels:
+      config:
+        providers:
+          # Reactive Discord bot (approval-in-channel demo).
+          dc:
+            adapter: discord
+            enabled: true
+            config:
+              token: "{{secret.DISCORD_TOKEN}}"
+            activation:
+              session: "dca-{{event.source}}"
+              message: "{{event.message}}"
+              model: "moonshotai/kimi-k2.6"
+              reply: stream
+
+          # Reactive Telegram bot (chat + typing). One persistent session per chat.
+          tg:
+            adapter: telegram
+            enabled: true
+            config:
+              token: "{{secret.TELEGRAM_TOKEN}}"
+            activation:
+              session: "tgf-{{event.source}}"
+              message: "{{event.message}}"
+              model: "moonshotai/kimi-k2.6"
+              reply: stream
+
+          # Proactive AGENTIC push: a CI webhook → a session composes the announcement
+          # → it is pushed to the Discord channel (no inbound Discord message).
+          ci_agentic:
+            adapter: webhook
+            enabled: true
+            config:
+              inbound_path: /hook/ci
+              auth: none
+            activation:
+              message: "A CI build just finished. Build {{event.payload.build}}, status: {{event.payload.status}}. Write ONE short upbeat line announcing it to the team. No emoji, no preamble."
+              model: "moonshotai/kimi-k2.6"
+              reply: auto
+              deliver:
+                adapter: discord
+                ref:
+                  provider: dc
+                  channel_id: "1488276624645558367"
+
+          # Proactive RAW push: a webhook → the rendered message is sent directly to
+          # the channel, no session, no LLM (a cheap fixed announcement).
+          ci_raw:
+            adapter: webhook
+            enabled: true
+            config:
+              inbound_path: /hook/raw
+              auth: none
+            activation:
+              message: "📣 Déploiement {{event.payload.service}} en version {{event.payload.version}} terminé."
+              reply: none
+              deliver:
+                adapter: discord
+                ref:
+                  provider: dc
+                  channel_id: "1488276624645558367"

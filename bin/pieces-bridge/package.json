@@ -1,0 +1,15 @@
+{
+  "name": "digitorn-ap-bridge",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "bun bridge.ts",
+    "build:win": "bun build bridge.ts --compile --target=bun-windows-x64 --outfile=dist/digitorn-ap-bridge.exe",
+    "build:linux": "bun build bridge.ts --compile --target=bun-linux-x64 --outfile=dist/digitorn-ap-bridge",
+    "build:mac": "bun build bridge.ts --compile --target=bun-darwin-arm64 --outfile=dist/digitorn-ap-bridge-mac"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.15.0"
+  }
+}

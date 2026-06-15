@@ -48,3 +48,4 @@ bin/_deleted-configs-bak/
 # Editor/IDE
 # .idea/
 # .vscode/
+clients/opencode-fork/bun.lock

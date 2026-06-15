@@ -1,0 +1,39 @@
+id: shell
+version: 1.0.0
+description: Sandboxed shell execution with allow/block lists and timeouts.
+supported_platforms: [linux, darwin, windows]
+declared_permissions: [process.exec]
+config_schema:
+  workdir: { type: string }
+  shell: { type: string }
+  timeout: { type: duration }
+  max_output: { type: integer }
+  allowed: { type: array }
+  blocked: { type: array }
+constraints:
+  - { name: allowed_commands, type: string_list, scope: universal }
+  - { name: blocked_commands, type: string_list, scope: universal }
+tools:
+  - name: exec
+    description: Run a shell command and return stdout, stderr and exit code.
+    risk_level: high
+    irreversible: true
+    params:
+      - { name: command, type: string, required: true }
+      - { name: timeout_seconds, type: integer }
+  - { name: bash, description: Execute via bash explicitly., risk_level: high, irreversible: true, params: [{name: command, type: string, required: true}] }
+  - { name: sh, description: Execute via /bin/sh., risk_level: high, irreversible: true, params: [{name: command, type: string, required: true}] }
+  - { name: run, description: Synonym for exec., risk_level: high, irreversible: true, params: [{name: command, type: string, required: true}] }
+  - { name: background_run, description: Run a command in the background., risk_level: high, params: [{name: command, type: string, required: true}] }
+  - { name: which, description: Locate an executable in PATH., risk_level: low, params: [{name: name, type: string, required: true}] }
+  - { name: kill, description: Send a signal to a process., risk_level: high, params: [{name: pid, type: integer, required: true}] }
+  - { name: ps, description: List running processes., risk_level: low, params: [] }
+  - { name: env, description: Read environment variables., risk_level: low, params: [{name: name, type: string}] }
+  - { name: script, description: Run a script file., risk_level: high, params: [{name: path, type: string, required: true}] }
+  - { name: bash_status, description: Check status of a background bash task., risk_level: low, params: [{name: id, type: string, required: true}] }
+  - { name: bash_background, description: Start a long-running background bash task., risk_level: high, params: [{name: command, type: string, required: true}] }
+  - { name: task_status, description: Check the status of a background task., risk_level: low, params: [{name: id, type: string, required: true}] }
+  - { name: task_output, description: Fetch output of a background task., risk_level: low, params: [{name: id, type: string, required: true}] }
+  - { name: task_wait, description: Block until a background task completes., risk_level: low, params: [{name: id, type: string, required: true}] }
+  - { name: task_list, description: List active background tasks., risk_level: low, params: [] }
+  - { name: task_kill, description: Terminate a background task., risk_level: high, params: [{name: id, type: string, required: true}] }

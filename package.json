@@ -5,6 +5,8 @@
   "scripts": {
     "install": "go mod download",
     "tidy": "go mod tidy",
+    "login": "cd ./clients/cli/cmd/digitorn && digitorn.exe login",
+    "openCode": "cd ./clients/opencode-fork && bun --env-file=.env run dev",
     "build": "npm run build:daemon && npm run build:cli && npm run build:workers",
     "build:daemon": "go build -trimpath -ldflags \"-s -w -X github.com/mbathepaul/digitorn/internal/version.Version=dev -X github.com/mbathepaul/digitorn/internal/version.BuildDate=%BUILD_DATE%\" -o bin/digitornd.exe ./cmd/digitornd",
     "build:cli": "go build -trimpath -ldflags \"-s -w -X github.com/mbathepaul/digitorn/internal/version.Version=dev -X github.com/mbathepaul/digitorn/internal/version.BuildDate=%BUILD_DATE%\" -o bin/digitorn.exe ./cmd/digitorn",

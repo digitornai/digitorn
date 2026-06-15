@@ -46,6 +46,13 @@ func (d *Daemon) mcpServerAuthLookup(appID, serverID string) *schema.MCPAuthConf
 	return cfg
 }
 
+// mcpServerURLLookup returns a server's remote URL (empty for stdio / unknown).
+// Wired into the OAuth service so it can discover an authorization server from a
+// server declared by URL with no explicit endpoints/client.
+func (d *Daemon) mcpServerURLLookup(appID, serverID string) string {
+	return d.mcpServers(appID)[serverID].URL
+}
+
 func (d *Daemon) oauthReady(w http.ResponseWriter) bool {
 	if d.mcpOAuth == nil {
 		writeError(w, http.StatusServiceUnavailable, "oauth_unavailable", "mcp oauth is not configured on this daemon")
@@ -80,7 +87,7 @@ func (d *Daemon) mcpOAuthAuthorize(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"auth_url":  authURL,
 		"state":     state,
-		"provider":  mcpoauth.ProviderOf(cfg),
+		"provider":  d.mcpOAuth.ProviderKeyResolved(r.Context(), cfg, appID, serverID),
 		"server_id": serverID,
 	})
 }
@@ -106,6 +113,26 @@ func (d *Daemon) mcpOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	if p == nil {
 		writeOAuthHTML(w, http.StatusBadRequest, "This authorization link is invalid or has expired. Please try again.")
+		return
+	}
+	// Per-user managed server: rebuild the oauth2 block + the server URL the
+	// discovery needs from the managed store (the app-config lookup can't see it).
+	if p.AppID == managedMCPAppID {
+		if d.managedMCP == nil {
+			writeOAuthHTML(w, http.StatusServiceUnavailable, "Managed MCP servers are not configured.")
+			return
+		}
+		view, found, gerr := d.managedMCP.Get(r.Context(), p.UserID, p.ServerID)
+		if gerr != nil || !found || view.URL == "" {
+			writeOAuthHTML(w, http.StatusBadRequest, "The server is no longer configured for OAuth.")
+			return
+		}
+		ctx := mcpoauth.WithServerURL(r.Context(), view.URL)
+		if err := d.mcpOAuth.Exchange(ctx, &schema.MCPAuthConfig{Type: "oauth2"}, p, code); err != nil {
+			writeOAuthHTML(w, http.StatusBadGateway, "The provider rejected the authorization. Please try again.")
+			return
+		}
+		writeOAuthHTML(w, http.StatusOK, "Authorization complete. You can close this window.")
 		return
 	}
 	cfg, ok := d.mcpServerAuth(p.AppID, p.ServerID)
@@ -161,7 +188,8 @@ func (d *Daemon) mcpOAuthTokenSet(w http.ResponseWriter, r *http.Request) {
 	if tok.ExpiresAt == 0 && req.ExpiresIn > 0 {
 		tok.ExpiresAt = time.Now().UTC().Unix() + req.ExpiresIn
 	}
-	if err := d.mcpOAuth.SetManual(r.Context(), userID, mcpoauth.ProviderOf(cfg), tok); err != nil {
+	provider := d.mcpOAuth.ProviderKeyResolved(r.Context(), cfg, appID, serverID)
+	if err := d.mcpOAuth.SetManual(r.Context(), userID, provider, tok); err != nil {
 		writeError(w, http.StatusInternalServerError, "token_set_failed", err.Error())
 		return
 	}
@@ -183,7 +211,7 @@ func (d *Daemon) mcpOAuthTokenRevoke(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "server is not oauth2-authenticated")
 		return
 	}
-	if err := d.mcpOAuth.Revoke(r.Context(), cfg, userID); err != nil {
+	if err := d.mcpOAuth.Revoke(r.Context(), cfg, userID, appID, serverID); err != nil {
 		writeError(w, http.StatusInternalServerError, "revoke_failed", err.Error())
 		return
 	}
@@ -205,7 +233,7 @@ func (d *Daemon) mcpPendingOAuth(w http.ResponseWriter, r *http.Request) {
 		if sc.Auth == nil || sc.Auth.Type != "oauth2" {
 			continue
 		}
-		provider := mcpoauth.ProviderOf(sc.Auth)
+		provider := d.mcpOAuth.ProviderKeyResolved(r.Context(), sc.Auth, appID, serverID)
 		if d.mcpOAuth.HasValidToken(r.Context(), userID, provider) {
 			continue
 		}

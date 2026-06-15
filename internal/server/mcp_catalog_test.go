@@ -51,7 +51,7 @@ func TestMCPCatalog_MaterializesNativeActions(t *testing.T) {
 		{Name: "mcp_github__list_issues", RiskLevel: tool.RiskLow},
 		{Name: "mcp_google_calendar__list_events", RiskLevel: tool.RiskLow},
 	}
-	mc := newMCPCatalog(mcpRegistry(t, live), mcpAppMgr("app1"))
+	mc := newMCPCatalog(mcpRegistry(t, live), mcpAppMgr("app1"), nil)
 
 	actions := mc.forApp("app1")
 	got := map[string]tool.RiskLevel{}
@@ -79,7 +79,7 @@ func TestMCPCatalog_MaterializesNativeActions(t *testing.T) {
 
 func TestMCPCatalog_LookupSpecForGates(t *testing.T) {
 	live := []tool.Spec{{Name: "mcp_github__delete_repo", RiskLevel: tool.RiskHigh, Irreversible: true}}
-	mc := newMCPCatalog(mcpRegistry(t, live), mcpAppMgr("app1"))
+	mc := newMCPCatalog(mcpRegistry(t, live), mcpAppMgr("app1"), nil)
 	mc.forApp("app1") // populate the global spec cache
 
 	spec := mc.lookupSpec("mcp_github", "delete_repo")
@@ -99,7 +99,7 @@ func TestMCPCatalog_NoMCPDeclared(t *testing.T) {
 	// app2 declares no mcp module → no MCP actions.
 	mc := newMCPCatalog(mcpRegistry(t, live), &fakeAppMgr{apps: map[string]*appmgr.RuntimeApp{
 		"app2": appWithModules("app2", "filesystem"),
-	}})
+	}}, nil)
 	if a := mc.forApp("app2"); len(a) != 0 {
 		t.Fatalf("app without mcp must get no MCP actions, got %v", a)
 	}

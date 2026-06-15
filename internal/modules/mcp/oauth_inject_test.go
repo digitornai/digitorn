@@ -101,8 +101,8 @@ func TestEnsureConnected_PerUserStdioIsolation(t *testing.T) {
 		"auth": map[string]any{"type": "oauth2", "provider": "custom", "env_token_var": "TOK"},
 	}}
 
-	m.ensureConnected(callCtx("userA", "TOK", "tokenA", servers))
-	m.ensureConnected(callCtx("userB", "TOK", "tokenB", servers))
+	m.ensureConnected(callCtx("userA", "TOK", "tokenA", servers), "")
+	m.ensureConnected(callCtx("userB", "TOK", "tokenB", servers), "")
 
 	entA, okA := m.pool.get("srv" + userKeySep + "userA")
 	entB, okB := m.pool.get("srv" + userKeySep + "userB")
@@ -126,12 +126,12 @@ func TestEnsureConnected_ReconnectsOnTokenChange(t *testing.T) {
 		"auth": map[string]any{"type": "oauth2", "provider": "custom", "env_token_var": "TOK"},
 	}}
 
-	m.ensureConnected(callCtx("userA", "TOK", "tok1", servers))
-	m.ensureConnected(callCtx("userA", "TOK", "tok1", servers)) // unchanged → no redial
+	m.ensureConnected(callCtx("userA", "TOK", "tok1", servers), "")
+	m.ensureConnected(callCtx("userA", "TOK", "tok1", servers), "") // unchanged → no redial
 	if dials != 1 {
 		t.Fatalf("expected 1 dial for unchanged token, got %d", dials)
 	}
-	m.ensureConnected(callCtx("userA", "TOK", "tok2", servers)) // rotated → redial
+	m.ensureConnected(callCtx("userA", "TOK", "tok2", servers), "") // rotated → redial
 	if dials != 2 {
 		t.Fatalf("expected redial on token change, got %d dials", dials)
 	}
@@ -142,8 +142,8 @@ func TestEnsureConnected_HttpSharedAcrossUsers(t *testing.T) {
 	m.pool.dialFn = func(_ context.Context, _ connectSpec) (mcpConn, error) { return &fakeConn{}, nil }
 	servers := map[string]any{"web": map[string]any{"transport": "streamable_http", "url": "https://x"}}
 
-	m.ensureConnected(callCtx("userA", "", "", servers))
-	m.ensureConnected(callCtx("userB", "", "", servers))
+	m.ensureConnected(callCtx("userA", "", "", servers), "")
+	m.ensureConnected(callCtx("userB", "", "", servers), "")
 	if _, ok := m.pool.get("web"); !ok {
 		t.Fatal("http server should be a single shared entry")
 	}

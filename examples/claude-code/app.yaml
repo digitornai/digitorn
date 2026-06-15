@@ -42,6 +42,11 @@ context:
       title: Session
       builtin: session
       priority: 30
+    - id: codebase_map
+      title: Codebase map
+      builtin: code_index
+      when: session.workdir
+      priority: 35
     - id: dev_rules
       title: Working in this repository
       text: |

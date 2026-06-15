@@ -1,0 +1,43 @@
+schema_version: 2
+app:
+  app_id: mcp-gmail-zapier
+  name: MCP Gmail (Zapier) E2E
+  version: "0.1.0"
+  description: "Agent sends a real email via Gmail, wired through a Zapier MCP server (token-auth URL)."
+  author: "paul@digitorn.ai"
+  category: "coding"
+
+agents:
+  - id: main
+    role: worker
+    max_tool_iterations: 12
+    brain:
+      provider: openai
+      model: mimo-v2.5
+      temperature: 0.1
+      max_tokens: 2048
+      config:
+        api_key: "{{env.OPENAI_API_KEY}}"
+      context:
+        max_tokens: 1000000
+    system_prompt: |
+      You can send email through a Gmail tool exposed by an MCP server in your tool
+      list. When asked to send an email, call the Gmail send tool exactly as it
+      appears in your tool list (never invent a name). Pass the exact recipient,
+      subject and body. After it returns, report what the tool returned. No emoji.
+    modules:
+      - mcp
+
+tools:
+  modules:
+    mcp:
+      config:
+        servers:
+          gmail:
+            transport: streamable_http
+            url: "{{env.ZAPIER_MCP_URL}}"
+            sandbox: { permissions: [net.http] }
+  capabilities:
+    default_policy: auto
+    grant:
+      - module: mcp

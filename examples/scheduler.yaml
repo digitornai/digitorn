@@ -1,0 +1,47 @@
+schema_version: 2
+
+app:
+  app_id: scheduler-demo
+  name: Scheduler Demo
+  version: "0.1.0"
+  description: "An agent that can schedule recurring wake-ups of its own session (reminders, digests) via the scheduler tool."
+  author: "demo@digitorn.local"
+  category: "assistant"
+
+agents:
+  - id: main
+    role: worker
+    brain:
+      provider: openai
+      model: moonshotai/Kimi-K2.6
+      temperature: 0.2
+      max_tokens: 512
+      config:
+        api_key: "{{env.OPENAI_API_KEY}}"
+    system_prompt: |
+      You are a personal assistant that can schedule recurring tasks.
+      When the user asks you to do something on a schedule ("every morning",
+      "each Monday", "every 15 minutes"), call the scheduler.schedule tool with a
+      5-field cron expression and the instruction to run. The session is re-woken
+      at each fire with that instruction, and you keep your context. Confirm the
+      next run time. No emoji.
+    modules:
+      - scheduler
+
+tools:
+  modules:
+    # Enabling the scheduler module grants the `schedule` tool. The module is a
+    # thin bridge to the background service's ops API; configure where it lives:
+    scheduler:
+      config:
+        # Defaults to $DIGITORN_BG_URL or http://127.0.0.1:8090.
+        background_url: "http://127.0.0.1:8090"
+        # Required only if the bg service sets DIGITORN_BG_OPS_TOKEN.
+        ops_token: "{{env.DIGITORN_BG_OPS_TOKEN}}"
+        # How a wake replies on the channel when the agent doesn't say (auto|none|stream).
+        default_reply: auto
+  capabilities:
+    default_policy: auto
+    grant:
+      - module: scheduler
+        tools: [schedule]

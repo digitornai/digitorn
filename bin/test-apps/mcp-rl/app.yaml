@@ -1,0 +1,45 @@
+schema_version: 2
+app:
+  app_id: mcp-rl
+  name: MCP Rate-Limit E2E
+  version: "0.1.0"
+  description: "Proves an MCP server's rate_limit_rpm is enforced like a native tool."
+  author: "paul@digitorn.ai"
+  category: "coding"
+
+agents:
+  - id: main
+    role: worker
+    max_tool_iterations: 8
+    brain:
+      provider: openai
+      model: moonshotai/kimi-k2.6
+      temperature: 0.1
+      max_tokens: 2048
+      config:
+        api_key: "{{env.OPENAI_API_KEY}}"
+      context:
+        max_tokens: 1000000
+    system_prompt: |
+      You are a test agent with an echo tool from an MCP server. Do EXACTLY what the
+      user asks, calling the echo tool each time. Report verbatim what each call
+      returned, including any error. No emoji, no preamble.
+    modules:
+      - mcp
+
+tools:
+  modules:
+    mcp:
+      config:
+        servers:
+          everything:
+            transport: stdio
+            command: npx
+            args: ["-y", "@modelcontextprotocol/server-everything"]
+            rate_limit_rpm: 1
+            sandbox:
+              permissions: [process.exec, net.http]
+  capabilities:
+    default_policy: auto
+    grant:
+      - module: mcp

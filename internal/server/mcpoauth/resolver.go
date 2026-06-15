@@ -30,7 +30,11 @@ func (s *Service) ResolveAuth(ctx context.Context, userID, appID, moduleID, tool
 	if cfg == nil || cfg.Type != "oauth2" {
 		return nil, nil, nil
 	}
-	ra := resolveAuth(cfg)
+	enriched, err := s.enrich(ctx, cfg, appID, serverID)
+	if err != nil {
+		return nil, nil, err
+	}
+	ra := resolveAuth(enriched)
 	provider := ra.Provider
 
 	tok, err := s.tokens.Get(ctx, userID, provider)
@@ -48,10 +52,15 @@ func (s *Service) ResolveAuth(ctx context.Context, userID, appID, moduleID, tool
 				_ = s.tokens.Set(ctx, userID, provider, fresh)
 			}
 			return &service.AuthContext{
-				Token:       fresh.AccessToken,
-				TokenType:   tokenTypeOr(fresh.TokenType),
-				EnvTokenVar: ra.EnvTokenVar,
-				ExpiresAt:   fresh.ExpiresAt,
+				Token:        fresh.AccessToken,
+				TokenType:    tokenTypeOr(fresh.TokenType),
+				EnvTokenVar:  ra.EnvTokenVar,
+				ExpiresAt:    fresh.ExpiresAt,
+				Provider:     provider,
+				RefreshToken: fresh.RefreshToken,
+				Scope:        fresh.Scope,
+				ClientID:     ra.ClientID,
+				ClientSecret: ra.ClientSecret,
 			}, nil, nil
 		}
 		// refresh failed → fall through to a fresh challenge (never serve stale)
@@ -76,9 +85,9 @@ func tokenTypeOr(t string) string {
 // serverFromTool extracts "<server>" from "mcp_<server>__<tool>" (server names may
 // contain underscores; the split is on the first "__").
 func serverFromTool(name string) string {
-	i := strings.Index(name, "__")
-	if i < 0 {
+	before, _, found := strings.Cut(name, "__")
+	if !found {
 		return ""
 	}
-	return strings.TrimPrefix(name[:i], "mcp_")
+	return strings.TrimPrefix(before, "mcp_")
 }

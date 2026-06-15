@@ -77,8 +77,9 @@ func New() *Module {
 
 	m.RegisterTool(module.Tool{
 		Name:        "read",
-		Description: "Read a file with line numbers (cat -n style). IMAGES (PNG/JPG/GIF/WEBP/BMP) are returned as actual visual content you can SEE, not described. Use `outline: true` on a big code file to get a structural map (functions/classes/headings + line numbers) instead of the full content — then read a precise line range or edit by line number. Pass `paths` (a list) to read several files (and/or images) in one call.",
-		ToolPrompt: "Read before you edit or write — never edit a file blind. When you already know the symbol or region you need, read just that range (offset/limit) rather than the whole file; on a large or unfamiliar file run `outline: true` first to map it, then read the precise lines.\n" +
+		Description: "Read a file with line numbers (cat -n style). Read a DIRECTORY (e.g. \".\" for the project root) to get a .gitignore-aware TREE of its structure — the way to orient yourself in an unfamiliar project. IMAGES (PNG/JPG/GIF/WEBP/BMP) are returned as actual visual content you can SEE, not described. Use `outline: true` on a code file OR a directory to get a structural map (functions/classes/headings + line numbers) instead of full content — then read a precise line range or edit by line number. Pass `paths` (a list) to read several files (and/or images) in one call.",
+		ToolPrompt: "To orient in an unfamiliar project, `read` the directory (\".\" or a subfolder) for a structure tree, or `read` a directory with `outline: true` for a map of every file's definitions — far better than globbing a wall of paths.\n" +
+			"Read before you edit or write — never edit a file blind. When you already know the symbol or region you need, read just that range (offset/limit) rather than the whole file; on a large or unfamiliar file run `outline: true` first to map it, then read the precise lines.\n" +
 			"Batch related files in ONE call via `paths` instead of many sequential reads — it is faster and keeps the picture coherent.\n" +
 			"The line numbers in the output are authoritative: cite locations as path:line and edit by those numbers.\n" +
 			"READ OUTPUT FORMAT: every content line is prefixed with its 1-based line number and a TAB. Example:\n" +
@@ -199,12 +200,13 @@ func New() *Module {
 
 	m.RegisterTool(module.Tool{
 		Name:        "glob",
-		Description: "Find paths matching a glob pattern (supports ** for recursion), newest first. VCS/build dirs are skipped.",
-		ToolPrompt:  "Reach for `glob` when you know the NAME or path shape (\"**/*.go\", \"src/**/*.{ts,tsx}\", \"cmd/*/main.go\"); reach for `grep` when you know the CONTENT. Full glob syntax is supported (recursive **, brace alternation {a,b}, ranges, character classes). Results are newest-first, so it doubles as \"what changed recently\". Use it to discover where things live before reading — don't guess paths.",
+		Description: "Find paths matching a glob pattern (supports ** for recursion), newest first. VCS/build dirs are skipped. Pass `tree: true` to get the matches as an indented STRUCTURE instead of a flat list — readable when there are many. To understand a project's layout, prefer `read .` (a directory tree) or `read . outline:true` (definitions per file).",
+		ToolPrompt:  "Reach for `glob` when you know the NAME or path shape (\"**/*.go\", \"src/**/*.{ts,tsx}\", \"cmd/*/main.go\"); reach for `grep` when you know the CONTENT. Full glob syntax is supported (recursive **, brace alternation {a,b}, ranges, character classes). Results are newest-first, so it doubles as \"what changed recently\". For a big result set use `tree: true` so you see the structure, not a wall of paths. To grasp an unfamiliar project, `read` the directory (tree) or `read` it with `outline: true` (a map of every file's definitions) rather than globbing everything.",
 		Params: []tool.ParamSpec{
 			{Name: "pattern", Type: "string", Description: "Glob pattern, e.g. \"**/*.go\" or \"src/*.ts\".", Required: true},
 			{Name: "type", Type: "string", Description: "Filter: \"file\", \"dir\", or \"any\" (default).", Default: "any"},
 			{Name: "max_results", Type: "integer", Description: "Cap on matches (default 1000).", Default: 0},
+			{Name: "tree", Type: "boolean", Description: "Render matches as an indented directory tree instead of a flat path list.", Default: false},
 		},
 		RiskLevel: tool.RiskLow,
 		Handler:   m.glob,
@@ -462,7 +464,17 @@ func (m *Module) readBody(ctx context.Context, rel string, p readParams) (string
 		return "", nil, err
 	}
 	if fi.IsDir() {
-		return "", nil, fmt.Errorf("%s is a directory — use glob to list its entries", rel)
+		// A directory orients the agent instead of erroring : `outline: true` →
+		// a cross-file map of every file's definitions ; otherwise a bounded,
+		// .gitignore-aware TREE of the structure. Both are pure-Go (no treesitter).
+		label := rel
+		if label == "" || label == "." {
+			label = "."
+		}
+		if p.Outline {
+			return fmt.Sprintf("Outline of %s (definitions per file):\n\n%s", label, renderDirOutline(abs)), nil, nil
+		}
+		return fmt.Sprintf("Directory %s (tree; files are read individually):\n\n%s", label, renderDirTree(abs)), nil, nil
 	}
 
 	capBytes := m.cfg.MaxFileBytes
@@ -1128,6 +1140,7 @@ type globParams struct {
 	Glob       string  `json:"glob"`        // alias : models often key the pattern under the tool name
 	Type       string  `json:"type"`        // "file" | "dir" | "any" (default)
 	MaxResults flexInt `json:"max_results"` // cap (default globDefaultCap)
+	Tree       bool    `json:"tree"`        // render matches as an indented tree instead of a flat list
 }
 
 // effectivePattern resolves the glob pattern, accepting the common LLM mistake of
@@ -1251,6 +1264,9 @@ func (m *Module) glob(ctx context.Context, raw json.RawMessage) (tool.Result, er
 	files := make([]string, len(hits))
 	for i, h := range hits {
 		files[i] = h.rel
+	}
+	if p.Tree {
+		return tool.Result{Success: true, Data: map[string]any{"tree": renderPathsTree(files), "count": len(files), "truncated": truncated}}, nil
 	}
 	return tool.Result{Success: true, Data: map[string]any{"files": files, "count": len(files), "truncated": truncated}}, nil
 }

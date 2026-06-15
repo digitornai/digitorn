@@ -29,36 +29,54 @@ import (
 	"github.com/mbathepaul/digitorn/internal/background/daemonclient"
 	"github.com/mbathepaul/digitorn/internal/voice"
 	"github.com/mbathepaul/digitorn/internal/voice/transport/audiosocket"
+	"github.com/mbathepaul/digitorn/internal/voice/transport/twilio"
 )
 
 const voiceContext = "You are on a live voice call. Reply in one or two short, spoken sentences. No markdown, no lists, no emojis."
 
 type config struct {
-	BaseURL      string
-	Token        string
-	AppID        string
-	EntryAgent   string
+	BaseURL    string
+	Token      string
+	AppID      string
+	EntryAgent string
+	// Transport selects the call service this adapter listens for : "asterisk"
+	// (AudioSocket TCP, the default) or "twilio" (Media Streams WebSocket — point
+	// the <Connect><Stream url="wss://…"/> TwiML at TwilioAddr). The transport
+	// owns the wire codec ; the bridge below only ever sees PCM16 frames.
+	Transport    string
 	AsteriskAddr string
+	TwilioAddr   string
 	Rate         int
-	STTModel     string
-	TTSModel     string
-	TTSVoice     string
-	Language     string
+	// Engine selects the daemon-side voice brain : "pipeline" (Voie A — STT →
+	// agent turn → TTS, the default) or "realtime" (Voie B — one speech-to-speech
+	// model through the gateway; the daemon still gates every tool call). The
+	// adapter stays a pure audio pipe either way — this only changes the query
+	// params it passes to the daemon endpoint.
+	Engine        string
+	RealtimeModel string
+	STTModel      string
+	TTSModel      string
+	TTSVoice      string
+	Language      string
 }
 
 func main() {
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	cfg := config{
-		BaseURL:      env("DIGITORN_VOICE_BASE_URL", "http://127.0.0.1:8000"),
-		Token:        loadToken(),
-		AppID:        os.Getenv("DIGITORN_VOICE_APP_ID"),
-		EntryAgent:   os.Getenv("DIGITORN_VOICE_ENTRY_AGENT"),
-		AsteriskAddr: env("DIGITORN_VOICE_ASTERISK_ADDR", ":9092"),
-		Rate:         atoiOr(os.Getenv("DIGITORN_VOICE_RATE"), 8000),
-		STTModel:     os.Getenv("DIGITORN_VOICE_STT_MODEL"),
-		TTSModel:     os.Getenv("DIGITORN_VOICE_TTS_MODEL"),
-		TTSVoice:     os.Getenv("DIGITORN_VOICE_TTS_VOICE"),
-		Language:     os.Getenv("DIGITORN_VOICE_LANGUAGE"),
+		BaseURL:       env("DIGITORN_VOICE_BASE_URL", "http://127.0.0.1:8000"),
+		Token:         loadToken(),
+		AppID:         os.Getenv("DIGITORN_VOICE_APP_ID"),
+		EntryAgent:    os.Getenv("DIGITORN_VOICE_ENTRY_AGENT"),
+		Transport:     env("DIGITORN_VOICE_TRANSPORT", "asterisk"),
+		AsteriskAddr:  env("DIGITORN_VOICE_ASTERISK_ADDR", ":9092"),
+		TwilioAddr:    env("DIGITORN_VOICE_TWILIO_ADDR", ":9093"),
+		Rate:          atoiOr(os.Getenv("DIGITORN_VOICE_RATE"), 8000),
+		Engine:        env("DIGITORN_VOICE_ENGINE", "pipeline"),
+		RealtimeModel: os.Getenv("DIGITORN_VOICE_REALTIME_MODEL"),
+		STTModel:      os.Getenv("DIGITORN_VOICE_STT_MODEL"),
+		TTSModel:      os.Getenv("DIGITORN_VOICE_TTS_MODEL"),
+		TTSVoice:      os.Getenv("DIGITORN_VOICE_TTS_VOICE"),
+		Language:      os.Getenv("DIGITORN_VOICE_LANGUAGE"),
 	}
 	if cfg.AppID == "" {
 		log.Error("voice: DIGITORN_VOICE_APP_ID is required")
@@ -66,13 +84,23 @@ func main() {
 	}
 
 	client := daemonclient.New(cfg.BaseURL, cfg.Token)
-	transport := audiosocket.New(cfg.AsteriskAddr)
+	var transport voice.Transport
+	var addr string
+	switch strings.ToLower(cfg.Transport) {
+	case "twilio":
+		transport, addr = twilio.New(cfg.TwilioAddr, ""), cfg.TwilioAddr
+	case "asterisk", "audiosocket", "":
+		transport, addr = audiosocket.New(cfg.AsteriskAddr), cfg.AsteriskAddr
+	default:
+		log.Error("voice: unknown transport (asterisk|twilio)", "transport", cfg.Transport)
+		os.Exit(1)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	log.Info("voice: adapter serving", "transport", transport.Name(), "addr", cfg.AsteriskAddr,
-		"app", cfg.AppID, "daemon", cfg.BaseURL, "rate", cfg.Rate)
+	log.Info("voice: adapter serving", "transport", transport.Name(), "addr", addr,
+		"app", cfg.AppID, "daemon", cfg.BaseURL, "rate", cfg.Rate, "engine", cfg.Engine)
 	if err := transport.Serve(ctx, func(cctx context.Context, call voice.Call) {
 		bridge(cctx, call, cfg, client, log)
 	}); err != nil && ctx.Err() == nil {
@@ -137,22 +165,38 @@ func bridge(ctx context.Context, call voice.Call, cfg config, client *daemonclie
 	}
 }
 
-// wsURL builds the daemon voice endpoint URL with the provider params.
+// wsURL builds the daemon voice endpoint URL with the provider params. In
+// realtime mode (Voie B) it selects the speech-to-speech brain and its model /
+// agent ; in pipeline mode (Voie A) it passes the STT/TTS knobs. Both reach the
+// SAME daemon endpoint — the brain choice is a query param, never adapter logic.
 func wsURL(cfg config, sessionID string) string {
 	base := strings.Replace(strings.Replace(cfg.BaseURL, "https://", "wss://", 1), "http://", "ws://", 1)
 	q := neturl.Values{}
 	q.Set("rate", strconv.Itoa(cfg.Rate))
-	if cfg.STTModel != "" {
-		q.Set("stt_model", cfg.STTModel)
-	}
-	if cfg.TTSModel != "" {
-		q.Set("tts_model", cfg.TTSModel)
-	}
-	if cfg.TTSVoice != "" {
-		q.Set("tts_voice", cfg.TTSVoice)
-	}
-	if cfg.Language != "" {
-		q.Set("language", cfg.Language)
+	if strings.EqualFold(cfg.Engine, "realtime") {
+		q.Set("engine", "realtime")
+		if cfg.RealtimeModel != "" {
+			q.Set("realtime_model", cfg.RealtimeModel)
+		}
+		if cfg.EntryAgent != "" {
+			q.Set("agent", cfg.EntryAgent)
+		}
+		if cfg.TTSVoice != "" {
+			q.Set("tts_voice", cfg.TTSVoice)
+		}
+	} else {
+		if cfg.STTModel != "" {
+			q.Set("stt_model", cfg.STTModel)
+		}
+		if cfg.TTSModel != "" {
+			q.Set("tts_model", cfg.TTSModel)
+		}
+		if cfg.TTSVoice != "" {
+			q.Set("tts_voice", cfg.TTSVoice)
+		}
+		if cfg.Language != "" {
+			q.Set("language", cfg.Language)
+		}
 	}
 	return base + "/api/apps/" + neturl.PathEscape(cfg.AppID) + "/sessions/" + neturl.PathEscape(sessionID) + "/voice/audio?" + q.Encode()
 }

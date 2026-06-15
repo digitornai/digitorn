@@ -65,6 +65,11 @@ type MCPAuthConfig struct {
 	TokenAuthMethod string         `yaml:"token_auth_method,omitempty"`
 	ExtraParams     map[string]any `yaml:"extra_params,omitempty"`
 	EnvTokenVar     string         `yaml:"env_token_var,omitempty"`
+	// Resource is the RFC 8707 resource indicator — the protected MCP server's
+	// canonical URI. The MCP auth spec requires it on the authorize + token
+	// requests so the issued token is bound to this resource. Auto-filled from
+	// discovery; rarely set by hand.
+	Resource string `yaml:"resource,omitempty"`
 }
 
 func defaultBareSandbox() *MCPServerSandbox {

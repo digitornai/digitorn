@@ -2,8 +2,10 @@ package mcp
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"os/exec"
+	"strings"
 	"time"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -25,6 +27,10 @@ type connectSpec struct {
 	URL       string
 	Headers   map[string]string
 	Timeout   time.Duration
+	// AuthFP fingerprints the injected credential so the pool reconnects an
+	// authenticated stdio server only when the credential actually changed
+	// (covers env_token AND google_keyfile, where the token isn't in an env var).
+	AuthFP string
 }
 
 // conn wraps one live MCP client session over the official SDK.
@@ -65,7 +71,12 @@ func buildTransport(spec connectSpec) (mcpsdk.Transport, error) {
 		t := &mcpsdk.StreamableClientTransport{Endpoint: spec.URL, HTTPClient: headerClient(spec.Headers)}
 		return t, nil
 	case "sse":
-		return nil, transportErr("sse transport is not supported yet (phase 1.5)")
+		// Legacy HTTP+SSE transport (2024-11-05 spec). The official SDK provides
+		// the client; we just install the same header/OAuth-injecting http client.
+		if spec.URL == "" {
+			return nil, transportErr("sse transport requires a url")
+		}
+		return &mcpsdk.SSEClientTransport{Endpoint: spec.URL, HTTPClient: headerClient(spec.Headers)}, nil
 	default:
 		return nil, transportErr("unknown transport %q", spec.Transport)
 	}
@@ -143,10 +154,29 @@ func (c *conn) close() error {
 	return c.session.Close()
 }
 
+// mcpHTTPTransport is the SHARED, bounded transport for all http/sse MCP
+// connections. Unlike http.DefaultTransport it caps concurrent connections per
+// host (MaxConnsPerHost) so a server that doesn't let connections return to the
+// keep-alive pool produces BACK-PRESSURE instead of an unbounded dial leak (a
+// soak found DefaultTransport piling up tens of thousands of dial goroutines
+// under sustained streamable_http load). Higher MaxIdleConnsPerHost keeps more
+// connections reusable; IdleConnTimeout reaps stragglers.
+var mcpHTTPTransport = &http.Transport{
+	Proxy:                 http.ProxyFromEnvironment,
+	DialContext:           (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+	ForceAttemptHTTP2:     true,
+	MaxIdleConns:          100,
+	MaxIdleConnsPerHost:   16,
+	MaxConnsPerHost:       64,
+	IdleConnTimeout:       90 * time.Second,
+	TLSHandshakeTimeout:   10 * time.Second,
+	ExpectContinueTimeout: time.Second,
+}
+
 // headerClient injects static headers on every request — the point for
 // daemon-resolved OAuth / configured bearer tokens on http transports.
 func headerClient(headers map[string]string) *http.Client {
-	return &http.Client{Transport: &headerRoundTripper{base: http.DefaultTransport, headers: headers}}
+	return &http.Client{Transport: &headerRoundTripper{base: mcpHTTPTransport, headers: headers}}
 }
 
 type headerRoundTripper struct {
@@ -161,8 +191,11 @@ func (h *headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 	// Per-call OAuth: overlay the Authorization header from the daemon-resolved
 	// credential on this request's context (overrides any static one).
 	if ac, ok := module.AuthContextFrom(req.Context()); ok && ac.Token != "" {
+		// Normalize the scheme to the canonical "Bearer": providers return
+		// token_type as "bearer" (lower-case) and some resource servers (e.g.
+		// Notion's MCP endpoint) reject a lower-case scheme as an invalid token.
 		scheme := ac.TokenType
-		if scheme == "" {
+		if scheme == "" || strings.EqualFold(scheme, "bearer") {
 			scheme = "Bearer"
 		}
 		req.Header.Set("Authorization", scheme+" "+ac.Token)

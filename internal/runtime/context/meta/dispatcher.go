@@ -198,7 +198,15 @@ func (m *MetaDispatcher) Dispatch(ctx context.Context, call runtime.ToolInvocati
 	// actions are left as-is and the gate reports honestly.
 	if !strings.Contains(canonical, ".") {
 		if idx := m.resolveIndex(call); idx != nil {
-			canonical = toolname.QualifyBareName(canonical, idx.FQNList())
+			fqns := idx.FQNList()
+			canonical = toolname.QualifyBareName(canonical, fqns)
+			// Models freely swap "." and "_" in tool names (especially MCP names
+			// like mcp_<server>.<tool> → mcp_<server>_<tool>); recover those
+			// against the known FQN set so the gate sees the real tool, not a
+			// bogus module.
+			if !strings.Contains(canonical, ".") {
+				canonical = toolname.ResolveMangled(canonical, fqns)
+			}
 		}
 	}
 

@@ -22,7 +22,9 @@ $version = (git describe --tags --always --dirty 2>$null)
 if (-not $version) { $version = 'dev' }
 $date = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
 $ldflags = "-s -w -X $pkg/internal/version.Version=$version -X $pkg/internal/version.BuildDate=$date"
-$tags = 'treesitter'
+$baseTags = 'treesitter'
+# treesitter (code-intel) and onnx (real embeddings) both use cgo.
+$env:CGO_ENABLED = '1'
 
 # A running daemon locks its .exe, so go build can't overwrite it. Stop the
 # daemon + workers first (unless -NoStop).
@@ -32,18 +34,21 @@ if (-not $NoStop) {
 }
 
 $targets = @(
-  @{ out = 'bin\digitornd.exe'; src = './cmd/digitornd' },
-  @{ out = 'bin\digitorn.exe'; src = './cmd/digitorn' },
-  @{ out = 'bin\digitorn-worker.exe'; src = './cmd/digitorn-worker' },
-  @{ out = 'bin\digitorn-worker-llm.exe'; src = './cmd/digitorn-worker-llm' },
-  @{ out = 'bin\digitorn-worker-embeddings.exe'; src = './cmd/digitorn-worker-embeddings' }
+  @{ out = 'bin\digitornd.exe'; src = './cmd/digitornd'; tags = $baseTags },
+  @{ out = 'bin\digitorn.exe'; src = './cmd/digitorn'; tags = $baseTags },
+  @{ out = 'bin\digitorn-worker.exe'; src = './cmd/digitorn-worker'; tags = $baseTags },
+  @{ out = 'bin\digitorn-worker-llm.exe'; src = './cmd/digitorn-worker-llm'; tags = $baseTags },
+  # The embeddings worker MUST carry -tags onnx : without it there is no real
+  # ONNX backend, so DefaultModel fails and the worker crash-loops (exit 3) in
+  # onnx mode. This is the canonical reason semantic search silently dies.
+  @{ out = 'bin\digitorn-worker-embeddings.exe'; src = './cmd/digitorn-worker-embeddings'; tags = "$baseTags onnx" }
 )
 foreach ($t in $targets) {
-  Write-Host "building $($t.out)" -ForegroundColor Cyan
-  & go build -trimpath -tags $tags -ldflags $ldflags -o $t.out $t.src
+  Write-Host "building $($t.out) (tags: $($t.tags))" -ForegroundColor Cyan
+  & go build -trimpath -tags $t.tags -ldflags $ldflags -o $t.out $t.src
   if ($LASTEXITCODE -ne 0) { throw "build failed: $($t.src)" }
 }
-Write-Host "OK - daemon + CLI + workers built (tags: $tags, version: $version)" -ForegroundColor Green
+Write-Host "OK - daemon + CLI + workers built (embeddings: +onnx, version: $version)" -ForegroundColor Green
 
 if ($Run) {
   Start-Process -FilePath '.\bin\digitornd.exe' -ArgumentList '-config', '.\bin\config.yaml' `
