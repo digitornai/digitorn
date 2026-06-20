@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "allowJs": true,
+    "noEmit": true
+  },
+  "exclude": [
+    "activepieces-main",
+    "clients/opencode-fork",
+    "vendor-references",
+    "node_modules",
+    "dist",
+    "build",
+    "bin"
+  ]
+}

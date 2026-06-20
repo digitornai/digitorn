@@ -227,6 +227,8 @@ type ChatResponse struct {
 	// ReasoningContent is the model's thinking-mode trace for this response,
 	// kept separate from Content. Persisted with the assistant message so it
 	// round-trips back to providers that require it (DeepSeek thinking mode).
+	ReasoningStartedAt int64 `json:"reasoning_started_at,omitempty"`
+	ReasoningEndedAt   int64 `json:"reasoning_ended_at,omitempty"`
 	ReasoningContent string `json:"reasoning_content,omitempty"`
 }
 

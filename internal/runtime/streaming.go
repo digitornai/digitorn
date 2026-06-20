@@ -95,6 +95,7 @@ func (e *Engine) callLLM(
 	// the instant it's detected and grow a token counter as the (possibly huge)
 	// arguments stream in — so the client is never blind during a long write.
 	liveTools := map[int]*liveToolCall{}
+	var reasoningStartedAt, reasoningEndedAt int64 // wall-clock brackets for the thinking trace
 
 	// Consume the stream, but bail the INSTANT the turn context is cancelled
 	// (user abort). Without this select the loop would keep draining the
@@ -106,11 +107,15 @@ func (e *Engine) callLLM(
 		case <-ctx.Done():
 			finalResp.Content = contentBuilder.String()
 			finalResp.ReasoningContent = reasoningBuilder.String()
+			finalResp.ReasoningStartedAt = reasoningStartedAt
+			finalResp.ReasoningEndedAt = reasoningEndedAt
 			return finalResp, ctx.Err()
 		case chunk, ok := <-chunks:
 			if !ok {
 				finalResp.Content = contentBuilder.String()
 				finalResp.ReasoningContent = reasoningBuilder.String()
+				finalResp.ReasoningStartedAt = reasoningStartedAt
+				finalResp.ReasoningEndedAt = reasoningEndedAt
 				// A non-empty seenError means the generation was cut off by a fault: the
 				// gRPC consumer turns ANY non-EOF RecvMsg error (network drop, worker death,
 				// deadline, upstream 5xx, rate limit) into an error chunk, so every failure
@@ -177,6 +182,10 @@ func (e *Engine) callLLM(
 			// as it's generated. Transient (the projector ignores it) ; the
 			// consolidated reasoning lands on the final assistant message.
 			if chunk.ReasoningDelta != "" {
+				if reasoningStartedAt == 0 {
+					reasoningStartedAt = time.Now().UnixNano()
+				}
+				reasoningEndedAt = time.Now().UnixNano()
 				reasoningBuilder.WriteString(chunk.ReasoningDelta)
 				rev := sessionstore.Event{
 					Type:          sessionstore.EventAssistantReasoningDelta,

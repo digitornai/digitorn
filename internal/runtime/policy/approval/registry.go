@@ -43,6 +43,10 @@ const (
 	// (turn interrupted, daemon shutdown). The waiter is removed
 	// without resolution.
 	ResultCancelled
+
+	// ResultApprovedAlways means the user approved and wants this tool
+	// signature allowed for the rest of the session (and persisted).
+	ResultApprovedAlways
 )
 
 // String renders the result for audit rows and logs.
@@ -50,6 +54,8 @@ func (r Result) String() string {
 	switch r {
 	case ResultApproved:
 		return "approved"
+	case ResultApprovedAlways:
+		return "approved_always"
 	case ResultDenied:
 		return "denied"
 	case ResultTimeout:

@@ -41,6 +41,7 @@ import (
 	"github.com/mbathepaul/digitorn/internal/runtime/policy/approval"
 	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
 	"github.com/mbathepaul/digitorn/internal/runtime/toolname"
+	"github.com/mbathepaul/digitorn/internal/runtime/projectsettings"
 	"github.com/mbathepaul/digitorn/internal/runtime/turn"
 	"github.com/mbathepaul/digitorn/internal/runtime/workdir"
 	"github.com/mbathepaul/digitorn/internal/safego"
@@ -118,12 +119,23 @@ type Engine struct {
 	Apps       AppLookup
 	Sessions   SessionAccess
 	LLM        LLMChat
-	Blobs      BlobLoader     // optional ; nil = binary message parts skipped
-	Tools      ToolCatalog    // optional ; nil falls back to NoToolsCatalog
-	Dispatcher ToolDispatcher // optional ; nil falls back to NoopDispatcher
+	Blobs      BlobLoader
+	Tools      ToolCatalog
+	Dispatcher ToolDispatcher
+
+	// allowedSigs is a per-session in-memory set of tool signatures the user
+	// approved with "allow always". Keyed by sessionID, loaded from the session
+	// snapshot at turn start, never read from disk during a tool call.
+	allowedSigs sync.Map // sessionID → map[string]struct{}
 	// SkillLoader resolves a /use_skill command to its instructions so the engine
 	// can inject them as a forced directive. nil = /use_skill is a no-op.
 	SkillLoader SkillLoader
+	// ModelWindowLookup resolves the gateway's documented context window for a
+	// model name (e.g. from /v1/models max_context_tokens). Used as the second
+	// fallback in window resolution: brain.context.max_tokens → gateway window
+	// → runtime.context.max_tokens → hardcoded table. nil = skip this step.
+	ModelWindowLookup func(model string) int
+
 	// Compactor recovers from a mid-turn context overflow : auto_compact should
 	// prevent it, but one huge tool result can blow past the window in a single
 	// step. nil = no emergency recovery (the overflow propagates as the turn's
@@ -400,6 +412,60 @@ func resolveMaxStopVetoes(rt *schema.RuntimeBlock) int {
 // adapter package's BlobLoader signature. Returns (nil, nil) when no
 // blob store is wired so the adapter cleanly skips binary parts
 // without spurious errors during smoke tests.
+func toolSignature(module, action string, args map[string]any) string {
+	base := module + "." + action
+	primaryKeys := []string{"command", "path", "query", "url", "name"}
+	for _, k := range primaryKeys {
+		if v, ok := args[k]; ok {
+			if s, ok := v.(string); ok && s != "" {
+				return base + ":" + s
+			}
+		}
+	}
+	return base
+}
+
+func (e *Engine) loadAllowedSigs(sessionID string, snap sessionstore.SessionSnapshot) {
+	if len(snap.AllowedSignatures) == 0 {
+		return
+	}
+	set := make(map[string]struct{}, len(snap.AllowedSignatures))
+	for _, sig := range snap.AllowedSignatures {
+		set[sig] = struct{}{}
+	}
+	e.allowedSigs.Store(sessionID, set)
+}
+
+func (e *Engine) isToolAllowed(sessionID, module, action string, args map[string]any) bool {
+	v, ok := e.allowedSigs.Load(sessionID)
+	if !ok {
+		return false
+	}
+	set := v.(map[string]struct{})
+	sig := toolSignature(module, action, args)
+	if _, ok := set[sig]; ok {
+		return true
+	}
+	base := module + "." + action
+	_, ok = set[base]
+	return ok
+}
+
+func (e *Engine) addAllowedSig(sessionID, sig string) {
+	v, _ := e.allowedSigs.LoadOrStore(sessionID, map[string]struct{}{})
+	set := v.(map[string]struct{})
+	set[sig] = struct{}{}
+	e.allowedSigs.Store(sessionID, set)
+}
+
+func loadProjectCaps(workdir string) *schema.CapabilitiesConfig {
+	s, err := projectsettings.Load(workdir)
+	if err != nil || s == nil {
+		return nil
+	}
+	return s.Capabilities()
+}
+
 func (e *Engine) loadBlob(ctx context.Context, hash string) ([]byte, error) {
 	if e.Blobs == nil {
 		return nil, nil
@@ -684,6 +750,7 @@ func (e *Engine) Run(ctx context.Context, in TurnInput) (*TurnResult, error) {
 	// Re-snapshot after recovery + notification injection so the
 	// new messages land in `snap.Messages` for the first LLM call.
 	snap := state.Snapshot()
+	e.loadAllowedSigs(in.SessionID, snap)
 
 	res, endMetrics, runErr := e.runPhases(ctx, tr, app, agent, snap, in)
 	if runErr != nil {
@@ -930,6 +997,9 @@ func (e *Engine) runPhases(
 				systemPrompt += "\n\n" + block
 			} else {
 				systemPrompt = block
+			}
+			if projCaps := loadProjectCaps(pp.Root()); projCaps != nil {
+				ctx = WithProjectCaps(ctx, projCaps)
 			}
 		}
 	}
@@ -1486,7 +1556,24 @@ func (e *Engine) freshContextView(sessionID string, snap sessionstore.SessionSna
 			return cv
 		}
 	}
-	return contextsvc.ViewFromSnapshot(snap, brain)
+	gatewayWindow := 0
+	if e.ModelWindowLookup != nil {
+		gatewayWindow = e.ModelWindowLookup(brain.Model)
+	}
+	return contextsvc.ViewFromSnapshotWithRuntimeAndGateway(snap, brain, e.runtimeMaxTokens(snap.AppID), gatewayWindow)
+}
+
+// runtimeMaxTokens returns the runtime.context.max_tokens for the given app,
+// used as fallback when brain.context.max_tokens is 0 and the model is unknown.
+func (e *Engine) runtimeMaxTokens(appID string) int {
+	if e.Apps == nil || appID == "" {
+		return 0
+	}
+	rt, err := e.Apps.Get(context.Background(), appID)
+	if err != nil || rt == nil || rt.Definition == nil || rt.Definition.Runtime == nil || rt.Definition.Runtime.Context == nil {
+		return 0
+	}
+	return rt.Definition.Runtime.Context.MaxTokens
 }
 
 // msgByteCap is the per-message snip cap. Normally the fixed maxMessageBytes,
@@ -1841,6 +1928,8 @@ func (e *Engine) persistAssistantStep(
 			Content:   resp.Content, // legacy back-compat
 			Parts:     buildAssistantParts(resp),
 			Reasoning: resp.ReasoningContent,
+			ReasoningStartedAt: resp.ReasoningStartedAt,
+			ReasoningEndedAt:   resp.ReasoningEndedAt,
 		},
 	}
 	seq, err := e.Sessions.AppendDurable(ctx, ev)
@@ -2667,6 +2756,23 @@ func (e *Engine) awaitApproval(
 	case approval.ResultApproved:
 		resultEvent = sessionstore.EventApprovalGranted
 		resultStatus = "granted"
+	case approval.ResultApprovedAlways:
+		resultEvent = sessionstore.EventApprovalGranted
+		resultStatus = "granted"
+		sig := toolSignature(module, action, params)
+		e.addAllowedSig(sessionID, sig)
+		_, _ = e.Sessions.AppendDurable(ctx, sessionstore.Event{
+			Type:      sessionstore.EventToolAllowed,
+			SessionID: sessionID,
+			AppID:     appID,
+			UserID:    userID,
+			Allowed:   &sessionstore.AllowedToolPayload{Signature: sig},
+		})
+		if e.PathPolicies != nil {
+			if pp, ok := e.PathPolicies.PathPolicyFor(appID, sessionID); ok && pp.HasWorkdir() {
+				_ = projectsettings.Allow(pp.Root(), sig)
+			}
+		}
 	case approval.ResultDenied:
 		resultEvent = sessionstore.EventApprovalDenied
 	case approval.ResultTimeout:
@@ -2781,14 +2887,18 @@ func (e *Engine) enforceGate(
 		return nil
 	}
 	module, action := splitToolName(toolName)
+	if e.isToolAllowed(sessionID, module, action, args) {
+		return nil
+	}
 	d := e.PolicyEvaluator.Evaluate(ctx, EvaluateInput{
-		AppID:     appID,
-		SessionID: sessionID,
-		UserID:    userID,
-		Module:    module,
-		Action:    action,
-		App:       app,
-		Agent:     agent,
+		AppID:       appID,
+		SessionID:   sessionID,
+		UserID:      userID,
+		Module:      module,
+		Action:      action,
+		App:         app,
+		Agent:       agent,
+		ProjectCaps: ProjectCapsFromContext(ctx),
 	})
 	e.emitSecurityDecision(ctx, sessionID, appID, userID, correlationID, agent, module, action, args, d)
 	switch d.Kind {
@@ -2800,7 +2910,7 @@ func (e *Engine) enforceGate(
 	case policy.DecisionNeedsApproval:
 		res := e.awaitApproval(ctx, sessionID, appID, userID, correlationID, app, agent, toolName, callID, module, action, args, d.Reason, tr, in)
 		switch res.Result {
-		case approval.ResultApproved:
+		case approval.ResultApproved, approval.ResultApprovedAlways:
 			return nil
 		case approval.ResultDenied:
 			return &ToolOutcome{Status: "errored", Error: "approval denied: " + res.Reason}
@@ -3015,6 +3125,7 @@ func (e *Engine) persistToolResults(
 		tp := &sessionstore.ToolPayload{
 			CallID:     tc.ID,
 			Name:       tc.Name,
+			Arguments:  tc.Arguments,
 			Status:     out.Status,
 			Parts:      out.Parts,
 			Output:     output,

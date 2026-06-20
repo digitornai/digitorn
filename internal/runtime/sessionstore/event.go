@@ -32,6 +32,7 @@ const (
 	EventApprovalRequest EventType = "approval_request"
 	EventApprovalGranted EventType = "approval_granted"
 	EventApprovalDenied  EventType = "approval_denied"
+	EventToolAllowed     EventType = "tool_allowed"
 	EventMemoryRemember  EventType = "memory_remember"
 	EventMemoryFactAdded EventType = "memory_fact_added"
 	EventWorkspaceWrite  EventType = "workspace_write"
@@ -215,6 +216,11 @@ type Event struct {
 	// WorkspaceChanges carries the live pending-changes list for the workspace
 	// preview push. Set only on EventWorkspaceChanges (transient).
 	WorkspaceChanges *WorkspaceChangesPayload `json:"workspace_changes,omitempty"`
+	Allowed          *AllowedToolPayload      `json:"allowed,omitempty"`
+}
+
+type AllowedToolPayload struct {
+	Signature string `json:"signature"`
 }
 
 // RetryPayload describes one auto-retry of a transient LLM failure, carried on
@@ -322,6 +328,8 @@ type MessagePayload struct {
 	// back to providers that require the prior reasoning_content on assistant
 	// messages — dropping it makes DeepSeek thinking mode reject the turn.
 	Reasoning string `json:"reasoning,omitempty"`
+	ReasoningStartedAt int64 `json:"reasoning_started_at,omitempty"`
+	ReasoningEndedAt   int64 `json:"reasoning_ended_at,omitempty"`
 
 	// ClientMessageID is the caller's idempotency key for a user message,
 	// echoed verbatim so a client reconciles its optimistic bubble with the

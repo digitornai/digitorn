@@ -146,7 +146,9 @@ func closestMatches(content, old string, n int) []suggestion {
 			StartLine:  i + 1,
 			EndLine:    i + win,
 			Similarity: sim,
-			Preview:    clipPreview(strings.Join(block, "\n"), 200),
+			// Full block content (not truncated) so the agent can use it directly
+			// as old_string in a retry without a separate read call.
+			Preview: strings.Join(block, "\n"),
 		})
 	}
 	sort.SliceStable(all, func(a, b int) bool { return all[a].Similarity > all[b].Similarity })

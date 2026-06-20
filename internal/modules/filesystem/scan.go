@@ -3,6 +3,7 @@ package filesystem
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -32,16 +33,7 @@ var skipDirs = map[string]struct{}{
 	".mypy_cache": {}, ".pytest_cache": {}, ".ruff_cache": {}, ".tox": {},
 	"dist": {}, "build": {}, "target": {}, ".next": {}, ".nuxt": {},
 	".idea": {}, ".vscode": {}, ".cache": {}, "vendor": {},
-	// .digitorn is the daemon's per-workdir shadow repo + metadata — never an
-	// agent/client concern. Skipping it here hides it from glob/grep/index AND
-	// the workspace tree route in one place (the route keeps a belt-and-braces
-	// filter too).
-	".digitorn": {},
-	// Framework build/cache outputs + dependency stores: always generated, never
-	// authored, often huge. Project-specific ones are also caught by .gitignore;
-	// these are the guaranteed floor when no .gitignore exists. Deliberately NOT
-	// here: generic names that are commonly real source/scripts (bin, obj, out,
-	// tmp, temp, logs) and configs the user edits (.github, .gitlab, .husky).
+	// Framework build/cache outputs + dependency stores.
 	".svelte-kit": {}, ".turbo": {}, ".parcel-cache": {}, ".angular": {},
 	".astro": {}, ".vercel": {}, ".netlify": {}, ".expo": {}, ".docusaurus": {},
 	"bower_components": {}, "coverage": {}, ".nyc_output": {},
@@ -49,13 +41,36 @@ var skipDirs = map[string]struct{}{
 	".pub-cache": {}, "Pods": {}, ".bundle": {},
 }
 
-// IsNoiseDir reports whether a directory name is VCS/build/dependency noise that
-// is never descended into — and so never surfaced to the client's file tree.
+// isSkipped reports whether a directory should be skipped during a walk.
+// It excludes VCS/build noise by name AND the shadow git repo (.digitorn/git)
+// by path — but NOT the rest of .digitorn/ (memory, config, etc. are useful
+// to the agent).
+func isSkipped(name, absPath string) bool {
+	if _, ok := skipDirs[name]; ok {
+		return true
+	}
+	// Skip only the shadow git repo inside .digitorn, not the whole directory.
+	if name == "git" {
+		parent := filepath.Base(filepath.Dir(absPath))
+		if parent == ".digitorn" {
+			return true
+		}
+	}
+	return false
+}
+
+// IsNoiseDir reports whether a directory name is VCS/build/dependency noise.
 // Exported so the daemon's workspace-tree route shares this single source of
-// truth instead of duplicating the list.
+// truth. For path-aware checks use isSkipped instead.
 func IsNoiseDir(name string) bool {
 	_, ok := skipDirs[name]
 	return ok
+}
+
+func isProtectedFile(absPath string) bool {
+	parent := filepath.Base(filepath.Dir(absPath))
+	base := filepath.Base(absPath)
+	return parent == ".digitorn" && base == "settings.yaml"
 }
 
 // grepMatch is one content-mode hit. Context lines (when requested) ride in
@@ -63,6 +78,7 @@ func IsNoiseDir(name string) bool {
 type grepMatch struct {
 	File    string   `json:"file"`
 	LineNum int      `json:"line"`
+	Ref     string   `json:"ref"`             // "file:line" — copy-paste into edit(start_line=N)
 	Text    string   `json:"text"`
 	Before  []string `json:"before,omitempty"`
 	After   []string `json:"after,omitempty"`
@@ -143,7 +159,7 @@ func walkEnum(req grepRequest) fileEnumerator {
 				return nil // unreadable entry : skip, never abort the whole walk
 			}
 			if d.IsDir() {
-				if _, skip := skipDirs[d.Name()]; skip && p != req.root {
+				if isSkipped(d.Name(), p) && p != req.root {
 					return filepath.SkipDir
 				}
 				if req.ignore != nil && p != req.root {
@@ -154,7 +170,10 @@ func walkEnum(req grepRequest) fileEnumerator {
 				return nil
 			}
 			if !d.Type().IsRegular() {
-				return nil // symlinks/devices/sockets : never scanned
+				return nil
+			}
+			if isProtectedFile(p) {
+				return nil
 			}
 			if !acceptFile(req, p, d.Name()) {
 				return nil
@@ -245,6 +264,7 @@ func runGrep(ctx context.Context, req grepRequest, enum fileEnumerator) (grepRes
 				fh.file = rel
 				for i := range fh.matches {
 					fh.matches[i].File = rel
+					fh.matches[i].Ref = fmt.Sprintf("%s:%d", rel, fh.matches[i].LineNum)
 				}
 				select {
 				case out <- fh:

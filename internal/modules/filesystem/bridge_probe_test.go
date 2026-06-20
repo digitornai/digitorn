@@ -60,7 +60,7 @@ func TestProbe_BridgeRepo(t *testing.T) {
 
 	// glob — count results from files[] not a string body.
 	st := time.Now()
-	r, _ := m.glob(ctx, mustJSON(map[string]any{"pattern": "**/*.py"}))
+	r, _ := m.glob(ctx, mustJSON(map[string]any{"pattern": "**/*.py", "tree": false}))
 	n, _, _ := dataOf(r.Data)
 	t.Logf("glob **/*.py      : %v  success=%v  %d files", time.Since(st), r.Success, n)
 
@@ -83,7 +83,7 @@ func TestProbe_BridgeRepo(t *testing.T) {
 	mem("after-index")
 
 	// read with outline on a real Python file (navigate a big file cheaply).
-	if gr, _ := m.glob(ctx, mustJSON(map[string]any{"pattern": "**/*.py"})); gr.Success {
+	if gr, _ := m.glob(ctx, mustJSON(map[string]any{"pattern": "**/*.py", "tree": false})); gr.Success {
 		if first := firstPy(gr.Data); first != "" {
 			st = time.Now()
 			rr, _ := m.read(ctx, mustJSON(map[string]any{"path": first, "outline": true}))

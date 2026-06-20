@@ -105,6 +105,25 @@ export async function daemonFetch<T = unknown>(
   return (await res.json()) as T
 }
 
+// hasPiecesModule checks if the current app has the "pieces" module declared.
+// Cached per app to avoid repeated manifest fetches.
+const piecesModuleCache = new Map<string, boolean>()
+export async function hasPiecesModule(cfg: DigitornConfig, appId: string): Promise<boolean> {
+  const cached = piecesModuleCache.get(appId)
+  if (cached !== undefined) return cached
+  try {
+    const m = await daemonFetch<any>(cfg, `/api/apps/${encodeURIComponent(appId)}/manifest`)
+    const tools = m?.Tools ?? m?.tools ?? {}
+    const modules = tools?.Modules ?? tools?.modules ?? {}
+    const has = "pieces" in modules
+    piecesModuleCache.set(appId, has)
+    return has
+  } catch {
+    piecesModuleCache.set(appId, false)
+    return false
+  }
+}
+
 // ---------------------------------------------------------------------------
 // ÉTAPE 0 — the skeleton fetch. opencode's TUI talks to its server through a
 // single `fetch`. We give it ONE that answers opencode's routes : boot routes
@@ -138,6 +157,7 @@ const padNum = (n: number, w = 12): string =>
 // (longest/most-specific first) → the bare verb, regardless of form.
 const KNOWN_TOOLS = [
   "run_parallel",
+  "background_run",
   "multiedit",
   "read",
   "write",
@@ -334,6 +354,7 @@ const TOOL_ALIASES: Record<string, string> = {
   write: "write",
   edit: "edit",
   multiedit: "edit",
+  background_run: "background_run",
   run: "bash",
   bash: "bash",
   shell: "bash",
@@ -371,6 +392,32 @@ const mapTool = (rawName: unknown, args: Record<string, unknown> = {}): { tool: 
     case "bash":
       set("command", a.command)
       break
+    case "background_run": {
+      const bgP = a.params && typeof a.params === "object" ? (a.params as Record<string, any>) : {}
+      const toolLabel = a.name ? cleanToolName(a.name) : null
+      const primaryVal = bgP.command ?? bgP.pattern ?? bgP.query ?? bgP.url
+        ?? bgP.filePath ?? bgP.path ?? bgP.agent ?? bgP.task
+        ?? (Object.values(bgP).find((x) => typeof x === "string") as string | undefined)
+      const primaryStr = primaryVal != null
+        ? String(primaryVal).replace(/\s+/g, " ").slice(0, 50)
+        : null
+      if (toolLabel && primaryStr) {
+        set("command", `${toolLabel} › ${primaryStr}`)
+      } else if (toolLabel) {
+        set("command", toolLabel)
+      } else if (a.watch) {
+        set("command", a.until ? `watch: ${a.until}` : a.command ? `watch: ${a.command}` : "watch")
+      } else if (a.list) {
+        set("command", "list tasks")
+      } else if (a.signal) {
+        set("command", `${a.signal} → ${a.task_id ?? ""}`)
+      } else if (a.stdin != null) {
+        set("command", `stdin → ${a.task_id ?? ""}`)
+      } else if (a.task_id) {
+        set("command", `wait: ${a.task_id}`)
+      }
+      break
+    }
     case "websearch":
       set("query", a.query)
       break
@@ -727,10 +774,9 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
   // sid → the session's effective entry-agent model (override or brain default),
   // stamped on the user message so opencode restores the right model on reopen.
   const selModel = new Map<string, string>()
-  // The modelID to stamp on a user message : the session's effective model once the
-  // provider catalog is registered (so local.model.set accepts it on reopen), else the
-  // "build" default — never stamp a model opencode would reject with a toast.
-  const msgModelID = (sid: string) => (providerModelsBuilt && selModel.get(sid)) || "build"
+  // The modelID stamped on user messages — always the session's effective model
+  // (override or brain default) from resolveSelectedWindow, or "build" fallback.
+  const msgModelID = (sid: string) => selModel.get(sid) || "build"
   let lastEventAt = 0 // wall-clock of the last envelope received (any, incl. replayed)
   // The dead-turn watchdog must distinguish HISTORICAL replayed events (which the
   // daemon re-emits on reconnect to fill the gap) from genuine LIVE progress. A
@@ -776,19 +822,20 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
   // live count), and a `compacting` flag (between context_compacting/compacted).
   // Pushed as digitorn.work so the in-chat working line shows "◆ ~Xk tokens" /
   // "◆ ⟢ compacting context…" while a turn runs. Reset at turn_started.
-  type Work = { tokens: number; base: number; rounds: number; exact: boolean; chars: number; compacting: boolean }
+  type Work = { tokens: number; base: number; rounds: number; exact: boolean; chars: number; reasoningChars: number; compacting: boolean }
   const workBySession = new Map<string, Work>()
   const workFor = (sid: string): Work => {
     let v = workBySession.get(sid)
     if (!v) {
-      v = { tokens: 0, base: 0, rounds: 0, exact: false, chars: 0, compacting: false }
+      v = { tokens: 0, base: 0, rounds: 0, exact: false, chars: 0, reasoningChars: 0, compacting: false }
       workBySession.set(sid, v)
     }
     return v
   }
   const workProps = (sid: string) => {
     const w = workFor(sid)
-    const tokens = w.tokens > 0 ? w.tokens : w.chars > 0 ? Math.floor(w.chars / 4) : 0
+    const reasoningEstimate = Math.floor(w.reasoningChars / 4)
+    const tokens = w.tokens > 0 ? w.tokens + reasoningEstimate : w.chars > 0 ? Math.floor(w.chars / 4) + reasoningEstimate : reasoningEstimate
     return { session: sid, tokens, exact: w.exact, compacting: w.compacting }
   }
   const broadcastWork = (sid: string) => emit(wrap({ type: "digitorn.work", properties: workProps(sid) }))
@@ -884,6 +931,7 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
       // Remember the effective model so the user message can carry it (→ opencode
       // restores it on reopen) and the "build" default also reads it.
       selModel.set(sid, model)
+      dgModel.name = model
       dgModel.name = model
       if (modelCtxWindow.size === 0) await loadGatewayCatalog()
       return modelCtxWindow.get(model) ?? 0
@@ -984,9 +1032,29 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
     emitStatus(sid, "idle")
     emit(wrap({ type: "session.idle", properties: { sessionID: sid } }))
   }
+  const todoStatusOrder = (status: string) => {
+    switch (status) {
+      case "in_progress": return 0
+      case "pending":     return 1
+      case "completed":   return 2
+      case "cancelled":   return 3
+      default:            return 1
+    }
+  }
   const todosFor = (sid: string) => {
     const m = todoLists.get(sid)
-    return m ? [...m.values()].map((t) => ({ content: t.text, status: t.status || "pending", priority: "medium" })) : []
+    if (!m) return []
+    const items = [...m.entries()].map(([id, t]) => ({ id, content: t.text, status: t.status || "pending", priority: "medium" }))
+    items.sort((a, b) => {
+      const sa = todoStatusOrder(a.status)
+      const sb = todoStatusOrder(b.status)
+      if (sa !== sb) return sa - sb
+      // Within the same status, preserve creation order via numeric task ID (t1 < t2 < t10)
+      const na = parseInt(a.id.replace(/\D/g, ""), 10) || 0
+      const nb = parseInt(b.id.replace(/\D/g, ""), 10) || 0
+      return na - nb
+    })
+    return items.map(({ content, status, priority }) => ({ content, status, priority }))
   }
   const emitTodos = (sid: string) => emit(wrap({ type: "todo.updated", properties: { sessionID: sid, todos: todosFor(sid) } }))
   const asstInfo = (
@@ -1096,7 +1164,7 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
     switch (env.type) {
       case "turn_started": {
         emitStatus(sid, "busy") // turn running → opencode shows the spinner + "esc interrupt"
-        workBySession.set(sid, { tokens: 0, base: 0, rounds: 0, exact: false, chars: 0, compacting: false })
+        workBySession.set(sid, { tokens: 0, base: 0, rounds: 0, exact: false, chars: 0, reasoningChars: 0, compacting: false })
         broadcastWork(sid)
         // Materialize the assistant message NOW so the working indicator (the footer
         // diamond) shows from the turn's start — even if the turn errors before
@@ -1174,6 +1242,9 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
         }
         const id = cur.reasoningPartID
         const text = (cur.buf.get(id) ?? "") + delta
+        const w = workFor(sid)
+        w.reasoningChars += [...delta].length
+        broadcastWork(sid)
         cur.buf.set(id, text)
         partUpdated(sid, { id, sessionID: sid, messageID: cur.msgID, type: "reasoning", text, time: { start: cur.reasoningStart ?? cur.created } })
         break
@@ -1216,11 +1287,14 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
                 // and findTool looks in cur.tools — so register the rec THERE (too) so
                 // the binding lands on this exact part and its nested activity shows.
                 if (isAgentSpawn(task?.tool)) {
-                  const input = spawnInput(task?.args)
-                  const rec: ToolRec = { partID, name: "task", input, start: t }
-                  cur.tools.set(childCall, rec)
-                  emitTask(sid, cur.msgID, childCall, rec)
-                  return { partID, callID: childCall, name: "task", input }
+                  const ta = (task?.args ?? {}) as Record<string, any>
+                  if (ta.task || ta.prompt || ta.memory_seed) {
+                    const input = spawnInput(task?.args)
+                    const rec: ToolRec = { partID, name: "task", input, start: t }
+                    cur.tools.set(childCall, rec)
+                    emitTask(sid, cur.msgID, childCall, rec)
+                    return { partID, callID: childCall, name: "task", input }
+                  }
                 }
                 const m = mapTool(task?.tool, task?.args && typeof task.args === "object" ? task.args : {})
                 partUpdated(sid, { id: partID, sessionID: sid, messageID: cur.msgID, type: "tool", callID: childCall, tool: m.tool, state: { status: "running", input: m.input, title: primaryParam(m.input), time: { start: t } } })
@@ -1231,9 +1305,9 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
           break
         }
 
-        // Sub-agent delegation as a DIRECT tool_call (agent_spawn.agent) → opencode's
-        // "task" tool. The child session id arrives later via the agent_spawn event
-        // (→ metadata.sessionId), which binds it by this call_id.
+        // Sub-agent delegation → opencode's "task" tool. emitTask() already
+        // guards on rec.input.description so wait/status calls (no task/prompt)
+        // are silently swallowed — they produce no visible chip.
         if (isAgentSpawn(p.name)) {
           let rec = cur.tools.get(callID)
           if (!rec) {
@@ -1242,7 +1316,7 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
           }
           const a = (hasArgs ? p.arguments : {}) as any
           if (a.task || a.prompt || a.memory_seed) rec.input = spawnInput(a)
-          emitTask(sid, cur.msgID, callID, rec) // only renders once a description exists
+          emitTask(sid, cur.msgID, callID, rec) // no-op when description is empty
           break
         }
 
@@ -1313,6 +1387,11 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
               })
               return
             }
+            const kidR = results[i] ?? {}
+            const kidDiffMeta: Record<string, unknown> = {}
+            if (kidR.unified_diff) kidDiffMeta.diff = String(kidR.unified_diff)
+            if (kidR.previous_content != null) kidDiffMeta.previous_content = String(kidR.previous_content)
+            if (kidR.new_content != null) kidDiffMeta.new_content = String(kidR.new_content)
             partUpdated(sid, {
               id: kid.partID,
               sessionID: sid,
@@ -1321,7 +1400,7 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
               callID: kid.callID,
               tool: kid.name,
               state: ok
-                ? { status: "completed", input: kid.input, output: out, title: primaryParam(kid.input) || kid.name, metadata: toolMetadata(kid.name, out, kid.input), time: { start: t, end: t } }
+                ? { status: "completed", input: kid.input, output: out, title: primaryParam(kid.input) || kid.name, metadata: { ...toolMetadata(kid.name, out, kid.input), ...kidDiffMeta }, time: { start: t, end: t } }
                 : { status: "error", input: kid.input, error: out || "failed", time: { start: t, end: t } },
             })
           })
@@ -1331,15 +1410,38 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
 
         let rec = cur.tools.get(callID)
         if (!rec) {
-          rec = { partID: nextPartID(cur, seq), name: mapTool(p.name).tool, input: {}, start: t }
+          // tool_result without a prior tool_call (reconnect / run_parallel path):
+          // reconstruct a minimal rec so the renderer has what it needs.
+          const fallbackArgs = (p.arguments ?? p.args ?? {}) as Record<string, unknown>
+          const mapped = mapTool(p.name, fallbackArgs)
+          rec = { partID: nextPartID(cur, seq), name: mapped.tool, input: mapped.input, start: t }
           cur.tools.set(callID, rec)
         }
         const output = partsText(p)
         const dur = Number(p.duration_ms ?? 0) || 0
         const ok = String(p.status ?? "completed") === "completed"
+        // When the tool fails, p.error carries the real error message from the daemon.
+        // partsText only reads p.parts which are empty on failure, so we'd show the
+        // generic "tool failed" without this. Use p.error as fallback for the error state.
+        const errorMsg = String(p.error || output || "tool failed")
+        // Wire write/edit diff preview: the daemon returns unified_diff + line counts
+        // on ToolPayload. The Edit component reads metadata.diff; Write shows
+        // props.input.content (already in rec.input) + metadata.diagnostics.
+        const diffMeta: Record<string, unknown> = {}
+        if (p.unified_diff) diffMeta.diff = String(p.unified_diff)
+        if (p.previous_content != null) diffMeta.previous_content = String(p.previous_content)
+        if (p.new_content != null) diffMeta.new_content = String(p.new_content)
+        const pMeta = (p.metadata ?? {}) as Record<string, unknown>
+        if (pMeta.additions != null) diffMeta.additions = Number(pMeta.additions)
+        if (pMeta.deletions != null) diffMeta.deletions = Number(pMeta.deletions)
+        // Write: diagnostics=[] triggers the block-code view (shows written content).
+        // Edit: diagnostics populated if LSP returned errors via lsp_diagnose hook.
+        if (ok && (rec.name === "write" || rec.name === "edit" || rec.name === "multiedit")) {
+          diffMeta.diagnostics = []
+        }
         const state = ok
-          ? { status: "completed", input: rec.input, output, title: primaryParam(rec.input) || rec.name, metadata: { duration_ms: dur, ...(rec.sessionId ? { sessionId: rec.sessionId } : {}), ...toolMetadata(rec.name, output, rec.input) }, time: { start: rec.start, end: rec.start + dur } }
-          : { status: "error", input: rec.input, error: output || "tool failed", time: { start: rec.start, end: rec.start + dur } }
+          ? { status: "completed", input: rec.input, output, title: primaryParam(rec.input) || rec.name, metadata: { duration_ms: dur, ...(rec.sessionId ? { sessionId: rec.sessionId } : {}), ...toolMetadata(rec.name, output, rec.input), ...diffMeta }, time: { start: rec.start, end: rec.start + dur } }
+          : { status: "error", input: rec.input, error: errorMsg, time: { start: rec.start, end: rec.start + dur } }
         partUpdated(sid, { id: rec.partID, sessionID: sid, messageID: cur.msgID, type: "tool", callID, tool: rec.name, state })
         rec.done = true // settled → a later interrupt won't re-settle it
         // A direct sub-agent (wait:false) emits NO completion event — its task part
@@ -1758,6 +1860,27 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
     joined.add(sid)
     dlog(`joinSession ${sid.slice(0, 8)} (connected=${socket?.connected})`)
     socket!.emit("join_session", { session_id: sid })
+    // Pre-populate the todo list from the session snapshot so todos survive
+    // daemon restarts and page reloads without waiting for socket event replay.
+    void daemonFetch<{ todos?: Array<{ id: string; text: string; status: string }> }>(
+      cfg,
+      `/api/apps/${encodeURIComponent(currentApp)}/sessions/${encodeURIComponent(sid)}/state`,
+    )
+      .then((snap) => {
+        if (!Array.isArray(snap?.todos) || snap.todos.length === 0) return
+        let m = todoLists.get(sid)
+        if (!m) {
+          m = new Map()
+          todoLists.set(sid, m)
+        }
+        for (const t of snap.todos) {
+          if (t.id && !m.has(t.id)) {
+            m.set(t.id, { text: t.text ?? "", status: t.status ?? "pending" })
+          }
+        }
+        emitTodos(sid)
+      })
+      .catch(() => {})
   }
 
   // /connect (DialogDigitornConnect) calls applyDigitornCredentials after a
@@ -2129,7 +2252,7 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
           cfg,
           `/api/apps/${app}/sessions?limit=200`,
         )
-        return jsonRes((r.sessions ?? []).map((s) => toOcSession(s, dir)))
+        return jsonRes((r.sessions ?? []).filter((s) => String(s.workdir ?? "") === dir).map((s) => toOcSession(s, dir)))
       } catch {
         return jsonRes([]) // daemon down / auth : empty list, never crash the UI
       }
@@ -2198,11 +2321,39 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
         partUpdated(sid, { id: `${msgID}:p${padNum(0, 4)}`, sessionID: sid, messageID: msgID, type: "text", text: content })
         return jsonRes({})
       }
+      // Wait for the socket to be connected and room joined before POSTing —
+      // otherwise turn_started events are emitted to the room before the client
+      // is in it, and the live stream shows nothing (only the spinner).
+      if (socket && !socket.connected) {
+        await new Promise<void>((resolve) => {
+          const timeout = setTimeout(() => resolve(), 5000)
+          socket!.once("connect", () => { clearTimeout(timeout); resolve() })
+        })
+        if (!socket.connected) {
+          translate({ type: "error", session_id: sid, payload: { error: "Could not connect to the daemon — check that it is running and reachable.", source: "connect" } })
+          return jsonRes({})
+        }
+        joinSession(sid)
+      }
       // Immediate feedback : mark the session busy the instant the user sends, so
       // the working indicator shows right away instead of after the daemon's
       // turn_started (which can lag, or never come if the call fails up front) —
       // "I sent it and nothing happened" was exactly that gap. Cleared by
       // turn_ended / error / session_interrupted.
+      // Emit an OPTIMISTIC user message so the text appears instantly — the daemon's
+      // user_message event will reconcile (or replace) it once it arrives.
+      const seq = (lastSeqOf.get(sid) ?? 0) + 1
+      const optimisticID = `${sid}:m:${padNum(seq)}`
+      emit(
+        wrap({
+          type: "message.updated",
+          properties: {
+            sessionID: sid,
+            info: { id: optimisticID, sessionID: sid, role: "user", time: { created: Date.now() }, agent: "build", model: { providerID: "digitorn", modelID: msgModelID(sid) } },
+          },
+        }),
+      )
+      partUpdated(sid, { id: `${optimisticID}:p${padNum(0, 4)}`, sessionID: sid, messageID: optimisticID, type: "text", text: content })
       emitStatus(sid, "busy")
       try {
         await daemonFetch(cfg, `/api/apps/${app}/sessions/${encodeURIComponent(sid)}/messages`, {
@@ -2318,7 +2469,8 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
     if (replyPost && method === "POST") {
       const reqID = decodeURIComponent(replyPost[1])
       const body = (await req.json().catch(() => ({}))) as Record<string, any>
-      const action = String(body?.reply) === "reject" ? "denied" : "approved"
+      const reply = String(body?.reply)
+      const action = reply === "reject" ? "denied" : reply === "always" ? "approved_always" : "approved"
       const sidForReq = pendingApprovals.get(reqID) ?? ""
       try {
         await daemonFetch(cfg, `/api/apps/${app}/approve`, {
@@ -2385,7 +2537,26 @@ export function digitornFetch(cfg: DigitornConfig): typeof fetch {
     // Per-session todo list (maintained live from todo_* events). diff stays [].
     const todoGet = path.match(/^\/session\/([^/]+)\/todo$/)
     if (todoGet && method === "GET") {
-      return jsonRes(todosFor(decodeURIComponent(todoGet[1])))
+      const todoSid = decodeURIComponent(todoGet[1])
+      const cached = todosFor(todoSid)
+      if (cached.length > 0) return jsonRes(cached)
+      // Cache miss (race: joinSession's /state fetch not done yet) → fetch directly
+      // from the daemon so the sync layer gets the real list on first load.
+      try {
+        const snap = await daemonFetch<{ todos?: Array<{ id: string; text: string; status: string }> }>(
+          cfg,
+          `/api/apps/${encodeURIComponent(currentApp)}/sessions/${encodeURIComponent(todoSid)}/state`,
+        )
+        if (Array.isArray(snap?.todos) && snap.todos.length > 0) {
+          let m = todoLists.get(todoSid)
+          if (!m) { m = new Map(); todoLists.set(todoSid, m) }
+          for (const t of snap.todos) {
+            if (t.id) m.set(t.id, { text: t.text ?? "", status: t.status ?? "pending" })
+          }
+          return jsonRes(todosFor(todoSid))
+        }
+      } catch {}
+      return jsonRes([])
     }
     // Session-scoped diff (opencode's "last-turn" source + the sidebar files
     // panel's session.diff store). Maps the daemon's shadow-git pending changes
@@ -2574,17 +2745,64 @@ function toOcMessages(
     const created = toMs(m.ts) // our daemon sends ts as an ISO string
     let pord = 0
     const parts: Record<string, unknown>[] = []
+    const rawReasoning = String(m.reasoning ?? "")
+    if (role === "assistant" && !content.trim() && toolCalls.length === 0 && !rawReasoning) continue
+    const reasoningStart = Number(m.reasoning_started_at) || created
+    const reasoningEnd = Number(m.reasoning_ended_at) || created
+    if (rawReasoning) parts.push({ id: `${id}:p${padNum(pord++, 4)}`, sessionID, messageID: id, type: "reasoning", text: rawReasoning, time: { start: reasoningStart > 1e12 ? reasoningStart / 1e6 : reasoningStart, end: reasoningEnd > 1e12 ? reasoningEnd / 1e6 : reasoningEnd } })
     if (content) parts.push({ id: `${id}:p${padNum(pord++, 4)}`, sessionID, messageID: id, type: "text", text: content })
     for (const tc of toolCalls) {
-      if (isHiddenTool(tc?.name)) continue // bookkeeping tools never show
-      const { tool: name, input } = mapTool(tc?.name, tc?.arguments ?? {})
+      if (isHiddenTool(tc?.name)) continue
       const ok = String(tc?.status ?? "completed") === "completed"
+      const tcOutput = tc?.output != null ? String(tc.output) : ""
+      const tcDur = Number(tc?.duration_ms ?? 0)
+
+      // agent_spawn → "task" only if task/prompt/memory_seed present (same as live).
+      // wait/status/cancel calls produce no chip.
+      if (isAgentSpawn(tc?.name)) {
+        const a = (tc?.arguments ?? {}) as Record<string, any>
+        if (a.task || a.prompt || a.memory_seed) {
+          const input = spawnInput(tc?.arguments)
+          parts.push({
+            id: `${id}:p${padNum(pord++, 4)}`,
+            sessionID,
+            messageID: id,
+            type: "tool",
+            callID: String(tc?.id ?? `${id}:${pord}`),
+            tool: "task",
+            state: ok
+              ? { status: "completed", input, output: tcOutput, title: String(input.description), metadata: { duration_ms: tcDur }, time: { start: created, end: created + tcDur } }
+              : { status: "error", input, error: String(tc?.error ?? tc?.status ?? "error"), time: { start: created, end: created } },
+          })
+        }
+        continue
+      }
+
+      const { tool: name, input } = mapTool(tc?.name, tc?.arguments ?? {})
+
       // run_parallel : expand into native children (no wrapper), same as live.
       const tasks = (tc?.arguments as any)?.tasks
       if (name === "run_parallel" && Array.isArray(tasks)) {
         const base = `${id}:p${padNum(pord++, 4)}`
         tasks.forEach((task: any, i: number) => {
           if (isHiddenTool(task?.tool)) return
+          // agent_spawn inside run_parallel → "task" only if task/prompt/memory_seed
+          if (isAgentSpawn(task?.tool)) {
+            const ta = (task?.args ?? {}) as Record<string, any>
+            if (ta.task || ta.prompt || ta.memory_seed) {
+              const inp = spawnInput(task?.args)
+              parts.push({
+                id: `${base}.${padNum(i, 3)}`,
+                sessionID,
+                messageID: id,
+                type: "tool",
+                callID: `${tc?.id ?? id}:${i}`,
+                tool: "task",
+                state: { status: "completed", input: inp, output: "", title: String(inp.description), metadata: {}, time: { start: created, end: created } },
+              })
+            }
+            return
+          }
           const m = mapTool(task?.tool, task?.args ?? {})
           parts.push({
             id: `${base}.${padNum(i, 3)}`,
@@ -2593,11 +2811,17 @@ function toOcMessages(
             type: "tool",
             callID: `${tc?.id ?? id}:${i}`,
             tool: m.tool,
-            state: { status: "completed", input: m.input, output: "", title: m.tool, metadata: {}, time: { start: created, end: created } },
+            state: { status: "completed", input: m.input, output: "", title: primaryParam(m.input) || m.tool, metadata: {}, time: { start: created, end: created } },
           })
         })
         continue
       }
+
+      const tcDiffMeta: Record<string, unknown> = {}
+      if (tc?.unified_diff) tcDiffMeta.diff = String(tc.unified_diff)
+      if (tc?.previous_content != null) tcDiffMeta.previous_content = String(tc.previous_content)
+      if (tc?.new_content != null) tcDiffMeta.new_content = String(tc.new_content)
+      tcDiffMeta.diagnostics = []
       parts.push({
         id: `${id}:p${padNum(pord++, 4)}`,
         sessionID,
@@ -2606,8 +2830,8 @@ function toOcMessages(
         callID: String(tc?.id ?? `${id}:${pord}`),
         tool: name,
         state: ok
-          ? { status: "completed", input, output: "", title: name, metadata: {}, time: { start: created, end: created } }
-          : { status: "error", input, error: String(tc?.status ?? "error"), time: { start: created, end: created } },
+          ? { status: "completed", input, output: tcOutput, title: primaryParam(input) || name, metadata: { duration_ms: tcDur, ...toolMetadata(name, tcOutput, input), ...tcDiffMeta }, time: { start: created, end: created + tcDur } }
+          : { status: "error", input, error: String(tc?.error ?? tc?.status ?? "error"), time: { start: created, end: created } },
       })
     }
     if (role === "user") {
@@ -2631,7 +2855,7 @@ function toOcMessages(
           role: "assistant",
           time: { created, completed: created },
           parentID: lastUserID,
-          modelID: "build",
+          modelID: userModelID,
           providerID: "digitorn",
           mode: "build",
           agent: "build",

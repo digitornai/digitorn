@@ -33,6 +33,7 @@ type SessionSnapshot struct {
 	Approvals             map[string]*ApprovalState `json:"approvals"`
 	Memory                map[string]string         `json:"memory"`
 	Facts                 []string                  `json:"facts,omitempty"`
+	AllowedSignatures     []string                  `json:"allowed_signatures,omitempty"`
 	Goal                  string                    `json:"goal,omitempty"`
 	WorkspaceFiles        map[string]*FileState     `json:"workspace_files"`
 	Todos                 []Todo                    `json:"todos,omitempty"`

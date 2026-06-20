@@ -53,14 +53,31 @@ const BuiltinLSPDiagnoseHookID = "digitorn.builtin.lsp_diagnose"
 // the agent's context — so it sees its mistakes immediately, without having to
 // call a tool. Conditioned per-app (not in BuiltinHooks) so apps without lsp
 // never pay for a no-op dispatch on every edit. Stays silent on a clean file.
+//
+// Only fires when the edit itself SUCCEEDED (tool_status == "completed") — a
+// failed edit didn't change the file, so notifying the LSP would be a no-op
+// and would confuse the agent by mixing the edit error with LSP diagnostics.
 func LSPDiagnoseHooks() []schema.Hook {
 	return []schema.Hook{
 		{
 			ID: BuiltinLSPDiagnoseHookID,
 			On: schema.HookEventToolEnd,
 			Condition: schema.HookCondition{
-				Type:   schema.CondToolName,
-				Params: map[string]any{"match": "filesystem.write|filesystem.edit|filesystem.multi_edit"},
+				Type: schema.CondAllOf,
+				Params: map[string]any{
+					"conditions": []any{
+						map[string]any{
+							"type":  string(schema.CondToolName),
+							"match": "filesystem.write|filesystem.edit|filesystem.multi_edit",
+						},
+						map[string]any{
+							"type": string(schema.CondNot),
+							"condition": map[string]any{
+								"type": string(schema.CondToolFailed),
+							},
+						},
+					},
+				},
 			},
 			Action: schema.HookAction{
 				Type: schema.ActionLSPDiagnose,

@@ -204,10 +204,10 @@ func BenchmarkSindex_Build(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		si := &sindex{root: root, maxBytes: 1 << 20}
-		_ = si.build(fakeEmb{dim: 64}, "x")
+		_, _ = si.build(fakeEmb{dim: 64}, "x")
 	}
 	b.StopTimer()
 	si := &sindex{root: root, maxBytes: 1 << 20}
-	chunks := si.build(fakeEmb{dim: 64}, "x")
+	chunks, _ := si.build(fakeEmb{dim: 64}, "x")
 	b.Logf("indexed chunks=%d over ~1000 files", len(chunks))
 }

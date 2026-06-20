@@ -20,6 +20,7 @@ import (
 	"github.com/mbathepaul/digitorn/internal/background/adapter"
 	"github.com/mbathepaul/digitorn/internal/background/adapter/cron"
 	"github.com/mbathepaul/digitorn/internal/background/adapter/discord"
+	"github.com/mbathepaul/digitorn/internal/background/adapter/pieces"
 	"github.com/mbathepaul/digitorn/internal/background/adapter/rss"
 	"github.com/mbathepaul/digitorn/internal/background/adapter/telegram"
 	"github.com/mbathepaul/digitorn/internal/background/adapter/webhook"
@@ -95,6 +96,7 @@ type Plan struct {
 	Telegrams []telegram.Provider
 	WhatsApps []whatsapp.Provider
 	Discords  []discord.Provider
+	Pieces    []pieces.Provider
 	Warnings  []string // non-fatal per-provider issues (bad schedule, unknown adapter)
 }
 
@@ -137,8 +139,12 @@ func BuildPlan(apps []AppChannels, env func(string) string) Plan {
 				p.WhatsApps = append(p.WhatsApps, whatsappProvider(name, pc.Config, env))
 			case "discord":
 				p.Discords = append(p.Discords, discordProvider(name, pc.Config, env))
+			case "pieces":
+				if pp, ok := piecesProvider(app.AppID, name, pc.Config, env, &p); ok {
+					p.Pieces = append(p.Pieces, pp)
+				}
 			default:
-				p.Warnings = append(p.Warnings, "provider "+name+": adapter "+pc.Adapter+" not wired (V1: webhook|cron|rss|telegram|whatsapp|discord)")
+				p.Warnings = append(p.Warnings, "provider "+name+": adapter "+pc.Adapter+" not wired (V1: webhook|cron|rss|telegram|whatsapp|discord|pieces)")
 			}
 			p.Triggers = append(p.Triggers, spec)
 		}
@@ -195,6 +201,40 @@ func telegramProvider(appID, name string, cfg map[string]any, env func(string) s
 		Interval:  time.Duration(sec) * time.Second,
 		APIBase:   cfgStr(cfg, "api_base", env),
 	}
+}
+
+func piecesProvider(appID, name string, cfg map[string]any, env func(string) string, p *Plan) (pieces.Provider, bool) {
+	piece := cfgStr(cfg, "piece", env)
+	trigger := cfgStr(cfg, "trigger", env)
+	if piece == "" || trigger == "" {
+		p.Warnings = append(p.Warnings, "provider "+name+": pieces adapter requires 'piece' and 'trigger' in config")
+		return pieces.Provider{}, false
+	}
+	triggerURL := cfgStr(cfg, "trigger_url", env)
+	if triggerURL == "" {
+		triggerURL = "http://127.0.0.1:9234"
+	}
+	sec := cfgInt(cfg, "interval")
+	if sec <= 0 {
+		sec = 60
+	}
+	return pieces.Provider{
+		Name:       name,
+		TriggerURL: triggerURL,
+		Piece:      piece,
+		Trigger:    trigger,
+		Auth:       cfg["auth"],
+		Props:      cfgMap(cfg, "props"),
+		CursorKey:  processor.TriggerID(appID, name),
+		Interval:   time.Duration(sec) * time.Second,
+	}, true
+}
+
+func cfgMap(cfg map[string]any, key string) map[string]any {
+	if v, ok := cfg[key].(map[string]any); ok {
+		return v
+	}
+	return nil
 }
 
 func discordProvider(name string, cfg map[string]any, env func(string) string) discord.Provider {
@@ -262,6 +302,9 @@ func Arm(ctx context.Context, st *store.Store, plan Plan, log *slog.Logger) (*pr
 	if len(plan.Discords) > 0 {
 		reg.Register(discord.New(plan.Discords, log))
 	}
+	if len(plan.Pieces) > 0 {
+		reg.Register(pieces.New(plan.Pieces, storeCursors{st: st}, log))
+	}
 	mgr := processor.NewManager(st, reg)
 	for _, t := range plan.Triggers {
 		if _, err := mgr.Arm(ctx, t); err != nil {
@@ -275,7 +318,7 @@ func Arm(ctx context.Context, st *store.Store, plan Plan, log *slog.Logger) (*pr
 		"apps_triggers", len(plan.Triggers), "webhooks", len(plan.Webhooks),
 		"crons", len(plan.Crons), "feeds", len(plan.Feeds),
 		"telegram", len(plan.Telegrams), "whatsapp", len(plan.WhatsApps),
-		"discord", len(plan.Discords))
+		"discord", len(plan.Discords), "pieces", len(plan.Pieces))
 	return mgr, reg, nil
 }
 

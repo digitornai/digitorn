@@ -112,7 +112,7 @@ func editLineRange(content string, loc editLocator) (string, int, string, error)
 		return "", 0, "", &editError{kind: "range", message: fmt.Sprintf("start_line must be >= 1 (got %d)", start)}
 	}
 	if end < start {
-		return "", 0, "", &editError{kind: "range", message: fmt.Sprintf("end_line (%d) must be >= start_line (%d)", end, start)}
+		return "", 0, "", &editError{kind: "range", message: fmt.Sprintf("end_line (%d) must be >= start_line (%d) — you have them swapped. Correct call: edit(start_line=%d, end_line=%d, ...)", end, start, end, start)}
 	}
 	if start > n {
 		return "", 0, "", &editError{kind: "range", message: fmt.Sprintf("start_line %d is past end of file (%d lines) — use append=true to add at the end", start, n)}

@@ -18,6 +18,7 @@ import (
 
 	domainmodule "github.com/mbathepaul/digitorn/internal/domain/module"
 	"github.com/mbathepaul/digitorn/internal/domain/tool"
+	"github.com/mbathepaul/digitorn/internal/flexjson"
 	"github.com/mbathepaul/digitorn/internal/indexer"
 	"github.com/mbathepaul/digitorn/pkg/module"
 )
@@ -383,7 +384,7 @@ func (m *Module) ingestDirectory(ctx context.Context, raw json.RawMessage) (tool
 		Path          string   `json:"path"`
 		Recursive     *bool    `json:"recursive"`
 		Extensions    []string `json:"extensions"`
-		MaxFiles      int      `json:"max_files"`
+		MaxFiles      flexjson.Int      `json:"max_files"`
 	}
 	_ = json.Unmarshal(raw, &p)
 	kb := kbName(p.KnowledgeBase, p.Name)
@@ -391,7 +392,7 @@ func (m *Module) ingestDirectory(ctx context.Context, raw json.RawMessage) (tool
 		return fail("path is required"), nil
 	}
 	recursive := p.Recursive == nil || *p.Recursive
-	maxFiles := p.MaxFiles
+	maxFiles := int(p.MaxFiles)
 	if maxFiles <= 0 {
 		maxFiles = 1000
 	}
@@ -447,7 +448,7 @@ func (m *Module) query(ctx context.Context, raw json.RawMessage) (tool.Result, e
 		KnowledgeBase string `json:"knowledge_base"`
 		Name          string `json:"name"`
 		Query         string `json:"query"`
-		TopK          int    `json:"top_k"`
+		TopK          flexjson.Int    `json:"top_k"`
 	}
 	_ = json.Unmarshal(raw, &p)
 	if strings.TrimSpace(p.Query) == "" {
@@ -463,7 +464,7 @@ func (m *Module) query(ctx context.Context, raw json.RawMessage) (tool.Result, e
 		requested = strings.TrimSpace(p.Name)
 	}
 	kbs := resolveKBs(eng.cfg, requested)
-	topK := p.TopK
+	topK := int(p.TopK)
 	if topK <= 0 {
 		topK = eng.cfg.Pipeline.FinalTopK
 	}

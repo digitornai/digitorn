@@ -96,6 +96,10 @@ type Client struct {
 	featured     []FeaturedEntry
 	featuredAt   time.Time
 	featuredGood bool
+
+	pieces     []PieceEntry
+	piecesAt   time.Time
+	piecesGood bool
 }
 
 // NewClient builds a Hub client. baseURL defaults to https://hub.digitorn.ai.
@@ -193,6 +197,79 @@ func (c *Client) RegistryBrowse(ctx context.Context, q, cursor string, limit int
 		return nil, "", err
 	}
 	return resp.Servers, resp.NextCursor, nil
+}
+
+// ── Pieces (Activepieces connectors) ──────────────────────────────────
+
+// PieceEntry mirrors the Hub's PieceRow — one Activepieces connector in the
+// catalog. Pieces are stored as McpFeaturedEntry rows with category="pieces".
+type PieceEntry struct {
+	ServerID    string   `json:"server_id"`
+	DisplayName string   `json:"display_name"`
+	Description string   `json:"description"`
+	Icon        string   `json:"icon"`
+	AuthType    string   `json:"auth_type"`
+	PersonalKeys []string `json:"personal_keys"`
+	HostedURL   *string  `json:"hosted_url"`
+	Priority    int      `json:"featured_priority"`
+}
+
+type piecesListResponse struct {
+	Pieces []PieceEntry `json:"pieces"`
+	Count  int          `json:"count"`
+}
+
+// PiecesList returns all available pieces from the hub catalog (cached for
+// the client TTL). A failed fetch degrades to stale data when available.
+func (c *Client) PiecesList(ctx context.Context) ([]PieceEntry, error) {
+	c.mu.Lock()
+	if c.piecesGood && time.Since(c.piecesAt) < c.ttl {
+		out := c.pieces
+		c.mu.Unlock()
+		return out, nil
+	}
+	c.mu.Unlock()
+
+	var resp piecesListResponse
+	if err := c.getJSON(ctx, "/api/v1/pieces?limit=500&bundle_only=true", &resp); err != nil {
+		c.mu.Lock()
+		stale, good := c.pieces, c.piecesGood
+		c.mu.Unlock()
+		if good {
+			return stale, nil
+		}
+		return nil, err
+	}
+	c.mu.Lock()
+	c.pieces, c.piecesGood, c.piecesAt = resp.Pieces, true, time.Now()
+	c.mu.Unlock()
+	return resp.Pieces, nil
+}
+
+// PiecesGet fetches one piece by ID from the hub catalog.
+func (c *Client) PiecesGet(ctx context.Context, id string) (PieceEntry, bool, error) {
+	id = strings.ToLower(strings.TrimSpace(id))
+	if list, err := c.PiecesList(ctx); err == nil {
+		for _, e := range list {
+			if strings.ToLower(e.ServerID) == id {
+				return e, true, nil
+			}
+		}
+		return PieceEntry{}, false, nil
+	}
+	// Cache miss + list error: try the detail endpoint directly.
+	var e PieceEntry
+	err := c.getJSON(ctx, "/api/v1/pieces/"+url.PathEscape(id), &e)
+	if err != nil {
+		return PieceEntry{}, false, err
+	}
+	return e, e.ServerID != "", nil
+}
+
+// PiecesBundleURL returns the URL to download a piece's .js bundle from the hub.
+// The hub redirects to a presigned S3 URL (1h TTL).
+func (c *Client) PiecesBundleURL(id string) string {
+	return c.base + "/api/v1/pieces/bundles/" + url.PathEscape(id) + ".js"
 }
 
 func (c *Client) getJSON(ctx context.Context, path string, out any) error {

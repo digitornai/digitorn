@@ -73,11 +73,17 @@ func (p *PromotingDispatcher) Dispatch(ctx context.Context, call runtime.ToolInv
 	})
 	if err != nil {
 		// Per-session task cap reached, or no dispatcher — run it the ordinary way.
-		return p.inner.Dispatch(ctx, call)
+		// Use a detached context so a cancelled turn ctx (user abort) doesn't
+		// immediately kill the subprocess before it produces any output. The bash
+		// module's own timeout and the engine's ToolTimeout still bound the call.
+		return p.inner.Dispatch(context.WithoutCancel(ctx), call)
 	}
 	// The Wait settle-window suppresses the duplicate completion notification: if
 	// the task finishes here, the agent gets the result directly; if it times out,
 	// the waiter deregisters and the task notifies on completion later.
+	//
+	// Wait with the turn ctx so a user abort unblocks Wait quickly; the threshold
+	// is applied inside Wait on top of whatever ctx arrives.
 	st, werr := p.mgr.Wait(ctx, call.SessionID, taskID, p.threshold.Seconds())
 	switch {
 	case werr == nil:
@@ -85,8 +91,17 @@ func (p *PromotingDispatcher) Dispatch(ctx context.Context, call runtime.ToolInv
 	case errors.Is(werr, context.DeadlineExceeded) && st.State == stateRunning:
 		return p.promotedOutcome(taskID) // still running — hand off to background
 	default:
-		// Parent ctx cancelled (turn abort), or a terminal state raced the
-		// deadline: return whatever the snapshot holds.
+		// Parent ctx cancelled (turn abort). If the task is still running we give
+		// the agent a clean "moved to background" handoff — the same outcome as the
+		// threshold case — so the tool_result is a non-empty completed event that
+		// persists successfully and the agent can poll via background_run. Returning
+		// an empty / errored snapshot here would leave an unanswered tool_call in
+		// history that every subsequent turn must synthesize as "interrupted",
+		// confusing the agent about whether the command ran.
+		if st.State == stateRunning {
+			return p.promotedOutcome(taskID)
+		}
+		// Terminal state raced the ctx cancel: use the real result.
 		return outcomeFromStatus(st)
 	}
 }
@@ -141,4 +156,31 @@ func (p *PromotingDispatcher) promotedOutcome(taskID string) runtime.ToolOutcome
 		Parts:    []sessionstore.MessagePart{{Type: "text", Text: msg}},
 		Metadata: map[string]any{"promoted": true, "promoted_task_id": taskID},
 	}
+}
+
+// primitiveAvailability proxy — the engine checks e.Dispatcher.(primitiveAvailability)
+// to decide which context_builder primitives to inject into the LLM tool list.
+// PromotingDispatcher wraps the real MetaDispatcher but doesn't implement the
+// interface, so the type assertion silently fails and ask_user/call_app/use_skill
+// are never offered. These three methods delegate to the inner dispatcher when it
+// implements the interface, making the wrapper transparent to the availability check.
+func (p *PromotingDispatcher) CallAppWired() bool {
+	if pa, ok := p.inner.(interface{ CallAppWired() bool }); ok {
+		return pa.CallAppWired()
+	}
+	return false
+}
+
+func (p *PromotingDispatcher) AskUserWired() bool {
+	if pa, ok := p.inner.(interface{ AskUserWired() bool }); ok {
+		return pa.AskUserWired()
+	}
+	return false
+}
+
+func (p *PromotingDispatcher) UseSkillWired() bool {
+	if pa, ok := p.inner.(interface{ UseSkillWired() bool }); ok {
+		return pa.UseSkillWired()
+	}
+	return false
 }

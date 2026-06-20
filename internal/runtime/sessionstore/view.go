@@ -28,6 +28,9 @@ type HistoryResponse struct {
 type HistoryMessage struct {
 	Role        string    `json:"role"`
 	Content     string    `json:"content"`
+	Reasoning   string    `json:"reasoning,omitempty"`
+	ReasoningStartedAt int64     `json:"reasoning_started_at,omitempty"`
+	ReasoningEndedAt   int64     `json:"reasoning_ended_at,omitempty"`
 	Seq         uint64    `json:"seq"`
 	Ts          string    `json:"ts"`
 	ToolCalls   []any     `json:"tool_calls,omitempty"`
@@ -172,16 +175,34 @@ func BuildHistory(state *SessionState, messages []Message, events []Event, opts 
 			if !ok {
 				continue
 			}
-			toolCalls = append(toolCalls, map[string]any{
-				"id":        tc.CallID,
-				"name":      tc.Name,
-				"arguments": tc.Arguments,
-				"status":    tc.Status,
-			})
+			entry := map[string]any{
+				"id":          tc.CallID,
+				"name":        tc.Name,
+				"arguments":   tc.Arguments,
+				"status":      tc.Status,
+				"output":      tc.Output,
+				"duration_ms": tc.DurationMs,
+			}
+			if tc.UnifiedDiff != "" {
+				entry["unified_diff"] = tc.UnifiedDiff
+			}
+			if tc.PreviousContent != "" {
+				entry["previous_content"] = tc.PreviousContent
+			}
+			if tc.NewContent != "" {
+				entry["new_content"] = tc.NewContent
+			}
+			if tc.Error != "" {
+				entry["error"] = tc.Error
+			}
+			toolCalls = append(toolCalls, entry)
 		}
 		resp.Messages = append(resp.Messages, HistoryMessage{
 			Role:        m.Role,
 			Content:     m.Content,
+			Reasoning:   m.Reasoning,
+			ReasoningStartedAt: m.ReasoningStartedAt,
+			ReasoningEndedAt:   m.ReasoningEndedAt,
 			Seq:         m.Seq,
 			Ts:          unixNanoToISO(m.TsUnixNano),
 			ToolCalls:   toolCalls,

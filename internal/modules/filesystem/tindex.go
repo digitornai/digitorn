@@ -331,7 +331,7 @@ func (t *tindex) collectIndexable() []string {
 			return nil
 		}
 		if d.IsDir() {
-			if _, skip := skipDirs[d.Name()]; skip && p != t.root {
+			if isSkipped(d.Name(), p) && p != t.root {
 				return filepath.SkipDir
 			}
 			return nil

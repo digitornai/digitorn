@@ -44,10 +44,10 @@ func TestFilesystem_UsesCtxPolicyRoot(t *testing.T) {
 	}
 
 	// glob "*.txt" finds it ; glob "../*" must NOT escape.
-	if r, err := m.glob(ctx, mustJSON(map[string]any{"pattern": "*.txt"})); err != nil || len(globFiles(r)) != 1 {
+	if r, err := m.glob(ctx, mustJSON(map[string]any{"pattern": "*.txt", "tree": false})); err != nil || len(globFiles(r)) != 1 {
 		t.Errorf("glob *.txt got %v err=%v", r.Data, err)
 	}
-	if r, err := m.glob(ctx, mustJSON(map[string]any{"pattern": "../*"})); err != nil || len(globFiles(r)) != 0 {
+	if r, err := m.glob(ctx, mustJSON(map[string]any{"pattern": "../*", "tree": false})); err != nil || len(globFiles(r)) != 0 {
 		t.Errorf("glob ../* must return nothing (no escape), got %v", r.Data)
 	}
 
@@ -94,7 +94,7 @@ func TestFilesystem_GlobGrepDoNotFollowSymlinkOutsideWorkdir(t *testing.T) {
 
 	// glob through the dir symlink must yield nothing (the targets resolve
 	// outside the workdir).
-	r, err := m.glob(ctx, mustJSON(map[string]any{"pattern": "link/*"}))
+	r, err := m.glob(ctx, mustJSON(map[string]any{"pattern": "link/*", "tree": false}))
 	if err != nil {
 		t.Fatalf("glob: %v", err)
 	}

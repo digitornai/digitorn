@@ -1,0 +1,122 @@
+---
+id: index
+title: Digitorn Documentation
+slug: /
+---
+
+# Digitorn
+
+A declarative framework for building AI agent applications.
+Define what your agents do, how they think, and what tools
+they use, entirely in YAML.
+
+```yaml
+app:
+  app_id: hello
+  name: "Hello"
+
+agents:
+  - id: assistant
+    role: assistant
+    brain:
+      provider: ollama
+      model: qwen25-7b-gpu:latest
+      backend: openai_compat
+      config:
+        base_url: http://localhost:11434/v1
+        api_key: ollama
+    system_prompt: "Reply with exactly one word: pong."
+```
+
+```bash
+digitorn dev deploy hello.yaml
+digitorn dev chat hello -m "ping"
+# → pong
+```
+
+That YAML compiles, deploys, runs, and answers a chat turn. The rest of
+the documentation is layers added on top of this same shape.
+
+---
+
+## Where to start
+
+If you are new to Digitorn, work through the [Tutorial](/docs/tutorial/);
+it walks from a hello-world to something close to a real app, in
+order.
+
+When you are writing a YAML, the [Language reference](/docs/language/)
+is the canonical `schema_version: 2` grammar.
+
+When you need a specific tool, the [Module reference](/docs/reference/modules/)
+has one page per agent-facing module (23 of them). The repo also
+ships one system-only module (`cron`) that has no agent-facing
+actions and is not part of the reference.
+
+For UI clients, see [Client SDKs](/docs/reference/client-sdks/) (web,
+React, and testing SDK). For [Deployment](/docs/deployment/), [How-tos](/docs/howtos/)
+and the architecture rationale, [Concepts](/docs/concepts/) and the
+[glossary](/docs/concepts/glossary) are the entry points.
+
+---
+
+## The 8-block YAML
+
+A Digitorn app is one YAML file with up to eight top-level blocks.
+Each field has one canonical home; legacy flat YAMLs (modules at the
+root, `execution:` block, etc.) are rewritten by the alias pass
+before validation runs.
+
+| Block | Purpose | Reference |
+|-------|---------|-----------|
+| `app:` | Identity (id, name, version, icon, ...). | [language/app](language/02-app-config.md#app---identity) |
+| `runtime:` | Lifecycle and execution policy. | [language/runtime](language/02-app-config.md#runtime---lifecycle-and-execution-policy) |
+| `agents:` | Brains, system prompts, sub-agent pools. | [language/agents](language/03-agents.md) |
+| `tools:` | Modules, capabilities, channels. | [language/tools](language/04-tools.md) |
+| `security:` | Behavior + sandbox + credentials schema. | [language/security](language/11-security.md) |
+| `ui:` | Theme, widgets, workspace, preview. Daemon never reads. | [language/ui](language/02-app-config.md#ui---display-layer-daemon-never-reads) |
+| `dev:` | Skills, variables, includes. Dev-time only. | [language/dev](language/02-app-config.md#dev---developer-affordances) |
+| `flow:` | Optional declarative orchestration graph. | [language/flow](language/07-flows.md) |
+
+The root schema is `AppDefinition`; each block has `extra: "forbid"`,
+so a typo in a YAML key is a compile error, not a silent default.
+
+For a formal grammar of the YAML language, see
+[language/grammar.md](language/grammar.md).
+
+---
+
+## Documentation policy
+
+Claims in this documentation are cross-checked against the source
+code, and YAML examples are deployed against a live daemon before
+they ship. If you spot a divergence between what's written here and
+how the running system behaves, treat the doc as the bug and open
+an issue.
+
+The verification path is automated. The YAML is written to a temp
+file, `digitorn dev deploy -d <daemon> <file>` runs the compile and
+bootstrap path, then opens a Socket.IO stream and waits for
+`message_done`. If the assertions don't match, the doc build fails;
+a YAML that can't reach step 3 doesn't ship.
+
+---
+
+## Stability
+
+The 8-block YAML is `schema_version: 2`, the canonical Digitorn
+language. Once an app declares it, the YAML keeps parsing across
+every minor and patch release of the daemon. Legacy
+`schema_version: 1` (the flat shape) is still accepted through an
+alias pass. The detail (which fields can change, deprecation
+timing, default-value policy) lives in [versioning.md](versioning.md).
+
+---
+
+License: MIT
+
+The daemon is a single binary that hosts the HTTP API, the Socket.IO
+event stream, the agent loop, and the module instances. The front-end
+clients (web, Next.js) are separate repos that talk to the daemon
+over REST + Socket.IO; they are documented under
+[Client SDKs](/docs/reference/client-sdks/).

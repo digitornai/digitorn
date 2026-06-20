@@ -9,17 +9,20 @@ type ContextBlock struct {
 }
 
 // ContextSection is one injected block. Exactly one source is used, in order of
-// precedence: `builtin` (a named pre-built contributor: datetime, user, session…),
-// else `template` (a string with {{user.name}} / {{date}} / … placeholders filled
-// from the turn's data bag), else `text` (verbatim). `when` gates rendering on a
-// data-bag path (the section is dropped when the path is empty/false). Lower
-// `priority` renders first.
+// precedence: `builtin` → `file`/`files` → `template` → `text`.
+// `when` gates rendering on a data-bag path (dropped when empty/false).
+// Lower `priority` renders first.
 type ContextSection struct {
-	ID       string `yaml:"id,omitempty"`
-	Title    string `yaml:"title,omitempty"`
-	Text     string `yaml:"text,omitempty"`
-	Template string `yaml:"template,omitempty"`
-	Builtin  string `yaml:"builtin,omitempty"`
-	When     string `yaml:"when,omitempty"`
-	Priority int    `yaml:"priority,omitempty"`
+	ID       string   `yaml:"id,omitempty"`
+	Title    string   `yaml:"title,omitempty"`
+	Text     string   `yaml:"text,omitempty"`
+	Template string   `yaml:"template,omitempty"`
+	Builtin  string   `yaml:"builtin,omitempty"`
+	File     string   `yaml:"file,omitempty"`     // single file (relative to workdir or absolute)
+	Files    []string `yaml:"files,omitempty"`    // multiple files — merged with file:
+	Dir      string   `yaml:"dir,omitempty"`      // load all *.md files from this directory
+	Optional bool     `yaml:"optional,omitempty"` // silently skip missing/unreadable files
+	Writable bool     `yaml:"writable,omitempty"` // agent may write back — injects memory writing directive
+	When     string   `yaml:"when,omitempty"`
+	Priority int      `yaml:"priority,omitempty"`
 }

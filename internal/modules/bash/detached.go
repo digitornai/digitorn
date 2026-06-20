@@ -64,13 +64,37 @@ func runDetached(ctx context.Context, kind, path, command, dir string, env []str
 		cmd.Dir = dir
 	}
 	cmd.Env = env
-	if input != "" {
-		cmd.Stdin = strings.NewReader(input)
-	}
 	out := newBoundedBuf(maxOut)
 	errb := newBoundedBuf(maxOut)
 	cmd.Stdout = out
 	cmd.Stderr = errb
+	if r := tool.StdinPipeFromContext(ctx); r != nil {
+		if subStdin, pipeErr := cmd.StdinPipe(); pipeErr == nil {
+			go func() {
+				defer subStdin.Close()
+				buf := make([]byte, 4096)
+				for {
+					n, rerr := r.Read(buf)
+					if n > 0 {
+						if _, werr := subStdin.Write(buf[:n]); werr != nil {
+							break
+						}
+					}
+					if rerr != nil {
+						break
+					}
+				}
+			}()
+			go func() {
+				<-cctx.Done()
+				if rc, ok := r.(io.Closer); ok {
+					_ = rc.Close()
+				}
+			}()
+		}
+	} else if input != "" {
+		cmd.Stdin = strings.NewReader(input)
+	}
 	// Live tail : if the caller (the BackgroundManager) attached a live sink,
 	// tee the running command's stdout+stderr into it so a status check can show
 	// the output WHILE the task is still running — not only when it finishes.
@@ -81,7 +105,17 @@ func runDetached(ctx context.Context, kind, path, command, dir string, env []str
 	setSysProc(cmd)
 	cmd.Cancel = func() error {
 		if cmd.Process != nil {
-			killProcessTree(cmd.Process.Pid)
+			// Check whether a graceful signal was requested via context cause
+			// (set by the background manager's Signal() method). Falls back to
+			// SIGKILL for plain cancellation or timeout.
+			switch context.Cause(cctx) {
+			case errSignalINT:
+				signalProcessTree(cmd.Process.Pid, syscallSIGINT)
+			case errSignalTERM:
+				signalProcessTree(cmd.Process.Pid, syscallSIGTERM)
+			default:
+				killProcessTree(cmd.Process.Pid)
+			}
 		}
 		return nil
 	}
@@ -106,7 +140,16 @@ func runDetached(ctx context.Context, kind, path, command, dir string, env []str
 		if ctx.Err() != nil {
 			res.Cancelled = true
 			if res.ExitCode <= 0 {
-				res.ExitCode = 130
+				// Set the conventional exit code for the signal that was used.
+				// bash exits with 128+N when killed by signal N (if no trap fires).
+				// Go's ExitCode() returns -1 when a process is killed by signal,
+				// so we fill in the right code here.
+				switch context.Cause(cctx) {
+				case errSignalTERM:
+					res.ExitCode = 143 // 128 + SIGTERM(15)
+				default:
+					res.ExitCode = 130 // 128 + SIGINT(2) — default cancel
+				}
 			}
 			return res, errCancelled
 		}

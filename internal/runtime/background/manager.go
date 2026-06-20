@@ -28,6 +28,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -39,6 +40,14 @@ import (
 	"github.com/mbathepaul/digitorn/internal/runtime"
 	"github.com/mbathepaul/digitorn/internal/runtime/context/meta"
 	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
+)
+
+// ErrSignalINT and ErrSignalTERM are context causes set by Signal() to
+// transport the requested OS signal through the context to the bash module,
+// which reads context.Cause() to choose the right syscall instead of SIGKILL.
+var (
+	ErrSignalINT  = errors.New("background: SIGINT requested")
+	ErrSignalTERM = errors.New("background: SIGTERM requested")
 )
 
 // EventSink is the minimal slice of the session store the Manager needs
@@ -128,13 +137,15 @@ func (n CompletionNotification) Message() string {
 		prefix = "[BACKGROUND TASK FAILED]"
 	case "cancelled":
 		prefix = "[BACKGROUND TASK CANCELLED]"
+	case "pattern_matched":
+		// Async pattern-wake: task is still running but the agent's wait condition
+		// has been met. The agent can resume its work immediately.
+		prefix = "[BACKGROUND TASK READY]"
 	}
 	msg := fmt.Sprintf("%s task_id=%s tool=%s elapsed=%.1fs",
 		prefix, n.TaskID, n.ToolName, float64(n.ElapsedMs)/1000)
-	// Attach the captured output so the agent can SEE why a task failed (a
-	// server's "EADDRINUSE", a build error) instead of being told only that it
-	// failed. Keep the tail — errors land at the end — and bound it so a chatty
-	// task can't flood the next turn's context.
+	// Always include output for pattern_matched and errors; suppress for clean
+	// completions to keep context tidy.
 	if out := strings.TrimSpace(n.Output); out != "" && n.Status != "completed" {
 		const max = 2000
 		if len(out) > max {
@@ -143,6 +154,57 @@ func (n CompletionNotification) Message() string {
 		msg += "\noutput:\n" + out
 	}
 	return msg
+}
+
+// watchPattern polls the task's live log every 300 ms until the
+// notifyWhen pattern appears or the task finishes. On first match it
+// fires exactly once (sync.Once): enqueues a [BACKGROUND TASK READY]
+// notification and proactively wakes the agent session.
+func (m *Manager) watchPattern(t *task) {
+	ticker := time.NewTicker(300 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-t.done:
+			// Task ended — do one final check in case the last bytes arrived
+			// between the last tick and close(t.done).
+			if strings.Contains(t.live.tail(), t.notifyWhen) {
+				m.firePatternNotification(t)
+			}
+			return
+		case <-ticker.C:
+			if strings.Contains(t.live.tail(), t.notifyWhen) {
+				m.firePatternNotification(t)
+				return
+			}
+		}
+	}
+}
+
+// firePatternNotification enqueues a pattern_matched CompletionNotification
+// and wakes the agent. sync.Once guarantees it fires at most once per task
+// even if the pattern appears many times or there is a race between the
+// ticker and the task-end check.
+func (m *Manager) firePatternNotification(t *task) {
+	t.notifyOnce.Do(func() {
+		elapsedMs := (time.Now().UnixNano() - t.startedAt*int64(time.Second)) / int64(time.Millisecond)
+		if elapsedMs < 0 {
+			elapsedMs = 0
+		}
+		tail := t.live.tailLines(20)
+		m.enqueueNotification(t.sessionID, CompletionNotification{
+			TaskID:    t.id,
+			ToolName:  t.name,
+			ElapsedMs: elapsedMs,
+			Status:    "pattern_matched",
+			Output: fmt.Sprintf(
+				"Pattern %q detected in live output. Task is STILL RUNNING — use task_id=%q to monitor or cancel.\nRecent output:\n%s",
+				t.notifyWhen, t.id, tail),
+		})
+		if m.waker != nil {
+			m.waker.WakeSession(t.appID, t.sessionID, t.userID)
+		}
+	})
 }
 
 // Defaults applied when fields are zero.
@@ -205,11 +267,20 @@ type task struct {
 	errMsg    atomic.Value // string
 	live      *liveLog     // streamed output tail, readable while still running
 	waiters   atomic.Int32 // # of in-flight Wait() callers (settle window)
-	cancel    context.CancelFunc
+	cancel    context.CancelCauseFunc // nil cause = SIGKILL; ErrSignalINT/TERM = graceful
+	// stdinWriter is the write end of the subprocess stdin pipe. Non-nil only
+	// while the task is running; closed when the task ends. SendStdin() writes
+	// here to inject input into the running process (e.g. answers to prompts).
+	stdinWriter *io.PipeWriter
 
 	// done is closed when the goroutine returns. Wait blocks on
 	// it (or ctx) ; multiple waiters allowed.
 	done chan struct{}
+
+	// notifyWhen, when non-empty, starts a watcher goroutine that fires
+	// exactly once (via notifyOnce) when the pattern appears in live output.
+	notifyWhen string
+	notifyOnce sync.Once
 }
 
 func (t *task) snapshot() meta.BackgroundStatus {
@@ -268,19 +339,20 @@ func (m *Manager) Launch(ctx context.Context, req meta.LaunchRequest) (string, e
 	// directory and not the daemon's cwd — but NOT its cancellation: the task
 	// outlives the turn that launched it (fire-and-forget) and carries its own
 	// cancel for the client stop endpoint.
-	taskCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	taskCtx, cancel := context.WithCancelCause(context.WithoutCancel(ctx))
 	t := &task{
-		id:        id,
-		name:      req.Tool,
-		args:      req.Args,
-		sessionID: sessionID,
-		appID:     req.AppID,
-		userID:    req.UserID,
-		agentID:   req.AgentID,
-		startedAt: m.now().Unix(),
-		cancel:    cancel,
-		live:      &liveLog{},
-		done:      make(chan struct{}),
+		id:         id,
+		name:       req.Tool,
+		args:       req.Args,
+		sessionID:  sessionID,
+		appID:      req.AppID,
+		userID:     req.UserID,
+		agentID:    req.AgentID,
+		startedAt:  m.now().Unix(),
+		cancel:     cancel,
+		live:       &liveLog{},
+		done:       make(chan struct{}),
+		notifyWhen: req.NotifyWhen,
 	}
 	t.state.Store("running")
 	tbl.tasks[id] = t
@@ -297,6 +369,11 @@ func (m *Manager) Launch(ctx context.Context, req meta.LaunchRequest) (string, e
 // runTask is the per-task goroutine body.
 func (m *Manager) runTask(ctx context.Context, t *task) {
 	defer close(t.done)
+	// Start pattern watcher before the dispatch so it catches output from
+	// the very first bytes written to the live log.
+	if t.notifyWhen != "" {
+		go m.watchPattern(t)
+	}
 	// Last-resort panic guard. The dispatcher chokepoint already recovers, but
 	// a panic anywhere in this goroutine (a nil dispatcher, a future refactor)
 	// must NOT crash the daemon, and must not leave the task pinned "running"
@@ -318,10 +395,23 @@ func (m *Manager) runTask(ctx context.Context, t *task) {
 			}
 		}
 	}()
+	// Create a stdin pipe so SendStdin() can inject input into the subprocess.
+	// The read end travels via context to the bash module (detached.go uses it);
+	// the write end is stored on the task for SendStdin() to write to.
+	stdinR, stdinW := io.Pipe()
+	t.stdinWriter = stdinW
+	defer func() {
+		// Close the write end when the task ends so the subprocess sees EOF.
+		// This prevents it from hanging forever waiting for more stdin.
+		_ = stdinW.Close()
+		t.stdinWriter = nil
+	}()
+
 	// Mark the dispatch as asynchronous so a module that holds interactive
 	// per-session state (the bash shell) runs this in an independent,
 	// separately-cancellable process instead of blocking the session.
-	out := m.dispatcher.Dispatch(tool.WithLiveSink(tool.WithBackground(ctx), t.live), runtime.ToolInvocation{
+	dispatchCtx := tool.WithStdinPipe(tool.WithLiveSink(tool.WithBackground(ctx), t.live), stdinR)
+	out := m.dispatcher.Dispatch(dispatchCtx, runtime.ToolInvocation{
 		CallID:    t.id,
 		Name:      t.name,
 		Args:      t.args,
@@ -542,9 +632,8 @@ func (m *Manager) Wait(ctx context.Context, sessionID, taskID string, timeoutSec
 	}
 }
 
-// Cancel signals the task to stop and returns immediately. The
-// task's snapshot may still report "running" briefly until the
-// goroutine observes the ctx cancel.
+// Cancel signals the task to stop immediately (SIGKILL). The task's snapshot
+// may still report "running" briefly until the goroutine observes the cancel.
 func (m *Manager) Cancel(_ context.Context, sessionID, taskID string) error {
 	tbl := m.tableFor(sessionID)
 	tbl.mu.Lock()
@@ -553,7 +642,51 @@ func (m *Manager) Cancel(_ context.Context, sessionID, taskID string) error {
 	if !ok {
 		return fmt.Errorf("background: task %q not found", taskID)
 	}
-	t.cancel()
+	t.cancel(nil) // nil cause → SIGKILL in bash module
+	return nil
+}
+
+// SendStdin writes input to the running task's subprocess stdin. The data
+// is forwarded through the io.Pipe created at launch time and consumed by
+// the bash module's subprocess (detached.go). This lets the agent answer
+// interactive prompts (passwords, confirmations, REPL input) mid-execution.
+// Returns an error when the task is not found, already finished, or the pipe
+// was not set up (non-bash tasks).
+func (m *Manager) SendStdin(_ context.Context, sessionID, taskID, input string) error {
+	tbl := m.tableFor(sessionID)
+	tbl.mu.Lock()
+	t, ok := tbl.tasks[taskID]
+	tbl.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("background: task %q not found", taskID)
+	}
+	w := t.stdinWriter
+	if w == nil {
+		return fmt.Errorf("background: task %q has no stdin pipe (task may have finished or not support stdin injection)", taskID)
+	}
+	_, err := io.WriteString(w, input)
+	return err
+}
+
+// Signal sends a graceful OS signal to the task's running process.
+// sig must be "SIGINT" or "SIGTERM". The bash module reads context.Cause()
+// and uses the appropriate syscall instead of the default SIGKILL.
+func (m *Manager) Signal(_ context.Context, sessionID, taskID, sig string) error {
+	tbl := m.tableFor(sessionID)
+	tbl.mu.Lock()
+	defer tbl.mu.Unlock()
+	t, ok := tbl.tasks[taskID]
+	if !ok {
+		return fmt.Errorf("background: task %q not found", taskID)
+	}
+	switch strings.ToUpper(sig) {
+	case "SIGINT", "INT", "2":
+		t.cancel(ErrSignalINT)
+	case "SIGTERM", "TERM", "15":
+		t.cancel(ErrSignalTERM)
+	default:
+		return fmt.Errorf("background: unsupported signal %q (use SIGINT or SIGTERM)", sig)
+	}
 	return nil
 }
 
@@ -566,7 +699,7 @@ func (m *Manager) Cancel(_ context.Context, sessionID, taskID string) error {
 func (m *Manager) CancelAllForSession(sessionID string) int {
 	tbl := m.tableFor(sessionID)
 	tbl.mu.Lock()
-	cancels := make([]context.CancelFunc, 0, len(tbl.tasks))
+	cancels := make([]context.CancelCauseFunc, 0, len(tbl.tasks))
 	for _, t := range tbl.tasks {
 		if state, _ := t.state.Load().(string); state == "running" {
 			cancels = append(cancels, t.cancel)
@@ -574,7 +707,7 @@ func (m *Manager) CancelAllForSession(sessionID string) int {
 	}
 	tbl.mu.Unlock()
 	for _, c := range cancels {
-		c()
+		c(nil) // nil cause = SIGKILL (session abort)
 	}
 	return len(cancels)
 }

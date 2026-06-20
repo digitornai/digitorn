@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/mbathepaul/digitorn/internal/domain/tool"
+	"github.com/mbathepaul/digitorn/internal/flexjson"
 )
 
 const (
@@ -35,10 +36,10 @@ type searchResult struct {
 }
 
 type searchParams struct {
-	Query        string `json:"query"`
-	Limit        int    `json:"limit"`
-	FetchContent *bool  `json:"fetch_content"` // default true: enrich each result with its page text
-	TimeRange    string `json:"time_range"`    // "", day, week, month, year
+	Query        string    `json:"query"`
+	Limit        flexjson.Int   `json:"limit"`
+	FetchContent *flexjson.Bool `json:"fetch_content"`
+	TimeRange    string    `json:"time_range"`
 }
 
 // searchOpts carries per-call knobs each backend maps as it can.
@@ -66,7 +67,7 @@ func (m *Module) search(ctx context.Context, raw json.RawMessage) (tool.Result, 
 		err := fmt.Errorf("query must be at least 2 characters")
 		return errResult(err), err
 	}
-	limit := p.Limit
+	limit := int(p.Limit)
 	if limit <= 0 {
 		limit = defaultLimit
 	}
@@ -104,7 +105,7 @@ func (m *Module) search(ctx context.Context, raw json.RawMessage) (tool.Result, 
 	// content-bearing results): fetch the top-k in parallel and attach the
 	// extracted main text. Best-effort — a result whose page can't be fetched
 	// simply keeps its snippet.
-	if p.FetchContent == nil || *p.FetchContent {
+	if p.FetchContent == nil || bool(*p.FetchContent) {
 		m.enrichWithContent(ctx, client, results)
 	}
 
@@ -234,6 +235,29 @@ func readJSON(resp *http.Response, v any) error {
 }
 
 func searchDuckDuckGo(ctx context.Context, client *http.Client, ua, query string, limit int, opts searchOpts) ([]searchResult, error) {
+	const maxRetries = 2
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(time.Duration(attempt) * 800 * time.Millisecond):
+			}
+		}
+		results, err := doDuckDuckGoRequest(ctx, client, ua, query, limit, opts)
+		if err == nil && len(results) > 0 {
+			return results, nil
+		}
+		lastErr = err
+		if err == nil {
+			lastErr = fmt.Errorf("no results returned (possible anti-bot block)")
+		}
+	}
+	return nil, lastErr
+}
+
+func doDuckDuckGoRequest(ctx context.Context, client *http.Client, ua, query string, limit int, opts searchOpts) ([]searchResult, error) {
 	form := url.Values{"q": {query}}
 	if df := map[string]string{"day": "d", "week": "w", "month": "m", "year": "y"}[opts.timeRange]; df != "" {
 		form.Set("df", df)
@@ -249,9 +273,6 @@ func searchDuckDuckGo(ctx context.Context, client *http.Client, ua, query string
 		return nil, err
 	}
 	defer resp.Body.Close()
-	// DuckDuckGo's HTML endpoint replies 200 normally but 202 under its
-	// anti-automation path; both carry a parseable (possibly empty) result
-	// page, so accept any non-error (<400) status and let the parser decide.
 	if resp.StatusCode >= 400 {
 		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
@@ -290,7 +311,9 @@ func parseDuckDuckGo(doc string, limit int) []searchResult {
 	return out
 }
 
-// decodeDDGHref resolves DuckDuckGo's redirect links to the real target URL.
+// decodeDDGHref resolves DuckDuckGo result hrefs to the real target URL.
+// DDG uses direct URLs (https://target.com) in the current HTML format;
+// older versions used redirect links with uddg= query param — both handled.
 func decodeDDGHref(href string) string {
 	if href == "" {
 		return ""
@@ -303,9 +326,13 @@ func decodeDDGHref(href string) string {
 		return ""
 	}
 	if uddg := u.Query().Get("uddg"); uddg != "" {
-		return uddg // url.Parse already decoded the query value
+		return uddg
 	}
 	if u.Scheme == "http" || u.Scheme == "https" {
+		// Skip DDG-internal navigation links (favicon, CSS, /html/, etc.)
+		if strings.Contains(u.Host, "duckduckgo.com") {
+			return ""
+		}
 		return u.String()
 	}
 	return ""

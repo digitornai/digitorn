@@ -146,11 +146,17 @@ func (d *Daemon) MountAPI() {
 		// ----- Activepieces connector hub (pieces module) -----
 		r.Route("/api/pieces", func(r chi.Router) {
 			r.Get("/", d.piecesList)
+			r.Get("/catalog", d.piecesCatalogHub)
 			r.Post("/", d.piecesInstall)
 			r.Get("/tools", d.piecesTools)
 			r.Post("/reload", d.piecesReload)
 			r.Put("/{piece_name}", d.piecesUpdateCreds)
 			r.Delete("/{piece_name}", d.piecesUninstall)
+			r.Get("/{piece_name}/auth-schema", d.piecesAuthSchema)
+			r.Get("/{piece_name}/status", d.piecesStatus)
+			r.Post("/{piece_name}/configure", d.piecesConfigure)
+			r.Post("/{piece_name}/test", d.piecesTestAuth)
+			r.Post("/{piece_name}/oauth/start", d.piecesOAuthStart)
 		})
 
 		// ----- MCP server management : discovery (Phase 1, daemon-level) -----
@@ -180,6 +186,7 @@ func (d *Daemon) MountAPI() {
 		// ----- Dev-only debug routes (gated by cfg.Auth.DevMode) -----
 		if d.cfg.Auth.DevMode {
 			r.Post("/api/_dev/invoke", d.devInvoke)
+			r.Get("/api/_dev/pieces/catalog", d.piecesCatalogDiag)
 		}
 
 		// ----- Stubs for routes requiring runtime / deployment subsystems -----

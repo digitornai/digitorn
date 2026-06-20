@@ -83,6 +83,8 @@ func applyLocked(s *SessionState, ev *Event) {
 			Parts:       parts,
 			Content:     content,
 			Reasoning:   ev.Message.Reasoning,
+			ReasoningStartedAt: ev.Message.ReasoningStartedAt,
+			ReasoningEndedAt:   ev.Message.ReasoningEndedAt,
 			TsUnixNano:  ev.TsUnixNano,
 			ToolCallIDs: toolIDs,
 			Attachments: atts,
@@ -142,6 +144,9 @@ func applyLocked(s *SessionState, ev *Event) {
 		tc.CompletedAt = ev.TsUnixNano
 		tc.CompletedSeq = ev.Seq
 		tc.DurationMs = ev.Tool.DurationMs
+		tc.UnifiedDiff = ev.Tool.UnifiedDiff
+		tc.PreviousContent = ev.Tool.PreviousContent
+		tc.NewContent = ev.Tool.NewContent
 		if tc.DurationMs == 0 && tc.StartedAt > 0 && tc.CompletedAt > 0 {
 			tc.DurationMs = (tc.CompletedAt - tc.StartedAt) / int64(time.Millisecond)
 		}
@@ -211,6 +216,17 @@ func applyLocked(s *SessionState, ev *Event) {
 			return
 		}
 		s.Memory[ev.Memory.Key] = ev.Memory.Value
+
+	case EventToolAllowed:
+		if ev.Allowed == nil || ev.Allowed.Signature == "" {
+			return
+		}
+		for _, sig := range s.AllowedSignatures {
+			if sig == ev.Allowed.Signature {
+				return
+			}
+		}
+		s.AllowedSignatures = append(s.AllowedSignatures, ev.Allowed.Signature)
 
 	case EventMemoryFactAdded:
 		if ev.Memory == nil || ev.Memory.Fact == "" {

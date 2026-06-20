@@ -1,6 +1,8 @@
 package ctxinject
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -131,6 +133,253 @@ func TestMerge_AgentOverridesAppById(t *testing.T) {
 	}
 	if !strings.Contains(out, "agent only") || !strings.Contains(out, "Paul") {
 		t.Errorf("merge must keep both app builtin and new agent section: %q", out)
+	}
+}
+
+func TestRender_WhenComparison(t *testing.T) {
+	cases := []struct {
+		when string
+		data Data
+		want bool
+	}{
+		{"session.context_pct > 60", Data{Session: map[string]any{"context_pct": "75"}}, true},
+		{"session.context_pct > 60", Data{Session: map[string]any{"context_pct": "45"}}, false},
+		{"session.context_pct >= 60", Data{Session: map[string]any{"context_pct": "60"}}, true},
+		{"session.context_pct < 80", Data{Session: map[string]any{"context_pct": "75"}}, true},
+		{"session.context_pct <= 60", Data{Session: map[string]any{"context_pct": "61"}}, false},
+		{"session.context_pct == 50", Data{Session: map[string]any{"context_pct": "50"}}, true},
+		{"session.context_pct != 50", Data{Session: map[string]any{"context_pct": "75"}}, true},
+		{"session.turn > 10", Data{Session: map[string]any{"turn": "5"}}, false},
+		{"session.missing > 0", Data{Session: map[string]any{}}, false},
+	}
+	for _, c := range cases {
+		got := Render([]schema.ContextSection{
+			{Text: "shown", When: c.when},
+		}, c.data) != ""
+		if got != c.want {
+			t.Errorf("when=%q data=%v: got rendered=%v want %v", c.when, c.data.Session, got, c.want)
+		}
+	}
+}
+
+func TestRender_FileSingle(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("# Project rules\nAlways write tests."), 0600); err != nil {
+		t.Fatal(err)
+	}
+	d := sampleData()
+	d.Session["workdir"] = dir
+	out := Render([]schema.ContextSection{
+		{ID: "mem", File: "AGENTS.md", Priority: 1},
+	}, d)
+	if !strings.Contains(out, "Always write tests") {
+		t.Fatalf("file content not injected: %q", out)
+	}
+	if strings.Contains(out, "## AGENTS.md") {
+		t.Fatal("single file must not add header")
+	}
+	if !strings.Contains(out, "<system-reminder>") {
+		t.Fatal("file section must be wrapped in system-reminder")
+	}
+}
+
+func TestRender_FileMultiple(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("agents rule"), 0600)
+	os.WriteFile(filepath.Join(dir, "DIGITORN.md"), []byte("digitorn rule"), 0600)
+	d := sampleData()
+	d.Session["workdir"] = dir
+	out := Render([]schema.ContextSection{
+		{ID: "mem", File: "AGENTS.md", Files: []string{"DIGITORN.md"}, Priority: 1},
+	}, d)
+	if !strings.Contains(out, "agents rule") || !strings.Contains(out, "digitorn rule") {
+		t.Fatalf("multi-file content missing: %q", out)
+	}
+	if !strings.Contains(out, "## AGENTS.md") || !strings.Contains(out, "## DIGITORN.md") {
+		t.Fatal("multi-file must add per-file headers")
+	}
+	if !strings.Contains(out, "<system-reminder>") {
+		t.Fatal("file section must be wrapped in system-reminder")
+	}
+}
+
+func TestRender_FileMissingOptional(t *testing.T) {
+	d := sampleData()
+	d.Session["workdir"] = t.TempDir()
+	out := Render([]schema.ContextSection{
+		{ID: "mem", File: "AGENTS.md", Optional: true, Priority: 1},
+		{Text: "kept"},
+	}, d)
+	if strings.Contains(out, "AGENTS.md") {
+		t.Fatal("optional missing file must be silently skipped")
+	}
+	if !strings.Contains(out, "kept") {
+		t.Fatal("other sections must still render")
+	}
+}
+
+func TestRender_FileMissingNonOptional(t *testing.T) {
+	d := sampleData()
+	d.Session["workdir"] = t.TempDir()
+	out := Render([]schema.ContextSection{
+		{ID: "mem", File: "MISSING.md", Priority: 1},
+	}, d)
+	if !strings.Contains(out, "MISSING.md") || !strings.Contains(out, "no such file") {
+		t.Fatalf("non-optional missing file must emit error marker: %q", out)
+	}
+}
+
+func TestRender_FileAbsolutePath(t *testing.T) {
+	dir := t.TempDir()
+	abs := filepath.Join(dir, "abs.md")
+	os.WriteFile(abs, []byte("absolute content"), 0600)
+	d := sampleData()
+	out := Render([]schema.ContextSection{
+		{File: abs},
+	}, d)
+	if !strings.Contains(out, "absolute content") {
+		t.Fatalf("absolute path must work without workdir: %q", out)
+	}
+}
+
+func TestRender_Dir(t *testing.T) {
+	dir := t.TempDir()
+	memDir := filepath.Join(dir, ".digitorn", "memory")
+	os.MkdirAll(memDir, 0755)
+	os.WriteFile(filepath.Join(memDir, "MEMORY.md"), []byte("# Index\n- conventions"), 0600)
+	os.WriteFile(filepath.Join(memDir, "conventions.md"), []byte("Always write tests."), 0600)
+	os.WriteFile(filepath.Join(memDir, "not-md.txt"), []byte("ignored"), 0600)
+	d := sampleData()
+	d.Session["workdir"] = dir
+	out := Render([]schema.ContextSection{
+		{ID: "mem", Dir: ".digitorn/memory", Priority: 1},
+	}, d)
+	if !strings.Contains(out, "# Index") {
+		t.Fatal("MEMORY.md must appear first")
+	}
+	if !strings.Contains(out, "Always write tests") {
+		t.Fatal("other .md files must be included")
+	}
+	if strings.Contains(out, "ignored") {
+		t.Fatal("non-.md files must be excluded")
+	}
+	if !strings.Contains(out, "<system-reminder>") {
+		t.Fatal("dir section must be wrapped in system-reminder")
+	}
+}
+
+func TestRender_DirOptionalMissing(t *testing.T) {
+	d := sampleData()
+	d.Session["workdir"] = t.TempDir()
+	out := Render([]schema.ContextSection{
+		{Dir: ".digitorn/memory", Optional: true},
+		{Text: "kept"},
+	}, d)
+	if strings.Contains(out, "system-reminder") {
+		t.Fatal("empty optional dir must produce no output")
+	}
+	if !strings.Contains(out, "kept") {
+		t.Fatal("other sections must still render")
+	}
+}
+
+func TestBuiltin_MemoryIndex(t *testing.T) {
+	dir := t.TempDir()
+	memDir := filepath.Join(dir, ".digitorn", "memory")
+	os.MkdirAll(memDir, 0755)
+	os.WriteFile(filepath.Join(memDir, "MEMORY.md"), []byte("# Memory Index\n- fact1"), 0600)
+	os.WriteFile(filepath.Join(memDir, "fact1.md"), []byte("Always test."), 0600)
+	d := sampleData()
+	d.Session["workdir"] = dir
+	out := Render([]schema.ContextSection{
+		{Builtin: "memory_index"},
+	}, d)
+	if !strings.Contains(out, "Memory Index") || !strings.Contains(out, "Always test") {
+		t.Fatalf("memory_index must load .digitorn/memory/: %q", out)
+	}
+	if !strings.Contains(out, "<system-reminder>") {
+		t.Fatal("memory content must be wrapped in system-reminder")
+	}
+	if !strings.Contains(out, "digitorn-directive") {
+		t.Fatal("memory_index must always emit the writing directive")
+	}
+}
+
+func TestBuiltin_MemoryIndexEmitsDirectiveEvenWhenEmpty(t *testing.T) {
+	d := sampleData()
+	d.Session["workdir"] = t.TempDir()
+	out := Render([]schema.ContextSection{
+		{Builtin: "memory_index"},
+	}, d)
+	if !strings.Contains(out, "digitorn-directive") {
+		t.Fatal("directive must be emitted even when .digitorn/memory/ does not exist yet")
+	}
+	if !strings.Contains(out, "Persistent file memory") {
+		t.Fatal("directive must contain memory instructions")
+	}
+	if strings.Contains(out, "<system-reminder>") {
+		t.Fatal("system-reminder must NOT appear when there is no memory content")
+	}
+}
+
+func TestRender_WritableDir(t *testing.T) {
+	dir := t.TempDir()
+	memDir := filepath.Join(dir, "my-memory")
+	os.MkdirAll(memDir, 0755)
+	os.WriteFile(filepath.Join(memDir, "notes.md"), []byte("keep this"), 0600)
+	d := sampleData()
+	d.Session["workdir"] = dir
+	out := Render([]schema.ContextSection{
+		{Dir: "my-memory", Writable: true, Priority: 1},
+	}, d)
+	if !strings.Contains(out, "keep this") {
+		t.Fatal("writable dir must still load file content")
+	}
+	if !strings.Contains(out, "digitorn-directive") {
+		t.Fatal("writable:true must inject writing directive")
+	}
+	if !strings.Contains(out, "my-memory") {
+		t.Fatal("directive must reference the configured directory")
+	}
+}
+
+func TestRender_WritableFile(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "notes.md"), []byte("note content"), 0600)
+	d := sampleData()
+	d.Session["workdir"] = dir
+	out := Render([]schema.ContextSection{
+		{File: "notes.md", Writable: true},
+	}, d)
+	if !strings.Contains(out, "note content") {
+		t.Fatal("writable file must still load content")
+	}
+	if !strings.Contains(out, "digitorn-directive") {
+		t.Fatal("writable:true must inject writing directive")
+	}
+}
+
+func TestRender_NotWritableNoDirective(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("read only"), 0600)
+	d := sampleData()
+	d.Session["workdir"] = dir
+	out := Render([]schema.ContextSection{
+		{File: "AGENTS.md"},
+	}, d)
+	if strings.Contains(out, "digitorn-directive") {
+		t.Fatal("read-only file section must NOT inject writing directive")
+	}
+}
+
+func TestRender_StaticNotWrapped(t *testing.T) {
+	out := Render([]schema.ContextSection{
+		{Text: "hardcoded instruction"},
+		{Template: "user is {{user.name}}"},
+		{Builtin: "datetime"},
+	}, sampleData())
+	if strings.Contains(out, "<system-reminder>") {
+		t.Fatal("static text/template/builtin sections must NOT be wrapped in system-reminder")
 	}
 }
 

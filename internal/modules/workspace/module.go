@@ -21,6 +21,7 @@ import (
 
 	domainmodule "github.com/mbathepaul/digitorn/internal/domain/module"
 	"github.com/mbathepaul/digitorn/internal/domain/tool"
+	"github.com/mbathepaul/digitorn/internal/flexjson"
 	"github.com/mbathepaul/digitorn/internal/gitrepo"
 	"github.com/mbathepaul/digitorn/pkg/module"
 )
@@ -186,7 +187,7 @@ type wdParams struct {
 
 type changesParams struct {
 	Workdir      string `json:"workdir"`
-	IncludeDiffs bool   `json:"include_diffs"`
+	IncludeDiffs flexjson.Bool   `json:"include_diffs"`
 }
 
 type diffParams struct {
@@ -392,7 +393,7 @@ func approveMessage(msg string, paths []string) string {
 type revertParams struct {
 	Workdir  string `json:"workdir"`
 	Path     string `json:"path"`
-	Revision int    `json:"revision"`
+	Revision flexjson.Int    `json:"revision"`
 }
 
 // revert restores one file to a past revision as a pending change (the content
@@ -409,7 +410,7 @@ func (m *Module) revert(_ context.Context, raw json.RawMessage) (tool.Result, er
 	if err != nil {
 		return errResult(err.Error()), nil
 	}
-	if err := r.RestoreRevision(p.Path, p.Revision); err != nil {
+	if err := r.RestoreRevision(p.Path, int(p.Revision)); err != nil {
 		return errResult(err.Error()), nil
 	}
 	return tool.Result{Success: true, Data: map[string]any{"reverted": p.Revision}}, nil

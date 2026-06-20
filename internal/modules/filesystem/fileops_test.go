@@ -107,7 +107,7 @@ func TestGlob_DoubleStarRecursionAndSkipDirs(t *testing.T) {
 
 	ctx := context.Background()
 	check := func(pattern string, want int) []string {
-		r, err := m.glob(ctx, mustJSON(map[string]any{"pattern": pattern}))
+		r, err := m.glob(ctx, mustJSON(map[string]any{"pattern": pattern, "tree": false}))
 		if err != nil || !r.Success {
 			t.Fatalf("glob %q: %v (%v)", pattern, err, r.Error)
 		}
@@ -133,7 +133,7 @@ func TestGlob_AcceptsToolNameAlias(t *testing.T) {
 	writeFile(t, ws, "sub/b.go", "x")
 	ctx := context.Background()
 
-	r, err := m.glob(ctx, mustJSON(map[string]any{"glob": "**/*.go"}))
+	r, err := m.glob(ctx, mustJSON(map[string]any{"glob": "**/*.go", "tree": false}))
 	if err != nil || !r.Success {
 		t.Fatalf("glob via {glob:...} alias failed: %v (%v)", err, r.Error)
 	}
@@ -141,7 +141,7 @@ func TestGlob_AcceptsToolNameAlias(t *testing.T) {
 		t.Fatalf("alias glob want 2 files, got %d: %v", len(files), files)
 	}
 	// `pattern` still wins when both are present.
-	r, _ = m.glob(ctx, mustJSON(map[string]any{"pattern": "*.go", "glob": "**/*.go"}))
+	r, _ = m.glob(ctx, mustJSON(map[string]any{"pattern": "*.go", "glob": "**/*.go", "tree": false}))
 	if files := r.Data.(map[string]any)["files"].([]string); len(files) != 1 {
 		t.Fatalf("explicit pattern must win over glob alias, got %d: %v", len(files), files)
 	}
@@ -167,13 +167,13 @@ func TestGlob_TypeFilter(t *testing.T) {
 	writeFile(t, ws, "dir2/y.txt", "x")
 	ctx := context.Background()
 
-	dirs, _ := m.glob(ctx, mustJSON(map[string]any{"pattern": "**", "type": "dir"}))
+	dirs, _ := m.glob(ctx, mustJSON(map[string]any{"pattern": "**", "type": "dir", "tree": false}))
 	for _, f := range dirs.Data.(map[string]any)["files"].([]string) {
 		if strings.HasSuffix(f, ".txt") {
 			t.Errorf("type=dir returned a file: %s", f)
 		}
 	}
-	files, _ := m.glob(ctx, mustJSON(map[string]any{"pattern": "**", "type": "file"}))
+	files, _ := m.glob(ctx, mustJSON(map[string]any{"pattern": "**", "type": "file", "tree": false}))
 	for _, f := range files.Data.(map[string]any)["files"].([]string) {
 		if f == "dir1" || f == "dir2" {
 			t.Errorf("type=file returned a dir: %s", f)
@@ -189,14 +189,14 @@ func TestGlob_NewestFirstAndCap(t *testing.T) {
 		// Stagger mtimes : old < mid < new.
 		_ = os.Chtimes(filepath.Join(ws, n), base.Add(time.Duration(i)*time.Minute), base.Add(time.Duration(i)*time.Minute))
 	}
-	r, _ := m.glob(context.Background(), mustJSON(map[string]any{"pattern": "*.txt"}))
+	r, _ := m.glob(context.Background(), mustJSON(map[string]any{"pattern": "*.txt", "tree": false}))
 	files := r.Data.(map[string]any)["files"].([]string)
 	if len(files) != 3 || files[0] != "new.txt" || files[2] != "old.txt" {
 		t.Errorf("glob should be newest-first: %v", files)
 	}
 
 	// Cap + truncation flag.
-	rc, _ := m.glob(context.Background(), mustJSON(map[string]any{"pattern": "*.txt", "max_results": 2}))
+	rc, _ := m.glob(context.Background(), mustJSON(map[string]any{"pattern": "*.txt", "max_results": 2, "tree": false}))
 	d := rc.Data.(map[string]any)
 	if len(d["files"].([]string)) != 2 || d["truncated"] != true {
 		t.Errorf("cap not enforced: %v", d)

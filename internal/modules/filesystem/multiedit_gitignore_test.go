@@ -83,7 +83,7 @@ func TestGitignore_GlobExcludes(t *testing.T) {
 	writeFile(t, ws, "sub/nested.log", "x") // *.log at any depth → ignored
 	writeFile(t, ws, "sub/keep.go", "x")    // kept
 
-	r, _ := m.glob(context.Background(), mustJSON(map[string]any{"pattern": "**/*"}))
+	r, _ := m.glob(context.Background(), mustJSON(map[string]any{"pattern": "**/*", "tree": false}))
 	files := r.Data.(map[string]any)["files"].([]string)
 	joined := strings.Join(files, "\n")
 	for _, bad := range []string{"debug.log", "secret/key.txt", "build/out.bin", "sub/nested.log"} {
@@ -120,7 +120,7 @@ func TestGitignore_Negation(t *testing.T) {
 	writeFile(t, ws, ".gitignore", "*.log\n!keep.log\n")
 	writeFile(t, ws, "drop.log", "x")
 	writeFile(t, ws, "keep.log", "x") // re-included by negation
-	r, _ := m.glob(context.Background(), mustJSON(map[string]any{"pattern": "*.log"}))
+	r, _ := m.glob(context.Background(), mustJSON(map[string]any{"pattern": "*.log", "tree": false}))
 	files := r.Data.(map[string]any)["files"].([]string)
 	if len(files) != 1 || files[0] != "keep.log" {
 		t.Errorf("negation rule not honoured, want [keep.log], got %v", files)

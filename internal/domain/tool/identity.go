@@ -76,6 +76,25 @@ func LiveSinkFromContext(ctx context.Context) io.Writer {
 	return w
 }
 
+type stdinPipeKey struct{}
+
+// WithStdinPipe attaches a stdin reader to ctx so a background subprocess can
+// receive dynamic input sent via background_run(stdin: "...", task_id: "...").
+// The reader end of an io.Pipe() is passed here; the write end is kept by the
+// background Manager and written to via SendStdin().
+func WithStdinPipe(ctx context.Context, r io.Reader) context.Context {
+	if r == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, stdinPipeKey{}, r)
+}
+
+// StdinPipeFromContext returns the dynamic stdin reader, or nil when absent.
+func StdinPipeFromContext(ctx context.Context) io.Reader {
+	r, _ := ctx.Value(stdinPipeKey{}).(io.Reader)
+	return r
+}
+
 // FileChangeNotifier is signalled by a module right after it mutates a file in
 // the session workdir (filesystem write/edit). The daemon's implementation
 // coalesces these signals per session and pushes a live workspace-changes event

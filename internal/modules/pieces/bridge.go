@@ -2,10 +2,12 @@ package pieces
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"sync"
@@ -346,4 +348,116 @@ func toInt64(v any) (int64, bool) {
 		return n, err == nil
 	}
 	return 0, false
+}
+
+// ── Trigger server HTTP client ────────────────────────────────────────
+
+// TriggerPort returns the trigger HTTP server port so external callers
+// (e.g. the background adapter) can call /trigger/poll directly.
+func (b *Bridge) TriggerPort() int { return b.triggerPort }
+
+// triggerHTTPPost calls the bridge's trigger HTTP server with a JSON body.
+func (b *Bridge) triggerHTTPPost(path string, body any) ([]byte, error) {
+	data, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	url := fmt.Sprintf("http://127.0.0.1:%d%s", b.triggerPort, path)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("trigger server HTTP %d", resp.StatusCode)
+	}
+	return io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+}
+
+// TriggerPollRequest is the body sent to /trigger/poll.
+type TriggerPollRequest struct {
+	Piece      string            `json:"piece"`
+	Trigger    string            `json:"trigger"`
+	Auth       any               `json:"auth"`
+	Props      map[string]any    `json:"props"`
+	StoreState map[string]any    `json:"storeState"`
+	WebhookURL string            `json:"webhookUrl,omitempty"`
+}
+
+// TriggerPollResponse is the response from /trigger/poll.
+type TriggerPollResponse struct {
+	Events     []map[string]any `json:"events"`
+	StoreState map[string]any   `json:"storeState"`
+}
+
+// TriggerPoll calls /trigger/poll on the bridge trigger server.
+func (b *Bridge) TriggerPoll(req TriggerPollRequest) (TriggerPollResponse, error) {
+	data, err := b.triggerHTTPPost("/trigger/poll", req)
+	if err != nil {
+		return TriggerPollResponse{}, err
+	}
+	var resp TriggerPollResponse
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return TriggerPollResponse{}, err
+	}
+	return resp, nil
+}
+
+// TriggerEnable calls /trigger/enable on the bridge trigger server.
+func (b *Bridge) TriggerEnable(req TriggerPollRequest) error {
+	_, err := b.triggerHTTPPost("/trigger/enable", req)
+	return err
+}
+
+// triggerHTTPGet calls the bridge's trigger HTTP server.
+func (b *Bridge) triggerHTTPGet(path string) ([]byte, error) {
+	url := fmt.Sprintf("http://127.0.0.1:%d%s", b.triggerPort, path)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("trigger server HTTP %d", resp.StatusCode)
+	}
+	return io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+}
+
+// GetPieceAuth returns the auth schema for a piece from the bridge.
+func (b *Bridge) GetPieceAuth(pieceName string) (map[string]any, error) {
+	data, err := b.triggerHTTPGet("/pieces/" + pieceName + "/auth")
+	if err != nil {
+		return nil, err
+	}
+	var result map[string]any
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// GetPieceStatus returns piece status from the bridge.
+func (b *Bridge) GetPieceStatus(pieceName string) (map[string]any, error) {
+	data, err := b.triggerHTTPGet("/pieces/" + pieceName + "/status")
+	if err != nil {
+		return nil, err
+	}
+	var result map[string]any
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
 }

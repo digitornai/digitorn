@@ -21,6 +21,9 @@ import (
 // lookup can't resolve for a per-user server) is passed via mcpoauth.WithServerURL.
 const managedMCPAppID = "@mcp-managed"
 
+// piecesAppID is the sentinel app id for per-user piece OAuth tokens.
+const piecesAppID = "@pieces"
+
 // MCP server management — daemon-level discovery (Phase 1, read-only). These
 // routes let a client browse the static catalog, search/browse the official MCP
 // registry, and ask what a server needs (credentials/env/OAuth + a copy-paste

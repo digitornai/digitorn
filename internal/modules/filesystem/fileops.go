@@ -15,7 +15,7 @@ import (
 
 const (
 	readMaxLineRunes = 2000 // a single line longer than this is clipped in read output
-	globDefaultCap   = 1000 // glob result cap before truncation is signalled
+	globDefaultCap   = 10000 // glob result cap before truncation is signalled
 )
 
 // contentKind classifies a file from its leading bytes + name so read can return

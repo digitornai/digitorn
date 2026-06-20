@@ -9,10 +9,12 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/mbathepaul/digitorn/internal/llm"
 	"github.com/mbathepaul/digitorn/internal/runtime"
 	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
+	"github.com/mbathepaul/digitorn/internal/runtime/toolname"
 )
 
 // This file implements the 5 always-direct primitives documented
@@ -132,12 +134,17 @@ type BackgroundManager interface {
 // lifecycle events reach the session's realtime room) ; Tool + Args are
 // the wrapped tool call.
 type LaunchRequest struct {
-	SessionID string
-	AppID     string
-	UserID    string
-	AgentID   string
-	Tool      string
-	Args      map[string]any
+	SessionID  string
+	AppID      string
+	UserID     string
+	AgentID    string
+	Tool       string
+	Args       map[string]any
+	// NotifyWhen, when non-empty, causes a monitoring goroutine to watch
+	// the task's live output and proactively wake the agent (inject a new
+	// turn) the moment the pattern first appears — no polling required.
+	// The agent receives [BACKGROUND TASK READY] with a live-output tail.
+	NotifyWhen string
 }
 
 // BackgroundStatus is what the manager returns to the LLM about a
@@ -363,6 +370,20 @@ func (m *MetaDispatcher) handleRunParallel(ctx context.Context, call runtime.Too
 				SessionID:  call.SessionID,
 				AgentRunID: call.AgentRunID,
 				UserJWT:    call.UserJWT,
+			}
+			// UNIVERSAL bare-action recovery : qualify bare names (e.g. "read"
+			// → "filesystem.read") so the gate 1a module check sees the correct
+			// module. Without this, splitToolName("read") returns module="",
+			// and CanAgentCall("", "read") fails → denied even though the
+			// identical direct call succeeds.
+			if !strings.Contains(child.Name, ".") {
+				if idx := m.resolveIndex(call); idx != nil {
+					fqns := idx.FQNList()
+					child.Name = toolname.QualifyBareName(child.Name, fqns)
+					if !strings.Contains(child.Name, ".") {
+						child.Name = toolname.ResolveMangled(child.Name, fqns)
+					}
+				}
 			}
 			// SG-4 chokepoint : gate each fanned-out child before it runs.
 			if blocked := m.gateTarget(childCtx, child); blocked != nil {
@@ -773,6 +794,185 @@ func (m *MetaDispatcher) handleBackgroundRun(ctx context.Context, call runtime.T
 		return jsonOutcome(map[string]any{"tasks": statuses})
 	}
 	taskID, _ := call.Args["task_id"].(string)
+
+	// ── signal ─────────────────────────────────────────────────────────────────
+	// Send a signal to a running background task. SIGTERM → same as cancel.
+	// SIGINT is attempted via an optional Signal interface; falls back to cancel.
+	if signal, _ := call.Args["signal"].(string); signal != "" {
+		if taskID == "" {
+			return errored("background_run signal: 'task_id' is required")
+		}
+		type signaller interface {
+			Signal(ctx context.Context, sessionID, taskID, sig string) error
+		}
+		switch strings.ToUpper(signal) {
+		case "SIGTERM", "TERM", "15":
+			if si, ok := m.Background.(signaller); ok {
+				if err := si.Signal(ctx, m.SessionID(call), taskID, "SIGTERM"); err != nil {
+					return errored("background_run signal: " + err.Error())
+				}
+				return jsonOutcome(map[string]any{"signalled": taskID, "signal": "SIGTERM"})
+			}
+			// Fallback: SIGKILL via cancel (no Signal interface)
+			_ = m.Background.Cancel(ctx, m.SessionID(call), taskID)
+			return jsonOutcome(map[string]any{"signalled": taskID, "signal": "SIGKILL",
+				"note": "graceful SIGTERM not supported; sent SIGKILL"})
+		case "SIGINT", "INT", "2":
+			if si, ok := m.Background.(signaller); ok {
+				if err := si.Signal(ctx, m.SessionID(call), taskID, "SIGINT"); err != nil {
+					return errored("background_run signal: " + err.Error())
+				}
+				return jsonOutcome(map[string]any{"signalled": taskID, "signal": "SIGINT"})
+			}
+			// Fallback: SIGKILL via cancel
+			_ = m.Background.Cancel(ctx, m.SessionID(call), taskID)
+			return jsonOutcome(map[string]any{"signalled": taskID, "signal": "SIGKILL",
+				"note": "graceful SIGINT not supported; sent SIGKILL"})
+		default:
+			return errored(fmt.Sprintf("background_run signal: unsupported signal %q (use SIGTERM or SIGINT)", signal))
+		}
+	}
+
+	// ── stdin ──────────────────────────────────────────────────────────────────
+	// Send text to a running background task's stdin. Requires the backend to
+	// implement an optional SendStdin interface; degrades to a clear error otherwise.
+	if stdinIn, _ := call.Args["stdin"].(string); stdinIn != "" && taskID != "" {
+		type stdinSender interface {
+			SendStdin(ctx context.Context, sessionID, taskID, input string) error
+		}
+		if ss, ok := m.Background.(stdinSender); ok {
+			if err := ss.SendStdin(ctx, m.SessionID(call), taskID, stdinIn); err != nil {
+				return errored("background_run stdin: " + err.Error())
+			}
+			return jsonOutcome(map[string]any{"sent": taskID, "bytes": len(stdinIn)})
+		}
+		return errored("background_run stdin: stdin injection not supported by this backend — " +
+			"feed stdin at launch time via the 'input' param instead")
+	}
+
+	// ── watch ──────────────────────────────────────────────────────────────────
+	// Run a command repeatedly on an interval, optionally stopping when a pattern
+	// appears. Implemented as a background bash.run shell loop — no new process model.
+	if watchMode, _ := call.Args["watch"].(bool); watchMode {
+		watchCmd, _ := call.Args["command"].(string)
+		if watchCmd == "" {
+			if p := coerceParamMap(call.Args["params"]); p != nil {
+				watchCmd, _ = p["command"].(string)
+			}
+		}
+		if watchCmd == "" {
+			return errored("background_run watch: 'command' is required")
+		}
+		interval := 2.0
+		if v, ok := call.Args["interval"].(float64); ok && v > 0 {
+			interval = v
+		}
+		untilPat, _ := call.Args["until"].(string)
+
+		var loopCmd string
+		if untilPat != "" {
+			loopCmd = fmt.Sprintf(
+				`while true; do OUT=$(%s 2>&1); printf -- '--- %%s ---\n' "$(date '+%%H:%%M:%%S')"; printf '%%s\n' "$OUT"; `+
+					`if printf '%%s' "$OUT" | grep -qF %s; then printf 'WATCH_MATCHED: %%s\n' %s; break; fi; `+
+					`sleep %.0f; done`,
+				watchCmd, bgShellQuote(untilPat), bgShellQuote(untilPat), interval)
+		} else {
+			loopCmd = fmt.Sprintf(
+				`while true; do printf -- '--- %%s ---\n' "$(date '+%%H:%%M:%%S')"; %s 2>&1; sleep %.0f; done`,
+				watchCmd, interval)
+		}
+
+		resolved := ResolveAlias(Canonicalize("bash.run"))
+		loopArgs := map[string]any{"command": loopCmd}
+		target := runtime.ToolInvocation{
+			CallID: call.CallID, Name: resolved, Args: loopArgs,
+			AppID: call.AppID, AgentID: call.AgentID,
+			UserID: call.UserID, SessionID: call.SessionID,
+		}
+		if blocked := m.gateTarget(ctx, target); blocked != nil {
+			return *blocked
+		}
+		tid, err := m.Background.Launch(ctx, LaunchRequest{
+			SessionID: m.SessionID(call), AppID: call.AppID,
+			UserID: call.UserID, AgentID: call.AgentID,
+			Tool: resolved, Args: loopArgs,
+		})
+		if err != nil {
+			return errored("background_run watch: " + err.Error())
+		}
+		if untilPat != "" {
+			watchTimeout := 300.0
+			if v, ok := call.Args["timeout"].(float64); ok && v > 0 {
+				watchTimeout = v
+			}
+			deadline := time.Now().Add(time.Duration(watchTimeout * float64(time.Second)))
+			for time.Now().Before(deadline) {
+				if ctx.Err() != nil {
+					break
+				}
+				st, _ := m.Background.Status(ctx, m.SessionID(call), tid)
+				combined := st.Log
+				if s, ok := st.Result.(string); ok {
+					combined += s
+				}
+				if strings.Contains(combined, "WATCH_MATCHED:") {
+					res := statusToMap(st, 100)
+					res["matched"] = untilPat
+					_ = m.Background.Cancel(ctx, m.SessionID(call), tid)
+					return jsonOutcome(res)
+				}
+				if st.State != "running" {
+					break
+				}
+				time.Sleep(500 * time.Millisecond)
+			}
+		}
+		return jsonOutcome(map[string]any{
+			"task_id": tid, "state": "running",
+			"note": fmt.Sprintf("watching `%s` every %.0fs — check output with task_id or cancel to stop", watchCmd, interval),
+		})
+	}
+
+	// ── wait_for ───────────────────────────────────────────────────────────────
+	// Poll a running task's live log until a pattern appears or timeout expires.
+	// Use with task_id to attach to an already-running task.
+	if waitFor, _ := call.Args["wait_for"].(string); waitFor != "" && taskID != "" {
+		wfTimeout := 60.0
+		if v, ok := call.Args["timeout"].(float64); ok && v > 0 {
+			wfTimeout = v
+		}
+		deadline := time.Now().Add(time.Duration(wfTimeout * float64(time.Second)))
+		for time.Now().Before(deadline) {
+			if ctx.Err() != nil {
+				break
+			}
+			st, serr := m.Background.Status(ctx, m.SessionID(call), taskID)
+			if serr != nil {
+				return errored("background_run wait_for: " + serr.Error())
+			}
+			combined := st.Log
+			if s, ok := st.Result.(string); ok {
+				combined += s
+			}
+			if strings.Contains(combined, waitFor) {
+				res := statusToMap(st, 100)
+				res["matched"] = waitFor
+				return jsonOutcome(res)
+			}
+			if st.State != "running" {
+				return jsonOutcome(map[string]any{
+					"task_id": taskID, "state": st.State,
+					"note": fmt.Sprintf("task ended before pattern %q appeared", waitFor),
+				})
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+		return jsonOutcome(map[string]any{
+			"task_id": taskID, "timeout": true,
+			"note": fmt.Sprintf("pattern %q not seen within %.0fs", waitFor, wfTimeout),
+		})
+	}
+
 	if cancel, _ := call.Args["cancel"].(bool); cancel {
 		if taskID == "" {
 			return errored("background_run cancel: 'task_id' is required")
@@ -836,13 +1036,15 @@ func (m *MetaDispatcher) handleBackgroundRun(ctx context.Context, call runtime.T
 	if blocked := m.gateTarget(ctx, target); blocked != nil {
 		return *blocked
 	}
+	notifyWhen, _ := call.Args["notify_when"].(string)
 	tid, err := m.Background.Launch(ctx, LaunchRequest{
-		SessionID: m.SessionID(call),
-		AppID:     call.AppID,
-		UserID:    call.UserID,
-		AgentID:   call.AgentID,
-		Tool:      resolved,
-		Args:      params,
+		SessionID:  m.SessionID(call),
+		AppID:      call.AppID,
+		UserID:     call.UserID,
+		AgentID:    call.AgentID,
+		Tool:       resolved,
+		Args:       params,
+		NotifyWhen: notifyWhen,
 	})
 	if err != nil {
 		return errored("background_run launch: " + err.Error())
@@ -869,10 +1071,58 @@ func (m *MetaDispatcher) handleBackgroundRun(ctx context.Context, call runtime.T
 			return jsonOutcome(res)
 		}
 	}
+	// If wait_for was also supplied at launch time, enter the polling loop now.
+	if waitFor, _ := call.Args["wait_for"].(string); waitFor != "" {
+		wfTimeout := 60.0
+		if v, ok := call.Args["timeout"].(float64); ok && v > 0 {
+			wfTimeout = v
+		}
+		deadline := time.Now().Add(time.Duration(wfTimeout * float64(time.Second)))
+		for time.Now().Before(deadline) {
+			if ctx.Err() != nil {
+				break
+			}
+			st, serr := m.Background.Status(ctx, m.SessionID(call), tid)
+			if serr != nil {
+				break
+			}
+			combined := st.Log
+			if s, ok := st.Result.(string); ok {
+				combined += s
+			}
+			if strings.Contains(combined, waitFor) {
+				res := statusToMap(st, tailLines)
+				res["matched"] = waitFor
+				res["task_id"] = tid
+				return jsonOutcome(res)
+			}
+			if st.State != "running" {
+				break
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+		// Pattern not seen: return task_id so caller can poll manually.
+		return jsonOutcome(map[string]any{
+			"task_id": tid, "state": "running",
+			"note": fmt.Sprintf("task started but pattern %q not seen yet — poll with task_id", waitFor),
+		})
+	}
+
+	note := "started — still running after the start-up window, so it launched OK and now runs in the background. You'll be notified when it finishes or fails; use background_run with this task_id to check its status/output."
+	if notifyWhen != "" {
+		note = fmt.Sprintf(
+			"started — watching for %q in live output. You will be automatically notified with [BACKGROUND TASK READY] the moment the pattern appears. Continue working — no polling needed.",
+			notifyWhen)
+	}
 	return jsonOutcome(map[string]any{
 		"task_id": tid, "state": "running",
-		"note": "started — still running after the start-up window, so it launched OK and now runs in the background. You'll be notified when it finishes or fails; use background_run with this task_id to check its status/output.",
+		"note":    note,
 	})
+}
+
+// bgShellQuote single-quote-escapes a string for safe embedding in a shell loop.
+func bgShellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // withoutWait returns a shallow copy of the params with "wait" removed, so a

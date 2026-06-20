@@ -1,0 +1,436 @@
+/* ==========================================================
+ *  Homepage - Digitorn brand
+ *  Mirrors the in-app DS tokens and the BrandMark feel.
+ * ========================================================== */
+
+/* ─── Hero ────────────────────────────────────────────────── */
+
+.hero {
+  position: relative;
+  padding: 6rem 0 4rem;
+  text-align: center;
+  background:
+    radial-gradient(
+      ellipse at 50% -20%,
+      rgba(167, 139, 250, 0.16),
+      transparent 60%
+    ),
+    radial-gradient(
+      ellipse at 50% 100%,
+      rgba(59, 130, 246, 0.10),
+      transparent 50%
+    );
+  overflow: hidden;
+}
+
+.heroBrandWrap {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 1.5rem;
+}
+
+/* Composite brand mark, mirrors the BrandMark component used by Flutter
+   and the web client: gradient tile + soft top-left highlight + the brain
+   logo tinted to onAccent (white). */
+.heroBrand {
+  position: relative;
+  overflow: hidden;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow:
+    0 18px 48px -10px rgba(59, 130, 246, 0.45),
+    0 4px 14px -4px rgba(167, 139, 250, 0.3);
+}
+
+.heroBrandTile {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    135deg,
+    #A78BFA 0%,
+    #7E94F0 50%,
+    #5B7BF0 100%
+  );
+}
+
+.heroBrandGloss {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.22) 0%,
+    rgba(255, 255, 255, 0) 50%
+  );
+}
+
+.heroBrandMark {
+  position: relative;
+  object-fit: contain;
+  filter: brightness(0) invert(1);
+}
+
+.heroTitle {
+  font-size: 3.75rem;
+  font-weight: 800;
+  letter-spacing: -0.04em;
+  margin-bottom: 1rem;
+  background: linear-gradient(
+    135deg,
+    #A78BFA 0%,
+    #8B5CF6 35%,
+    #5B7BF0 70%,
+    #3B82F6 100%
+  );
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  line-height: 1.05;
+}
+
+.heroSubtitle {
+  font-size: 1.2rem;
+  line-height: 1.55;
+  color: var(--digi-text-muted);
+  max-width: 640px;
+  margin: 0 auto 2.5rem;
+}
+
+.heroButtons {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.75rem;
+}
+
+.heroCta {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1.4rem;
+  border-radius: 11px;
+  font-weight: 600;
+  font-size: 0.95rem;
+  letter-spacing: -0.005em;
+  transition:
+    transform 120ms ease,
+    box-shadow 200ms ease,
+    background 120ms ease,
+    border-color 120ms ease;
+  text-decoration: none !important;
+}
+
+.heroCtaPrimary {
+  color: #FFFFFF !important;
+  background: linear-gradient(135deg, #A78BFA 0%, #5B7BF0 100%);
+  box-shadow:
+    0 12px 32px -8px rgba(59, 130, 246, 0.55),
+    0 4px 10px -2px rgba(167, 139, 250, 0.4);
+}
+
+.heroCtaPrimary:hover {
+  transform: translateY(-1px);
+  box-shadow:
+    0 16px 38px -8px rgba(59, 130, 246, 0.65),
+    0 6px 14px -3px rgba(167, 139, 250, 0.5);
+}
+
+.heroCtaGhost {
+  color: var(--digi-text-bright) !important;
+  background: var(--digi-surface);
+  border: 1px solid var(--digi-border);
+}
+
+.heroCtaGhost:hover {
+  border-color: var(--digi-border-hover);
+  background: var(--digi-surface-alt);
+  transform: translateY(-1px);
+}
+
+/* ─── Feature grid ────────────────────────────────────────── */
+
+.features {
+  padding: 5rem 0 4rem;
+}
+
+.featureGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 1.25rem;
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+.featureCard {
+  display: block;
+  padding: 1.6rem;
+  border-radius: 14px;
+  border: 1px solid var(--digi-border);
+  background: var(--digi-surface);
+  text-decoration: none !important;
+  color: inherit;
+  transition:
+    transform 200ms ease,
+    border-color 200ms ease,
+    box-shadow 200ms ease;
+}
+
+.featureCard:hover {
+  border-color: rgba(167, 139, 250, 0.6);
+  box-shadow: 0 14px 36px -10px rgba(59, 130, 246, 0.32);
+  transform: translateY(-2px);
+}
+
+.featureIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 11px;
+  font-size: 1.35rem;
+  background: linear-gradient(135deg, #A78BFA 0%, #5B7BF0 100%);
+  box-shadow: 0 8px 20px -6px rgba(59, 130, 246, 0.42);
+  margin-bottom: 1rem;
+}
+
+.featureTitle {
+  font-size: 1.05rem;
+  font-weight: 600;
+  margin: 0 0 0.4rem;
+  letter-spacing: -0.01em;
+  color: var(--digi-text-bright);
+}
+
+.featureDescription {
+  font-size: 0.9rem;
+  line-height: 1.55;
+  color: var(--digi-text-muted);
+  margin: 0;
+}
+
+/* ─── Quick example section ───────────────────────────────── */
+
+.example {
+  padding: 4rem 0 5rem;
+  border-top: 1px solid var(--digi-border);
+  background: var(--digi-surface);
+}
+
+.exampleGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 3rem;
+  align-items: center;
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+.exampleTitle {
+  font-size: 2rem;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  margin-bottom: 1rem;
+  color: var(--digi-text-bright);
+}
+
+.exampleLead {
+  font-size: 1.025rem;
+  color: var(--digi-text-muted);
+  line-height: 1.6;
+  margin-bottom: 1.75rem;
+}
+
+.exampleBullets {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  margin-bottom: 1.75rem;
+}
+
+.exampleBullets > div {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+  font-size: 0.95rem;
+  color: var(--digi-text);
+  line-height: 1.55;
+}
+
+.exampleBullets strong {
+  color: var(--digi-text-bright);
+  font-weight: 600;
+}
+
+.bulletDot {
+  flex-shrink: 0;
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-top: 0.6rem;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #A78BFA, #5B7BF0);
+  box-shadow: 0 0 0 4px rgba(167, 139, 250, 0.12);
+}
+
+.exampleActions {
+  display: flex;
+  gap: 1rem;
+}
+
+.exampleLink {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--ifm-color-primary);
+  text-decoration: none;
+}
+
+.exampleLink:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* Code mockup */
+
+.exampleCode {
+  border-radius: 14px;
+  overflow: hidden;
+  background: #0F0F0F;
+  border: 1px solid #1A1A1A;
+  box-shadow:
+    0 24px 60px -20px rgba(59, 130, 246, 0.32),
+    0 8px 24px -8px rgba(0, 0, 0, 0.5);
+}
+
+.exampleCodeHeader {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.7rem 1rem;
+  background: #161616;
+  border-bottom: 1px solid #1A1A1A;
+}
+
+.exampleCodeDot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #2A2A2A;
+}
+
+.exampleCodeDot:nth-child(1) { background: #FF5F56; }
+.exampleCodeDot:nth-child(2) { background: #FFBD2E; }
+.exampleCodeDot:nth-child(3) { background: #27C93F; }
+
+.exampleCodeFile {
+  margin-left: 0.75rem;
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 0.78rem;
+  color: #8A8A8A;
+}
+
+.exampleCodeBody {
+  margin: 0;
+  padding: 1.2rem 1.4rem;
+  background: #0F0F0F;
+  color: #E6E6E6;
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 0.85rem;
+  line-height: 1.65;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.exampleCodeBody code {
+  background: transparent !important;
+  border: none !important;
+  padding: 0 !important;
+  color: inherit !important;
+  font-size: inherit !important;
+}
+
+/* ─── Stability section ───────────────────────────────────── */
+
+.stability {
+  padding: 4rem 0 6rem;
+}
+
+.stabilityCard {
+  max-width: 1100px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2.5rem;
+  padding: 2.5rem;
+  border-radius: 18px;
+  background: linear-gradient(
+    135deg,
+    rgba(167, 139, 250, 0.06),
+    rgba(59, 130, 246, 0.04) 100%
+  );
+  border: 1px solid var(--digi-border);
+}
+
+.stabilityCol {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.stabilityTitle {
+  font-size: 1.35rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--digi-text-bright);
+  margin: 0;
+}
+
+.stabilityBody {
+  font-size: 0.95rem;
+  line-height: 1.6;
+  color: var(--digi-text);
+  margin: 0;
+}
+
+/* ─── Responsive ─────────────────────────────────────────── */
+
+@media (max-width: 996px) {
+  .hero {
+    padding: 4rem 0 3rem;
+  }
+  .heroTitle {
+    font-size: 2.4rem;
+  }
+  .heroSubtitle {
+    font-size: 1.05rem;
+  }
+  .features {
+    padding: 3rem 0;
+  }
+  .example,
+  .stability {
+    padding: 3rem 0;
+  }
+  .exampleGrid,
+  .stabilityCard {
+    grid-template-columns: 1fr;
+    gap: 2rem;
+  }
+  .exampleTitle {
+    font-size: 1.6rem;
+  }
+}
+
+@media (max-width: 640px) {
+  .heroTitle {
+    font-size: 2rem;
+  }
+  .heroButtons {
+    flex-direction: column;
+    width: 100%;
+  }
+  .heroCta {
+    justify-content: center;
+  }
+}

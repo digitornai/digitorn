@@ -134,7 +134,31 @@ func detectShell(prefer string) (kind, path string, err error) {
 			return shellKind(p), p, nil
 		}
 	}
-	return "", "", errors.New("no shell found on PATH (need bash, sh, or PowerShell)")
+	// Windows last-resort: WSL bash. wsl.exe -e bash acts as a real bash on
+	// Windows 10 1903+ when WSL is installed with at least one distro. Better
+	// than PowerShell for agents trained on POSIX idioms.
+	if runtime.GOOS == "windows" {
+		if wslBash := detectWSLBash(); wslBash != "" {
+			return "bash", wslBash, nil
+		}
+	}
+	return "", "", errors.New("no shell found on PATH (need bash, sh, PowerShell, or WSL)")
+}
+
+// detectWSLBash returns a path to a WSL-backed bash wrapper when WSL is
+// installed on Windows with at least one distro, or "" otherwise.
+func detectWSLBash() string {
+	wslExe, err := exec.LookPath("wsl.exe")
+	if err != nil {
+		return ""
+	}
+	// wsl --list --quiet exits 0 and emits distro names when at least one exists.
+	cmd := exec.Command(wslExe, "--list", "--quiet")
+	out, err := cmd.Output()
+	if err != nil || strings.TrimSpace(string(out)) == "" {
+		return ""
+	}
+	return wslExe // caller wraps as: wsl.exe -e bash -c "..."
 }
 
 // lookShell resolves a shell name to an executable path. On Windows, asking for
@@ -179,6 +203,21 @@ func gitBashWindows() string {
 		return p
 	}
 	return ""
+}
+
+// detectWSLExe returns the path to wsl.exe when WSL is installed and has at
+// least one distro, or "" otherwise. Used for the explicit shell:"wsl" opt-in.
+func detectWSLExe() string {
+	wslExe, err := exec.LookPath("wsl.exe")
+	if err != nil {
+		return ""
+	}
+	// Quick probe: wsl --list --quiet exits 0 and prints at least one distro name.
+	out, err := exec.Command(wslExe, "--list", "--quiet").Output()
+	if err != nil || len(strings.TrimSpace(string(out))) == 0 {
+		return ""
+	}
+	return wslExe
 }
 
 // isWSLBash reports whether p is the Windows WSL launcher rather than a real
@@ -791,7 +830,7 @@ func (s *shell) run(ctx context.Context, command string, timeout time.Duration) 
 		// Distinguish a caller/turn cancellation (the user hit stop, or the
 		// background task was cancelled) from our own deadline firing.
 		cancelled := ctx.Err() != nil
-		s.killAll()
+		s.killAllCause(context.Cause(ctx))
 		time.Sleep(150 * time.Millisecond)
 		exit, cwd := p.snapshot()
 		res := cmdResult{Stdout: trimTrailing(p.out.String()), Stderr: trimTrailing(p.errb.String()), ExitCode: exit, Cwd: cwd, TimedOut: !cancelled, Cancelled: cancelled}
@@ -805,10 +844,17 @@ func (s *shell) run(ctx context.Context, command string, timeout time.Duration) 
 	}
 }
 
-// killAll reaps the shell and its entire process tree. A timed-out or cancelled
-// command therefore leaves nothing running; the session shell is gone and the
-// module starts a fresh one on the next call (state is intentionally reset).
-func (s *shell) killAll() {
+// killAll reaps the shell with SIGKILL (hard kill).
+func (s *shell) killAll() { s.killAllCause(nil) }
+
+// killAllCause sends the appropriate signal based on the context cause:
+//   - nil / unknown → SIGKILL (immediate)
+//   - ErrSignalINT  → SIGINT  (Ctrl+C, triggers bash traps)
+//   - ErrSignalTERM → SIGTERM (graceful shutdown)
+//
+// The session shell is closed after signalling; the module starts a fresh
+// one on the next call.
+func (s *shell) killAllCause(cause error) {
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -817,8 +863,15 @@ func (s *shell) killAll() {
 	s.closed = true
 	s.mu.Unlock()
 	if s.cmd != nil && s.cmd.Process != nil {
-		killProcessTree(s.cmd.Process.Pid)
-		_ = s.cmd.Process.Kill()
+		switch cause {
+		case errSignalINT:
+			signalProcessTree(s.cmd.Process.Pid, syscallSIGINT)
+		case errSignalTERM:
+			signalProcessTree(s.cmd.Process.Pid, syscallSIGTERM)
+		default:
+			killProcessTree(s.cmd.Process.Pid)
+			_ = s.cmd.Process.Kill()
+		}
 	}
 	_ = s.stdin.Close()
 }

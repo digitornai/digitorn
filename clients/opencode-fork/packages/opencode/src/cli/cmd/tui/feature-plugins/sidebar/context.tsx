@@ -1,6 +1,6 @@
 import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { InternalTuiPlugin } from "../../plugin/internal"
-import { createSignal, onCleanup, onMount } from "solid-js"
+import { createSignal, createEffect, onCleanup, onMount } from "solid-js"
 import { useSDK } from "@tui/context/sdk"
 
 const id = "internal:sidebar-context"
@@ -16,15 +16,16 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
   // stream. One snapshot on mount, then live. (No $ spent — the daemon does not
   // track cost yet.)
   const [ctx, setCtx] = createSignal<Ctx>({ tokens: 0, window: 0, percent: 0 })
-  onMount(() => {
+  createEffect(() => {
+    const sid = props.session_id
     sdk
-      .fetch(`${sdk.url}/digitorn/context?session=${encodeURIComponent(props.session_id)}`)
+      .fetch(`${sdk.url}/digitorn/context?session=${encodeURIComponent(sid)}`)
       .then((r) => r.json())
       .then((j: any) => setCtx({ tokens: j?.tokens ?? 0, window: j?.window ?? 0, percent: j?.percent ?? 0 }))
       .catch(() => {})
     const unsub = sdk.event.on("event", (ev: any) => {
       const p = ev?.payload
-      if (p?.type !== "digitorn.context" || p.properties?.session !== props.session_id) return
+      if (p?.type !== "digitorn.context" || p.properties?.session !== sid) return
       setCtx({
         tokens: p.properties.tokens ?? 0,
         window: p.properties.window ?? 0,

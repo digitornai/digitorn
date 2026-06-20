@@ -126,6 +126,34 @@ func (s *Store) Delete(ctx context.Context, userID, pieceName string) error {
 		Delete(&models.InstalledPiece{}).Error
 }
 
+// UpsertOAuth stores OAuth2 credentials for a piece.
+func (s *Store) UpsertOAuth(ctx context.Context, userID, pieceName, accessToken, refreshToken, tokenType string, expiresAt int64, scope string) error {
+	creds := map[string]string{
+		"access_token":  accessToken,
+		"refresh_token": refreshToken,
+		"token_type":    tokenType,
+		"scope":         scope,
+	}
+	if expiresAt > 0 {
+		creds["expires_at"] = fmt.Sprintf("%d", expiresAt)
+	}
+	sealed, err := s.seal(creds)
+	if err != nil {
+		return fmt.Errorf("seal credentials: %w", err)
+	}
+	row := models.InstalledPiece{
+		UserID:     userID,
+		PieceName:  pieceName,
+		AuthType:   "oauth2",
+		SealedAuth: sealed,
+		Enabled:    true,
+	}
+	return s.db.WithContext(ctx).
+		Where(models.InstalledPiece{UserID: userID, PieceName: pieceName}).
+		Assign(row).
+		FirstOrCreate(&row).Error
+}
+
 // RevealAuth unseals and returns the _ap_auth wire object for the bridge.
 func (s *Store) RevealAuth(ctx context.Context, userID, pieceName string) (*APAuthWire, error) {
 	var row models.InstalledPiece

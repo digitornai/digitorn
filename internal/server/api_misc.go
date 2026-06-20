@@ -114,8 +114,11 @@ func (d *Daemon) resolveApproval(w http.ResponseWriter, r *http.Request) {
 	resolved := false
 	if d.approvalRegistry != nil {
 		result := approval.ResultApproved
-		if typ == sessionstore.EventApprovalDenied {
+		switch req.Action {
+		case "denied", "deny", "reject":
 			result = approval.ResultDenied
+		case "approved_always":
+			result = approval.ResultApprovedAlways
 		}
 		resolved = d.approvalRegistry.Resolve(req.ApprovalID, approval.Resolution{
 			Result: result,

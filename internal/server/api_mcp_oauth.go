@@ -135,6 +135,78 @@ func (d *Daemon) mcpOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		writeOAuthHTML(w, http.StatusOK, "Authorization complete. You can close this window.")
 		return
 	}
+	// Per-user piece OAuth: exchange the code and store the token in the pieces store.
+	if p.AppID == piecesAppID {
+		pieceName := p.ServerID
+		// Get the auth schema from the bridge to find the provider's OAuth endpoints.
+		pm := d.piecesModule()
+		if pm == nil {
+			writeOAuthHTML(w, http.StatusServiceUnavailable, "Pieces module is not running.")
+			return
+		}
+		bridge := pm.Bridge()
+		if bridge == nil {
+			writeOAuthHTML(w, http.StatusServiceUnavailable, "Pieces bridge is not running.")
+			return
+		}
+		authSchema, err := bridge.GetPieceAuth(pieceName)
+		if err != nil {
+			writeOAuthHTML(w, http.StatusBadGateway, "Could not retrieve piece auth schema.")
+			return
+		}
+		// Find the OAuth2 option from the auth schema.
+		options, _ := authSchema["options"].([]any)
+		var oauthOpt map[string]any
+		if len(options) == 0 {
+			// Single auth option
+			if authSchema["type"] == "OAUTH2" {
+				oauthOpt = authSchema
+			}
+		} else {
+			for _, opt := range options {
+				if m, ok := opt.(map[string]any); ok && m["type"] == "OAUTH2" {
+					oauthOpt = m
+					break
+				}
+			}
+		}
+		if oauthOpt == nil {
+			writeOAuthHTML(w, http.StatusBadRequest, "This piece does not support OAuth2.")
+			return
+		}
+		oauth, _ := oauthOpt["oauth"].(map[string]any)
+		authURL, _ := oauth["authUrl"].(string)
+		tokenURL, _ := oauth["tokenUrl"].(string)
+		scopeArr, _ := oauth["scope"].([]any)
+		var scopes []string
+		for _, s := range scopeArr {
+			if str, ok := s.(string); ok {
+				scopes = append(scopes, str)
+			}
+		}
+		// Build the auth config from the piece's OAuth schema, using client credentials from state.
+		cfg := &schema.MCPAuthConfig{
+			Type:         "oauth2",
+			Provider:     "custom",
+			AuthorizeURL: authURL,
+			TokenURL:     tokenURL,
+			Scopes:       scopes,
+			ClientID:     p.ClientID,
+			ClientSecret: p.ClientSecret,
+			RedirectURI:  p.RedirectURI,
+		}
+		if err := d.mcpOAuth.Exchange(r.Context(), cfg, p, code); err != nil {
+			writeOAuthHTML(w, http.StatusBadGateway, "The provider rejected the authorization. Please try again.")
+			return
+		}
+		// Store the token in the pieces store as well.
+		tok, err := d.mcpOAuth.GetToken(r.Context(), p.UserID, d.mcpOAuth.ProviderKeyResolved(r.Context(), cfg, piecesAppID, pieceName))
+		if err == nil && tok != nil {
+			pm.PiecesStore().UpsertOAuth(r.Context(), p.UserID, pieceName, tok.AccessToken, tok.RefreshToken, tok.TokenType, tok.ExpiresAt, tok.Scope)
+		}
+		writeOAuthHTML(w, http.StatusOK, "Authorization complete. You can close this window.")
+		return
+	}
 	cfg, ok := d.mcpServerAuth(p.AppID, p.ServerID)
 	if !ok {
 		writeOAuthHTML(w, http.StatusBadRequest, "The server is no longer configured for OAuth.")

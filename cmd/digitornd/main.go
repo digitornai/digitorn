@@ -20,6 +20,7 @@ import (
 	_ "go.uber.org/automaxprocs"
 
 	"github.com/mbathepaul/digitorn/internal/config"
+	"github.com/mbathepaul/digitorn/internal/pathutil"
 	"github.com/mbathepaul/digitorn/internal/server"
 	"github.com/mbathepaul/digitorn/internal/version"
 
@@ -29,6 +30,7 @@ import (
 	_ "github.com/mbathepaul/digitorn/internal/modules/lsp"
 	_ "github.com/mbathepaul/digitorn/internal/modules/mcp"
 	_ "github.com/mbathepaul/digitorn/internal/modules/pieces"
+	_ "github.com/mbathepaul/digitorn/internal/modules/http"
 	_ "github.com/mbathepaul/digitorn/internal/modules/rag"
 	_ "github.com/mbathepaul/digitorn/internal/modules/scheduler"
 	_ "github.com/mbathepaul/digitorn/internal/modules/web"
@@ -76,6 +78,10 @@ func (p *program) Stop(service.Service) error {
 }
 
 func main() {
+	// Augment the process PATH with well-known tool directories (gopls, tsc, cargo…)
+	// before any exec.LookPath or subprocess spawn runs.
+	pathutil.AugmentPath()
+
 	configPath := flag.String("config", "config.yaml", "Path to YAML config file")
 	showVersion := flag.Bool("version", false, "Print version and exit")
 	flag.Parse()

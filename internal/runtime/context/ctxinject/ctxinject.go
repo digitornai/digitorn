@@ -8,8 +8,11 @@ package ctxinject
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -77,9 +80,10 @@ func Merge(app, agent *schema.ContextBlock) []schema.ContextSection {
 }
 
 // Render builds the injected context text. Each section's body is its builtin >
-// template > text (first non-empty) ; a `when` path that resolves empty/false drops
-// it. Output is priority-ordered (stable on ties), each block "# Title\nbody" (or
-// just body when untitled), joined by blank lines. Empty when nothing renders.
+// file/files/dir > template > text (first non-empty) ; a `when` path that resolves
+// empty/false drops it. File/dir sections are wrapped in <system-reminder> tags so
+// the model distinguishes externally loaded content from hardcoded instructions.
+// Output is priority-ordered (stable on ties), joined by blank lines.
 func Render(sections []schema.ContextSection, d Data) string {
 	if len(sections) == 0 {
 		return ""
@@ -91,7 +95,7 @@ func Render(sections []schema.ContextSection, d Data) string {
 	}
 	var blocks []block
 	for i, s := range sections {
-		if w := strings.TrimSpace(s.When); w != "" && !truthy(resolve(bag, w)) {
+		if w := strings.TrimSpace(s.When); w != "" && !evalWhen(bag, w) {
 			continue
 		}
 		body := strings.TrimRight(sectionBody(s, d, bag), "\n")
@@ -101,6 +105,12 @@ func Render(sections []schema.ContextSection, d Data) string {
 		text := body
 		if t := strings.TrimSpace(s.Title); t != "" {
 			text = "# " + t + "\n" + body
+		}
+		if isExternalSection(s) {
+			text = "<system-reminder>\n" + text + "\n</system-reminder>"
+		}
+		if s.Writable {
+			text += "\n\n" + writableDirective(s)
 		}
 		blocks = append(blocks, block{s.Priority, i, text})
 	}
@@ -117,17 +127,127 @@ func Render(sections []schema.ContextSection, d Data) string {
 	return strings.Join(parts, "\n\n")
 }
 
+// writableDirective returns a <digitorn-directive> telling the agent which
+// directory (or files) it may write back to for persistent memory.
+func writableDirective(s schema.ContextSection) string {
+	target := strings.TrimSpace(s.Dir)
+	if target == "" {
+		target = strings.TrimSpace(s.File)
+	}
+	if target == "" && len(s.Files) > 0 {
+		target = filepath.Dir(strings.TrimSpace(s.Files[0]))
+	}
+	return fileMemoryDirectiveFor(target)
+}
+
+// isExternalSection reports whether a section loads content from the filesystem
+// (file/files/dir). These sections are wrapped in <system-reminder> tags so the
+// model can distinguish dynamically loaded memory from hardcoded instructions.
+func isExternalSection(s schema.ContextSection) bool {
+	return s.File != "" || len(s.Files) > 0 || s.Dir != ""
+}
+
 func sectionBody(s schema.ContextSection, d Data, bag map[string]any) string {
 	if b := strings.TrimSpace(s.Builtin); b != "" {
 		if fn, ok := builtins[strings.ToLower(b)]; ok {
 			return fn(d)
 		}
-		return "" // unknown builtin → skip rather than emit a broken block
+		return ""
+	}
+	workdir := toString(d.Session["workdir"])
+	if paths := sectionFiles(s, bag); len(paths) > 0 {
+		return renderFiles(paths, s.Optional, workdir)
+	}
+	if dir := strings.TrimSpace(interp(s.Dir, bag)); dir != "" {
+		return renderDir(dir, s.Optional, workdir)
 	}
 	if s.Template != "" {
 		return interp(s.Template, bag)
 	}
 	return s.Text
+}
+
+const maxFileBytes = 100 * 1024
+
+func sectionFiles(s schema.ContextSection, bag map[string]any) []string {
+	var out []string
+	if f := strings.TrimSpace(interp(s.File, bag)); f != "" {
+		out = append(out, f)
+	}
+	for _, f := range s.Files {
+		if f = strings.TrimSpace(interp(f, bag)); f != "" {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+func renderFiles(paths []string, optional bool, workdir string) string {
+	multi := len(paths) > 1
+	var parts []string
+	for _, p := range paths {
+		content, err := readFile(p, workdir)
+		if err != nil {
+			if !optional {
+				parts = append(parts, "[file: "+p+" — "+err.Error()+"]")
+			}
+			continue
+		}
+		if multi {
+			content = "## " + filepath.Base(p) + "\n" + content
+		}
+		parts = append(parts, content)
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+func renderDir(dir string, optional bool, workdir string) string {
+	if !filepath.IsAbs(dir) && workdir != "" {
+		dir = filepath.Join(workdir, dir)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if optional {
+			return ""
+		}
+		return "[dir: " + dir + " — " + err.Error() + "]"
+	}
+	// MEMORY.md first, then all other .md files sorted alphabetically.
+	var index, rest []string
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(strings.ToLower(e.Name()), ".md") {
+			continue
+		}
+		if strings.EqualFold(e.Name(), "MEMORY.md") {
+			index = append(index, e.Name())
+		} else {
+			rest = append(rest, e.Name())
+		}
+	}
+	sort.Strings(rest)
+	paths := append(index, rest...)
+	if len(paths) == 0 {
+		return ""
+	}
+	return renderFiles(paths, optional, dir)
+}
+
+func readFile(path, workdir string) (string, error) {
+	if !filepath.IsAbs(path) && workdir != "" {
+		path = filepath.Join(workdir, path)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	if len(b) > maxFileBytes {
+		s := string(b[:maxFileBytes])
+		if i := strings.LastIndexByte(s, '\n'); i > 0 {
+			s = s[:i]
+		}
+		return s + "\n[… truncated]", nil
+	}
+	return string(b), nil
 }
 
 // interp fills {{path}} placeholders from the bag ; an unknown path becomes "".
@@ -172,6 +292,51 @@ func toString(v any) string {
 	default:
 		return fmt.Sprint(x)
 	}
+}
+
+// evalWhen evaluates a `when` expression. Supports:
+//   - plain path:              "session.workdir"      → truthy check
+//   - comparison:              "session.context_pct > 60"
+//   - operators: > >= < <= == !=   (numeric when both sides parse as numbers, string otherwise)
+func evalWhen(bag map[string]any, expr string) bool {
+	for _, op := range []string{">=", "<=", "!=", ">", "<", "=="} {
+		i := strings.Index(expr, op)
+		if i <= 0 {
+			continue
+		}
+		path := strings.TrimSpace(expr[:i])
+		rhs := strings.TrimSpace(expr[i+len(op):])
+		val, ok := resolve(bag, path)
+		if !ok {
+			return false
+		}
+		return compareValues(toString(val), op, rhs)
+	}
+	return truthy(resolve(bag, expr))
+}
+
+func compareValues(lhs, op, rhs string) bool {
+	lf, lerr := strconv.ParseFloat(lhs, 64)
+	rf, rerr := strconv.ParseFloat(rhs, 64)
+	if lerr == nil && rerr == nil {
+		switch op {
+		case ">":  return lf > rf
+		case ">=": return lf >= rf
+		case "<":  return lf < rf
+		case "<=": return lf <= rf
+		case "==": return lf == rf
+		case "!=": return lf != rf
+		}
+	}
+	switch op {
+	case "==": return lhs == rhs
+	case "!=": return lhs != rhs
+	case ">":  return lhs > rhs
+	case ">=": return lhs >= rhs
+	case "<":  return lhs < rhs
+	case "<=": return lhs <= rhs
+	}
+	return false
 }
 
 // truthy decides whether a `when` path counts as present.

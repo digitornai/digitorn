@@ -49,8 +49,8 @@ workers:
     count: 3
     start_timeout: 15s
     # Local digitorn-gateway. Frozen here so no env override is needed.
-    gateway_url: http://127.0.0.1:8002/v1
-    #gateway_url: https://gateway.digitorn.ai
+    #gateway_url: http://127.0.0.1:8002/v1
+    gateway_url: https://gateway.digitorn.ai
   embeddings:
     # Real semantic search : ONNX paraphrase-multilingual-MiniLM-L12-v2.
     # onnxruntime.dll sits next to the worker in bin/ ; the model is
@@ -60,7 +60,7 @@ workers:
     # just crash-loops harmlessly in the background and semantic search stays
     # off. Set count: 0 to silence it, or rebuild the worker with -tags onnx.
     count: 1
-    backend: onnx
+    backend: auto
     start_timeout: 120s
     client_timeout: 30s
   tokenizer:

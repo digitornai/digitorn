@@ -40,6 +40,8 @@ import { openSkillsDialog } from "@tui/component/dialog-skills"
 import { openWorkspaceChanges } from "@tui/component/dialog-workspace-changes"
 import { useConnected } from "@tui/component/use-connected"
 import { DialogMcp } from "@tui/component/dialog-mcp"
+import { DialogConnecteurs } from "@tui/component/dialog-connecteurs"
+import { hasPiecesModule, digitornConfig, daemonFetch } from "@tui/context/digitorn"
 import { DialogStatus } from "@tui/component/dialog-status"
 import { DialogThemeList } from "@tui/component/dialog-theme-list"
 import { DialogHelp } from "./ui/dialog-help"
@@ -107,6 +109,7 @@ const appBindingCommands = [
   "model.cycle_favorite_reverse",
   "agent.list",
   "mcp.list",
+  "connectors.list",
   "agent.cycle",
   "agent.cycle.reverse",
   "variant.cycle",
@@ -387,6 +390,21 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
   const { theme, mode, setMode, locked, lock, unlock } = themeState
   const sync = useSync()
   const project = useProject()
+  const [hasPieces, setHasPieces] = createSignal(false)
+  const cfg = digitornConfig()
+  onMount(async () => {
+    try {
+      const apps = await daemonFetch<any>(cfg, "/api/apps")
+      const list = Array.isArray(apps) ? apps : (apps?.apps ?? [])
+      for (const a of list) {
+        const id = String(a.app_id ?? a.id ?? "")
+        if (await hasPiecesModule(cfg, id)) {
+          setHasPieces(true)
+          return
+        }
+      }
+    } catch {}
+  })
   const exit = useExit()
   const promptRef = usePromptRef()
   const routes: RouteMap = new Map()
@@ -694,6 +712,19 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
         slashName: "mcps",
         run: () => {
           dialog.replace(() => <DialogMcp />)
+        },
+      },
+      {
+        name: "connectors.list",
+        title: "Connectors (Pieces)",
+        category: "Agent",
+        slashName: "connectors",
+        run: async () => {
+          if (hasPieces()) {
+            dialog.replace(() => <DialogConnecteurs />)
+          } else {
+            toast.show({ message: "No app has the pieces module", variant: "warning" })
+          }
         },
       },
       {

@@ -119,11 +119,6 @@ func (s *langServer) start(baseCtx context.Context, argv []string) error {
 		"processId": nil,
 		"rootUri":   rootURI,
 		"capabilities": map[string]any{
-			// general.positionEncodings (LSP 3.17) lets the client declare which
-			// encodings it can decode. We prefer utf-8 (byte-accurate columns, no
-			// surrogate-pair math) but accept utf-16 (the protocol default) so old
-			// servers stay supported. The server picks one; we read it back below
-			// and use it to convert diagnostic columns correctly.
 			"general": map[string]any{
 				"positionEncodings": []string{"utf-8", "utf-16"},
 			},
@@ -132,7 +127,8 @@ func (s *langServer) start(baseCtx context.Context, argv []string) error {
 				"synchronization":    map[string]any{"didSave": true, "didOpen": true, "didChange": true},
 			},
 		},
-		"workspaceFolders": []map[string]any{{"uri": rootURI, "name": filepath.Base(s.root)}},
+		"workspaceFolders":    []map[string]any{{"uri": rootURI, "name": filepath.Base(s.root)}},
+		"initializationOptions": lspInitOptions(s.name, s.root),
 	}
 	res, err := cl.call(ctx, "initialize", initParams)
 	if err != nil {
@@ -539,12 +535,79 @@ func languageID(path string) string {
 	}
 }
 
-// readFileText reads a file as UTF-8 text (best-effort), for when the hook did
-// not supply content.
 func readFileText(path string) (string, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return "", err
 	}
 	return string(b), nil
+}
+
+// lspInitOptions builds server-specific initializationOptions that exclude
+// directories listed in the workdir's .gitignore. This prevents heavy language
+// servers (tsserver, pyright) from indexing vendored or generated trees that
+// are irrelevant to the agent's work — regardless of the repo's content.
+// Each language server has its own option keys; unknown servers get empty opts.
+func lspInitOptions(serverName, root string) map[string]any {
+	excluded := gitignoreExcludedDirs(root)
+	if len(excluded) == 0 {
+		return nil
+	}
+	switch serverName {
+	case "typescript":
+		// tsserver watchOptions: prevents loading AND watching gitignored dirs.
+		// Works on any repo without creating config files.
+		globs := make([]string, len(excluded))
+		for i, d := range excluded {
+			globs[i] = "**/" + d
+		}
+		return map[string]any{
+			"tsserver": map[string]any{
+				"watchOptions": map[string]any{
+					"excludeDirectories": globs,
+				},
+			},
+			"preferences": map[string]any{
+				"autoImportFileExcludePatterns": globs,
+			},
+		}
+	case "python":
+		// Pyright: exclude gitignored dirs from analysis.
+		patterns := make([]string, len(excluded))
+		for i, d := range excluded {
+			patterns[i] = d + "/**"
+		}
+		return map[string]any{
+			"python": map[string]any{
+				"analysis": map[string]any{
+					"exclude": patterns,
+				},
+			},
+		}
+	}
+	return nil
+}
+
+// gitignoreExcludedDirs parses the root .gitignore and returns simple directory
+// names (no wildcards, no path separators) that should be excluded from LSP
+// indexing. Only top-level dir-only entries are returned since those are the
+// ones that cause runaway memory usage in language servers.
+func gitignoreExcludedDirs(root string) []string {
+	b, err := os.ReadFile(filepath.Join(root, ".gitignore"))
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, raw := range strings.Split(string(b), "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "!") {
+			continue
+		}
+		name := strings.TrimSuffix(line, "/")
+		if strings.ContainsAny(name, "*?[/\\") {
+			continue
+		}
+		out = append(out, name)
+	}
+	return out
 }

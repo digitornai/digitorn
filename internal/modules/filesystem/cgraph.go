@@ -28,7 +28,9 @@ func astChunks(path string, src []byte) []sChunk {
 	}
 	out := make([]sChunk, 0, len(chs))
 	for _, c := range chs {
-		out = append(out, sChunk{path: c.Path, line: c.Line, text: c.Text, sym: c.Symbol})
+		lines := strings.Count(c.Text, "\n") + 1
+		out = append(out, sChunk{path: c.Path, line: c.Line, end: c.Line + lines - 1, text: c.Text, sym: c.Symbol})
+		// text kept here — cleared after embedding in sindex.build()
 	}
 	return out
 }
@@ -62,9 +64,54 @@ func (g *codeGraph) context(path string, line int) symContext {
 	if best >= 0 {
 		d := defs[best]
 		sc.Symbol = strings.TrimSpace(d.Kind + " " + d.Name)
-		sc.Callers = dedupStrings(g.callers[d.Name], 8)
+		direct := dedupStrings(g.callers[d.Name], 8)
+		sc.Callers = direct
+
+		// Hop-2: callers of direct callers — pure map lookup, ~0µs.
+		// Capped at 5 to avoid noise; appended as a single "↳ ..." entry.
+		func() {
+			defer func() { recover() }()
+			seen := make(map[string]bool, len(direct))
+			for _, c := range direct {
+				seen[c] = true
+			}
+			var hop2 []string
+			for _, c := range direct {
+				name := callerSymName(c)
+				if name == "" {
+					continue
+				}
+				for _, cc := range g.callers[name] {
+					if !seen[cc] {
+						seen[cc] = true
+						hop2 = append(hop2, cc)
+						if len(hop2) >= 5 {
+							return
+						}
+					}
+				}
+			}
+			if len(hop2) > 0 {
+				sc.Callers = append(sc.Callers, "↳ "+strings.Join(hop2, ", "))
+			}
+		}()
 	}
 	return sc
+}
+
+// callerSymName extracts the bare symbol name from a caller label like
+// "func Run", "method Engine.chatOrStream", "type Engine" → "Run", "chatOrStream", "Engine".
+func callerSymName(label string) string {
+	parts := strings.Fields(label)
+	if len(parts) == 0 {
+		return ""
+	}
+	last := parts[len(parts)-1]
+	// Handle "Type.Method" → take the Method part.
+	if i := strings.LastIndexByte(last, '.'); i >= 0 {
+		return last[i+1:]
+	}
+	return last
 }
 
 // ---- per-workdir ephemeral graph manager (mirrors sindex) ----

@@ -68,6 +68,10 @@ export class PieceLoader {
     return this.pieces.get(id)
   }
 
+  getAllPieces(): LoadedPiece[] {
+    return Array.from(this.pieces.values())
+  }
+
   isLoaded(): boolean {
     return this.loaded
   }
@@ -108,12 +112,15 @@ function buildDescription(action: import('./types.ts').ActionDef, meta: import('
   return parts.join(' — ')
 }
 
-function buildInputSchema(props: Record<string, PropDef>, auth: import('./types.ts').AuthDef | undefined, requireAuth: boolean): { type: 'object'; properties: Record<string, unknown>; required?: string[] } {
+function buildInputSchema(props: Record<string, PropDef>, auth: import('./types.ts').AuthDef | import('./types.ts').AuthDef[] | undefined, requireAuth: boolean): { type: 'object'; properties: Record<string, unknown>; required?: string[] } {
   const properties: Record<string, unknown> = {}
   const required: string[] = []
 
   if (requireAuth && auth) {
-    properties['_ap_auth'] = buildAuthSchema(auth)
+    const authArray = Array.isArray(auth) ? auth : [auth]
+    // For multiple auth options, use the first one that has fields; otherwise use first
+    const primaryAuth = authArray.find(a => a.type === 'SECRET_TEXT' || a.type === 'CUSTOM_AUTH' || a.type === 'BASIC_AUTH') ?? authArray[0]
+    properties['_ap_auth'] = buildAuthSchema(primaryAuth)
     required.push('_ap_auth')
   }
 

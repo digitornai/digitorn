@@ -10,6 +10,17 @@ import (
 	"github.com/mbathepaul/digitorn/internal/runtime/policy"
 )
 
+type projectCapsKey struct{}
+
+func WithProjectCaps(ctx context.Context, caps *schema.CapabilitiesConfig) context.Context {
+	return context.WithValue(ctx, projectCapsKey{}, caps)
+}
+
+func ProjectCapsFromContext(ctx context.Context) *schema.CapabilitiesConfig {
+	caps, _ := ctx.Value(projectCapsKey{}).(*schema.CapabilitiesConfig)
+	return caps
+}
+
 // PolicyEvaluator runs the documented seven-gate security sequence
 // (docs-site/docs/language/11-security.md) on every tool_call the
 // LLM emits, before the engine hands the call to the Dispatcher.
@@ -49,6 +60,8 @@ type EvaluateInput struct {
 
 	App   *appmgr.RuntimeApp
 	Agent *schema.Agent
+
+	ProjectCaps *schema.CapabilitiesConfig
 }
 
 // ToolSpecLookup resolves a (module, action) pair to the action's
@@ -178,6 +191,16 @@ func (e *DefaultPolicyEvaluator) Evaluate(_ context.Context, in EvaluateInput) p
 		if in.App.Definition != nil && in.App.Definition.Tools != nil && in.App.Definition.Tools.Capabilities != nil {
 			caps = in.App.Definition.Tools.Capabilities
 		}
+	}
+	if in.ProjectCaps != nil {
+		merged := &schema.CapabilitiesConfig{}
+		if caps != nil {
+			*merged = *caps // shallow copy of the value
+		}
+		merged.Grant = append(in.ProjectCaps.Grant, merged.Grant...)
+		merged.Deny = append(in.ProjectCaps.Deny, merged.Deny...)
+		merged.Approve = append(in.ProjectCaps.Approve, merged.Approve...)
+		caps = merged
 	}
 
 	var agentModules map[string]policy.AgentModuleAccess

@@ -135,18 +135,69 @@ func builtinToolSpecs() []llm.ToolSpec {
 			},
 		},
 		{
-			Name:        "context_builder.background_run",
-			Description: "Run a SLOW or LONG-RUNNING tool off the critical path so the turn isn't blocked — use it for builds, installs, full test suites, downloads, migrations, or any shell command that may take more than a few seconds. Launch it, keep doing other useful work, then check `status` or `wait` later (and tell the user you started it). Don't sit blocked on something slow when you could be making progress elsewhere. One action, five modes by params: (1) launch: name+params → returns task_id ; (2) status: task_id ; (3) wait: task_id+wait=true+optional timeout ; (4) cancel: task_id+cancel=true ; (5) list: list_tasks=true. (To delegate work to a specialist, use the `agent` tool instead, not background_run.)",
+			Name: "context_builder.background_run",
+			Description: "Run any tool or shell command off the critical path — never block a turn on something slow. " +
+				"Launch it, keep doing useful work in the same turn, then get the result automatically or check it later.\n\n" +
+				"MODES (select by params):\n" +
+				"  LAUNCH   name+params → task_id. Start a tool in the background. Do other work immediately after.\n" +
+				"  STATUS   task_id → current state + live log tail. Poll progress without waiting.\n" +
+				"  WAIT     task_id+wait=true+timeout? → blocks until completion. Use only when you truly have nothing else to do.\n" +
+				"  CANCEL   task_id+cancel=true → stops the task.\n" +
+				"  LIST     list_tasks=true → all running/recent tasks this session.\n\n" +
+				"SMART WAITING (preferred over polling):\n" +
+				"  notify_when: \"pattern\" — launch+set: agent is AUTO-WOKEN in a NEW TURN the moment the pattern\n" +
+				"    appears in the output. No polling, no blocking. You get [BACKGROUND TASK READY] with the relevant\n" +
+				"    log tail. Use for: servers starting, tests passing, builds completing, any recognizable line.\n" +
+				"    Example: background_run(name=\"bash.run\", params={command:\"npm run dev\"}, notify_when=\"ready on port 3000\")\n" +
+				"  wait_for: \"pattern\"+task_id — sync poll: block THIS turn until pattern seen (timeout default 60s).\n" +
+				"    Use for short waits (< 30s) when you need the result before continuing.\n\n" +
+				"WATCH MODE (run command repeatedly):\n" +
+				"  watch=true+command+interval(s)+until(optional pattern) → runs command every N seconds as a loop.\n" +
+				"  If until is set, stops and notifies when the pattern appears. Ideal for: health checks, waiting\n" +
+				"  for a container to become healthy, watching a log file for an event.\n" +
+				"  Example: background_run(watch=true, command=\"docker ps\", interval=2, until=\"healthy\")\n\n" +
+				"SIGNALS & STDIN (for running tasks):\n" +
+				"  signal: \"SIGINT\"|\"SIGTERM\" + task_id → send graceful signal. SIGINT = Ctrl+C, SIGTERM = graceful stop.\n" +
+				"    Use SIGINT to stop a server cleanly, SIGTERM for graceful shutdown, vs cancel=true (SIGKILL).\n" +
+				"  stdin: \"text\\n\" + task_id → pipe text to task stdin. Answers interactive prompts, feeds REPLs.\n\n" +
+				"OUTPUT CONTROL:\n" +
+				"  tail_lines: N — how many recent log lines to return (default 100, 0=all 64KB window).\n" +
+				"  settle_seconds: N — how long to wait for fast-failing tasks before returning task_id (default 2s).\n\n" +
+				"GOLDEN RULES:\n" +
+				"  • NEVER block on slow work — launch it and continue. Use notify_when to be woken automatically.\n" +
+				"  • Prefer notify_when over wait or polling — the agent is woken the instant the pattern appears.\n" +
+				"  • Fan-out: launch multiple tasks in ONE step, they run in parallel. Collect later.\n" +
+				"  • For specialist sub-agents use the `agent` tool instead of background_run.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"name":       map[string]any{"type": "string", "description": "Tool FQN to launch (mode 1)."},
-					"params":     map[string]any{"type": "object", "description": "Parameters for the launched tool (mode 1)."},
-					"task_id":    map[string]any{"type": "string", "description": "Existing task id (modes 2-4)."},
-					"wait":       map[string]any{"type": "boolean", "description": "When true with task_id, block until completion (mode 3)."},
-					"timeout":    map[string]any{"type": "number", "description": "Wait timeout in seconds (mode 3)."},
-					"cancel":     map[string]any{"type": "boolean", "description": "When true with task_id, cancel the task (mode 4)."},
-					"list_tasks": map[string]any{"type": "boolean", "description": "When true, list every background task of this session (mode 5)."},
+					// Launch
+					"name":   map[string]any{"type": "string", "description": "Tool FQN to run in background, e.g. \"bash.run\". Required for launch."},
+					"params": map[string]any{"type": "object", "description": "Parameters for the tool being launched."},
+					// Async smart wait
+					"notify_when": map[string]any{"type": "string", "description": "Pattern to watch for in live output. When found, the agent is automatically woken in a NEW TURN with [BACKGROUND TASK READY] — no polling needed. Set at launch time alongside name+params."},
+					// Sync pattern wait
+					"wait_for": map[string]any{"type": "string", "description": "Block THIS turn until this pattern appears in the task's live log (polls every 300ms). Requires task_id. Use for short waits < 30s."},
+					// Watch mode
+					"watch":    map[string]any{"type": "boolean", "description": "Run command repeatedly every interval seconds as a background loop."},
+					"command":  map[string]any{"type": "string", "description": "Shell command to run repeatedly in watch mode."},
+					"interval": map[string]any{"type": "number", "description": "Watch interval in seconds (default 2)."},
+					"until":    map[string]any{"type": "string", "description": "Stop watching when this pattern appears in the output."},
+					// Task reference
+					"task_id": map[string]any{"type": "string", "description": "ID of an existing background task (for status/wait/cancel/signal/stdin/wait_for)."},
+					// Status / wait
+					"wait":       map[string]any{"type": "boolean", "description": "Block until task completes. Set with task_id. Use only when you have nothing else to do."},
+					"timeout":    map[string]any{"type": "number", "description": "Timeout in seconds for wait or wait_for (default: wait=∞, wait_for=60)."},
+					"tail_lines": map[string]any{"type": "number", "description": "Lines of live log to return in status/wait (default 100, 0=all)."},
+					// Signals
+					"signal": map[string]any{"type": "string", "description": "Signal to send to running task: \"SIGINT\" (Ctrl+C graceful), \"SIGTERM\" (graceful stop). Requires task_id."},
+					// Stdin injection
+					"stdin": map[string]any{"type": "string", "description": "Text to pipe to task stdin (e.g. \"yes\\n\" to answer a prompt). Requires task_id."},
+					// Cancel / list
+					"cancel":     map[string]any{"type": "boolean", "description": "Kill the task (SIGKILL). Requires task_id."},
+					"list_tasks": map[string]any{"type": "boolean", "description": "List all background tasks for this session."},
+					// Launch tuning
+					"settle_seconds": map[string]any{"type": "number", "description": "Seconds to wait for a fast-failing launch before returning task_id (default 2, 0=immediate)."},
 				},
 			},
 		},
@@ -388,7 +439,7 @@ func AgentToolSpec() []llm.ToolSpec {
 	specs := []llm.ToolSpec{
 		{
 			Name:        "agent_spawn.agent",
-			Description: "Delegate to a specialist sub-agent (coordinator role only). Delegation is NON-BLOCKING by default: agent=<id>+task spawns the sub-agent and returns a run_id immediately, so you keep working while it runs. Do your own focused work — or fan out several delegations — then collect the result(s) later by calling THIS tool again with run_id (or run_ids=[...])+wait=true. To overlap, emit the delegation and your own tool calls in the SAME step; they dispatch concurrently. Only pass wait=true on the spawn itself when you have nothing else to do until the answer. Modes by params: (1) spawn (non-blocking): agent=<id>+task (+memory_seed) → run_id ; (2) status: run_id ; (3) collect: run_id (or run_ids=[...])+wait=true — run_ids are agent runs, NOT background tasks, so NEVER use background_run to wait on them ; (4) list: list=true ; (5) cancel: run_id+cancel=true. Each sub-agent runs in full isolation and returns a structured result.",
+			Description: "Delegate to a specialist sub-agent (coordinator role only).\n\n⚠️ CRITICAL RULE: when you need a sub-agent's result, ALWAYS use run_id+wait=true. NEVER poll with run_id alone — it wastes turns and burns context. Polling loop = bug.\n\nCORRECT pattern:\n  1. Spawn: agent(agent=<id>, task=...) → run_id   [do other work here or just proceed]\n  2. Collect: agent(run_id=..., wait=true) → blocks until done, returns result\n\nFAN-OUT pattern (parallel sub-agents):\n  - Emit ALL spawn calls in ONE step (they run concurrently)\n  - Then ONE collect: agent(run_ids=[r1,r2,...], wait=true)\n\nModes: (1) spawn: agent+task → run_id ; (2) status-only: run_id [AVOID — use wait=true instead] ; (3) collect: run_id/run_ids+wait=true ; (4) list: list=true ; (5) cancel: run_id+cancel=true.\nEach sub-agent runs in full isolation. run_ids are agent runs — NEVER use background_run to wait on them.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

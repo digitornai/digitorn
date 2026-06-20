@@ -40,8 +40,9 @@ type SessionState struct {
 	ToolCalls       map[string]*ToolCallState
 	Approvals       map[string]*ApprovalState
 	Memory          map[string]string
-	Facts           []string
-	Goal            string
+	Facts             []string
+	AllowedSignatures []string
+	Goal              string
 	WorkspaceFiles  map[string]*FileState
 	Todos           []Todo
 	Children        []ChildAgent
@@ -170,23 +171,28 @@ type Message struct {
 	Parts       []MessagePart `json:"parts,omitempty"`
 	Content     string        `json:"content"`
 	Reasoning   string        `json:"reasoning,omitempty"`
+	ReasoningStartedAt int64         `json:"reasoning_started_at,omitempty"`
+	ReasoningEndedAt   int64         `json:"reasoning_ended_at,omitempty"`
 	TsUnixNano  int64         `json:"ts"`
 	ToolCallIDs []string      `json:"tool_call_ids,omitempty"`
 	Attachments []BlobRef     `json:"attachments,omitempty"`
 }
 
 type ToolCallState struct {
-	CallID       string         `json:"call_id"`
-	Name         string         `json:"name"`
-	Arguments    map[string]any `json:"arguments,omitempty"`
-	Status       string         `json:"status"`
-	Output       any            `json:"output,omitempty"`
-	Error        string         `json:"error,omitempty"`
-	StartedAt    int64          `json:"started_at,omitempty"`
-	CompletedAt  int64          `json:"completed_at,omitempty"`
-	StartedSeq   uint64         `json:"started_seq,omitempty"`
-	CompletedSeq uint64         `json:"completed_seq,omitempty"`
-	DurationMs   int64          `json:"duration_ms,omitempty"`
+	CallID          string         `json:"call_id"`
+	Name            string         `json:"name"`
+	Arguments       map[string]any `json:"arguments,omitempty"`
+	Status          string         `json:"status"`
+	Output          any            `json:"output,omitempty"`
+	Error           string         `json:"error,omitempty"`
+	StartedAt       int64          `json:"started_at,omitempty"`
+	CompletedAt     int64          `json:"completed_at,omitempty"`
+	StartedSeq      uint64         `json:"started_seq,omitempty"`
+	CompletedSeq    uint64         `json:"completed_seq,omitempty"`
+	DurationMs      int64          `json:"duration_ms,omitempty"`
+	UnifiedDiff     string         `json:"unified_diff,omitempty"`
+	PreviousContent string         `json:"previous_content,omitempty"`
+	NewContent      string         `json:"new_content,omitempty"`
 }
 
 type ApprovalState struct {
@@ -378,8 +384,9 @@ func (s *SessionState) Snapshot() SessionSnapshot {
 		ToolCalls:                cloneToolCalls(s.ToolCalls),
 		Approvals:                cloneApprovals(s.Approvals),
 		Memory:                   cloneStringMap(s.Memory),
-		Facts:                    append([]string(nil), s.Facts...),
-		Goal:                     s.Goal,
+		Facts:             append([]string(nil), s.Facts...),
+		AllowedSignatures: append([]string(nil), s.AllowedSignatures...),
+		Goal:              s.Goal,
 		WorkspaceFiles:           cloneFileStates(s.WorkspaceFiles),
 		Todos:                    append([]Todo(nil), s.Todos...),
 		Children:                 append([]ChildAgent(nil), s.Children...),

@@ -1,0 +1,118 @@
+---
+id: versioning
+title: Versioning and stability
+---
+
+# Versioning and stability
+
+Digitorn ships under semantic versioning at the package level
+(`go.mod`) and an explicit YAML language version
+(`schema_version`).
+
+## YAML schema version
+
+The Digitorn YAML language ships in versioned schemas. There are
+two:
+
+- **`schema_version: 2`** - the canonical 8-block shape
+  documented in [Language](language/). All new apps target this.
+- **`schema_version: 1`** - the legacy flat shape (`execution:`,
+  `modules:` at the top level, ...). Still accepted: an alias
+  pass reshapes it to v2 before validation, so every legacy YAML
+  keeps parsing.
+
+When `schema_version` is omitted the compiler auto-detects the
+shape. Setting it explicitly future-proofs the file against
+breaking changes.
+
+### What "frozen" means (schema v2)
+
+For the lifetime of `schema_version: 2`:
+
+- **No required field is added.** Every existing YAML keeps
+  parsing without modification.
+- **No required field is removed.** Every field documented under
+  [Language](language/) keeps doing what it did.
+- **No field type is narrowed.** A field that accepts a string
+  today won't reject the same string after an upgrade.
+- **Default values are stable.** If a field's default changed, the
+  daemon would emit a deprecation warning and honour the previous
+  default for at least one minor release.
+
+### What CAN change
+
+- **New optional fields.** A new YAML key under any block, with a
+  safe default, can land in any release.
+- **New modules.** New entries are added to `tools.modules.<id>`.
+  Existing modules don't go away without deprecation.
+- **New `runtime.mode` values.** Adding modes is backward-compat;
+  removing is not.
+- **New CLI sub-commands.** `digitorn ...` grows over time.
+- **Internal implementation.** Everything inside the daemon -
+  the SQL schema, the IPC protocol between worker and child
+  processes, the cache file layout - is internal and may change
+  in any release.
+
+### Deprecation policy
+
+A field deprecated in `1.X.0` continues to work and emit a
+warning. It is removed no sooner than `1.(X+2).0`. Deprecations
+are listed in the release notes published with each minor.
+
+`schema_version: 1` itself is a deprecation umbrella: the alias
+pass keeps it alive but every legacy field has a `schema_version: 2`
+The compiler handles v1→v2 migration automatically
+one-shot migration.
+
+## Daemon version
+
+	The daemon's own version follows SemVer (`MAJOR.MINOR.PATCH`).
+	Breaking changes to internal APIs (the module surface, the
+	internal HTTP routes, the Socket.IO event payload shape if a
+	widely-deployed client depends on it) increment the MAJOR version.
+The public REST API
+([reference(daemon API).md](reference(daemon API).md)) is the contract:
+breaking changes there are reflected as new versioned routes
+(`(daemon API)...`) before the old ones are removed.
+
+## Schema version field
+
+The optional `schema_version` declaration at the top of a YAML
+file is a *forward-compat* signal:
+
+```yaml
+schema_version: 2
+```
+
+When set, the alias pass that converts legacy v1 flat shape to
+v2 canonical is skipped (the YAML is already v2). This is the
+canonical form: new apps should always set it.
+
+When `schema_version` is absent, the alias pass auto-detects the
+shape and applies the v1 → v2 reshape before validation. This is
+how every legacy YAML keeps working without modification.
+
+## Migrating from legacy flat shape
+
+The migration table is in
+[the language reference](/docs/language/#migration-from-the-legacy-flat-shape).
+The CLI does the rewrite for you:
+
+```bash
+The compiler rewrites legacy YAML to the canonical v2 shape
+```
+
+This is a one-time, in-place rewrite. It is safe: the YAML
+remains valid before and after, and the app's runtime behaviour
+is identical (the alias pass produces the same compiled output).
+
+## Module API
+
+A module implements the Module interface and exposes action methods.
+The action signature (`description, tool_prompt,
+risk_level, hidden, params_model, ...`) is part of the
+`schema_version: 2` contract.
+
+Module-internal helpers (anything not exposed as an action or via
+constraints) is implementation detail and may
+move between releases.

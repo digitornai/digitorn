@@ -222,6 +222,11 @@ func (m *Module) PiecesDir() string {
 	return m.piecesDir
 }
 
+// Bridge returns the bridge subprocess wrapper.
+func (m *Module) Bridge() *Bridge {
+	return m.bridge
+}
+
 // DownloadBundle fetches a piece bundle from bundleURL and writes it to
 // <piecesDir>/<pieceName>.js. Creates the directory if needed.
 func (m *Module) DownloadBundle(ctx context.Context, bundleURL, pieceName string) error {

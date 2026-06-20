@@ -210,6 +210,116 @@ func NewDisable() *cobra.Command {
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "disabled %s\n", args[0])
 			return nil
+			},
+		}
+	}
+
+	// NewAppInfo returns...
+
+
+// NewAppInfo returns `digitorn app info <app-id>`.
+func NewAppInfo() *cobra.Command {
+	return &cobra.Command{
+		Use:   "app-info <app-id>",
+		Short: "Show app details",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := dialClient(cmd.Context())
+			if err != nil {
+				return err
+			}
+			app, err := c.GetApp(cmd.Context(), args[0])
+			if err != nil {
+				return fmt.Errorf("app-info: %w", err)
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "App ID:      %s\n", app.AppID)
+			fmt.Fprintf(cmd.OutOrStdout(), "Name:        %s\n", app.Name)
+			fmt.Fprintf(cmd.OutOrStdout(), "Version:     %s\n", app.Version)
+			fmt.Fprintf(cmd.OutOrStdout(), "Description: %s\n", app.Description)
+			fmt.Fprintf(cmd.OutOrStdout(), "Category:    %s\n", app.Category)
+			fmt.Fprintf(cmd.OutOrStdout(), "Author:      %s\n", app.Author)
+			fmt.Fprintf(cmd.OutOrStdout(), "Enabled:     %v\n", app.Enabled)
+			fmt.Fprintf(cmd.OutOrStdout(), "BYOK:        %v\n", app.BYOK)
+			fmt.Fprintf(cmd.OutOrStdout(), "Installed:   %v\n", app.InstalledAt)
+			fmt.Fprintf(cmd.OutOrStdout(), "Updated:     %v\n", app.UpdatedAt)
+			return nil
+		},
+	}
+}
+
+// NewAppStatus returns `digitorn app status <app-id>`.
+func NewAppStatus() *cobra.Command {
+	return &cobra.Command{
+		Use:   "app-status <app-id>",
+		Short: "Show app health checks",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := dialClient(cmd.Context())
+			if err != nil {
+				return err
+			}
+			status, err := c.AppStatus(cmd.Context(), args[0])
+			if err != nil {
+				return fmt.Errorf("app-status: %w", err)
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "App ID:  %s\n", status["app_id"])
+			fmt.Fprintf(cmd.OutOrStdout(), "Status:  %s\n", status["status"])
+			if checks, ok := status["checks"].(map[string]any); ok {
+				fmt.Fprintln(cmd.OutOrStdout(), "Checks:")
+				for name, ok := range checks {
+					mark := "✓"
+					if !ok.(bool) {
+						mark = "✗"
+					}
+					fmt.Fprintf(cmd.OutOrStdout(), "  %s %s\n", mark, name)
+				}
+			}
+			return nil
+		},
+	}
+}
+
+// NewAppReload returns `digitorn app reload <app-id>`.
+func NewAppReload() *cobra.Command {
+	return &cobra.Command{
+		Use:   "app-reload <app-id>",
+		Short: "Recompile and reload an app from disk",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := dialClient(cmd.Context())
+			if err != nil {
+				return err
+			}
+			app, err := c.ReloadApp(cmd.Context(), args[0])
+			if err != nil {
+				return fmt.Errorf("app-reload: %w", err)
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "reloaded %s (%s) v%s\n", app.AppID, app.Name, app.Version)
+			return nil
+		},
+	}
+}
+
+// NewDaemonStats returns `digitorn daemon-stats`.
+func NewDaemonStats() *cobra.Command {
+	return &cobra.Command{
+		Use:   "daemon-stats",
+		Short: "Show daemon statistics",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := dialClient(cmd.Context())
+			if err != nil {
+				return err
+			}
+			stats, err := c.DaemonStats(cmd.Context())
+			if err != nil {
+				return fmt.Errorf("daemon-stats: %w", err)
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), "Daemon stats:")
+			for k, v := range stats {
+				fmt.Fprintf(cmd.OutOrStdout(), "  %s: %v\n", k, v)
+			}
+			return nil
 		},
 	}
 }

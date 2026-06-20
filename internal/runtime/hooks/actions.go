@@ -459,9 +459,17 @@ func runLSPDiagnose(ctx context.Context, params map[string]any, p Payload, deps 
 		}
 	}
 	// Sync the document to the language server and get its diagnostics back.
+	// LSP failure (server not installed, in cooldown, unreachable) is non-fatal:
+	// log it and return clean so the edit result reaches the agent unchanged.
+	// The warning is intentional — it surfaces misconfiguration without breaking
+	// the agent's understanding of whether its edit succeeded.
 	raw, err := deps.Caller.Call(ctx, "lsp.notify_change", args)
 	if err != nil {
-		return ActionEffects{}, err
+		if deps.Logger != nil {
+			deps.Logger.Warn("lsp_diagnose: lsp unavailable, skipping diagnostics",
+				"path", path, "err", err.Error())
+		}
+		return ActionEffects{}, nil
 	}
 	// Surface the errors/warnings to the agent WITHOUT a separate tool call or chat
 	// message — stay silent on a clean file (no noise).

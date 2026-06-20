@@ -492,6 +492,17 @@ func (m *MetaDispatcher) handleExecuteTool(ctx context.Context, call runtime.Too
 		AgentRunID: call.AgentRunID,
 		UserJWT:    call.UserJWT,
 	}
+	// UNIVERSAL bare-action recovery : qualify bare names before the gate
+	// so the module check sees the correct module (e.g. "read" → "filesystem.read").
+	if !strings.Contains(target.Name, ".") {
+		if idx := m.resolveIndex(call); idx != nil {
+			fqns := idx.FQNList()
+			target.Name = toolname.QualifyBareName(target.Name, fqns)
+			if !strings.Contains(target.Name, ".") {
+				target.Name = toolname.ResolveMangled(target.Name, fqns)
+			}
+		}
+	}
 	// SG-4 chokepoint : gate the resolved target so a denied / approve
 	// tool can't slip through the execute_tool indirection. Meta-tool
 	// targets bypass inside the gate ; their own children gate on

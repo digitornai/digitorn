@@ -149,6 +149,7 @@ func hydrateFromSnapshot(s *SessionState, snap *SessionSnapshot) {
 		s.Memory = cloneStringMap(snap.Memory)
 	}
 	s.Facts = append(s.Facts[:0], snap.Facts...)
+	s.AllowedSignatures = append(s.AllowedSignatures[:0], snap.AllowedSignatures...)
 	s.Goal = snap.Goal
 	if len(snap.WorkspaceFiles) > 0 {
 		s.WorkspaceFiles = cloneFileStates(snap.WorkspaceFiles)

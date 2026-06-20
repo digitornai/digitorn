@@ -24,8 +24,8 @@ func TestRender_RanksHubHigher(t *testing.T) {
 		t.Fatal("empty render")
 	}
 	helperPos := strings.Index(out, "Helper")
-	utilHeader := strings.Index(out, "util.go:")
-	appHeader := strings.Index(out, "app.go:")
+	utilHeader := strings.Index(out, "util.go")
+	appHeader := strings.Index(out, "app.go")
 	if utilHeader == -1 || appHeader == -1 || helperPos == -1 {
 		t.Fatalf("missing entries in:\n%s", out)
 	}

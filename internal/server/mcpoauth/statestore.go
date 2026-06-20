@@ -15,14 +15,16 @@ const stateTTL = 10 * time.Minute
 
 // PendingState is one in-flight authorization, bound to the user who started it.
 type PendingState struct {
-	State       string
-	UserID      string
-	AppID       string
-	Provider    string
-	ServerID    string
-	Verifier    string
-	Nonce       string
-	RedirectURI string
+	State        string
+	UserID       string
+	AppID        string
+	Provider     string
+	ServerID     string
+	Verifier     string
+	Nonce        string
+	RedirectURI  string
+	ClientID     string // optional: OAuth client ID for pieces
+	ClientSecret string // optional: OAuth client secret for pieces
 }
 
 // StateStore persists CSRF state rows, encrypting the PKCE verifier at rest.

@@ -152,7 +152,11 @@ func (m *MetaDispatcher) handleAgent(ctx context.Context, call runtime.ToolInvoc
 		if err != nil {
 			return errored("agent status: " + err.Error())
 		}
-		return jsonOutcome(agentSnapMap(snap))
+		result := agentSnapMap(snap)
+		if snap.Status == "running" {
+			result["_hint"] = "Sub-agent still running. Stop polling — call agent(run_id=\"" + runID + "\", wait=true) to block until it finishes instead of checking status repeatedly."
+		}
+		return jsonOutcome(result)
 	}
 	return errored("agent spawn: 'agent' (target agent id) is required")
 }

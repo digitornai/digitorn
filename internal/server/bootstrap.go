@@ -97,6 +97,7 @@ type Daemon struct {
 	userSkills   *userskills.Store
 	userSnippets *usersnippets.Store
 	mcpCatalog   *mcpCatalog       // materializes worker-hosted MCP tools as native actions
+	piecesCatalog *piecesCatalog   // materializes pieces bridge tools as native actions
 	mcpOAuth     *mcpoauth.Service // daemon-side MCP OAuth (token store, CSRF flow); nil if the key file is unavailable
 	managedMCP   *mcpservers.Store // per-user managed MCP server store (install/list/configure); nil if the key file is unavailable
 	mcpHub       *mcphub.Client    // read-only client for the Hub's curated MCP catalog (the install-config source)
@@ -415,6 +416,7 @@ func (d *Daemon) buildEngine() {
 		d.contextTracker = contextsvc.NewTracker()
 	}
 	eng.ContextLookup = d.contextTracker.Get
+	eng.ModelWindowLookup = d.gatewayModelWindow
 	eng.ContextRecordRatio = d.recordContextRatio
 	// Per-tool timeout : bound a single tool dispatch so one slow/hung tool
 	// can't eat the whole turn. Human-in-the-loop / sub-flow tools (ask_user,
@@ -440,13 +442,15 @@ func (d *Daemon) buildEngine() {
 	// lookup, so this never blocks context_builder primitives.
 	mcpCat := newMCPCatalog(d.modules, d.appMgr, d.mcpOAuth)
 	d.mcpCatalog = mcpCat // shared with the OAuth handlers (server-config lookup)
+	piecesCat := newPiecesCatalog(d.modules, d.appMgr)
+	d.piecesCatalog = piecesCat
 	if d.mcpOAuth != nil {
 		d.mcpOAuth.SetServerAuthLookup(d.mcpServerAuthLookup)
 		d.mcpOAuth.SetServerURLLookup(d.mcpServerURLLookup)
 		d.mcpOAuth.SetRedirectBase(d.previewBaseURL())
 	}
 	eng.PolicyEvaluator = &runtime.DefaultPolicyEvaluator{
-		Lookup: registryToolSpecs{Registry: d.modules, MCP: mcpCat},
+		Lookup: registryToolSpecs{Registry: d.modules, MCP: mcpCat, Pieces: piecesCat},
 	}
 
 	// WD : per-session workdir confinement. The engine attaches the resolved
@@ -510,7 +514,7 @@ func (d *Daemon) buildEngine() {
 	// engine populated via Context.BuildFor at the start of the
 	// turn, guaranteeing the meta-tools see the same tool universe
 	// the LLM was offered. RT-3 isolation contract enforced.
-	actions := registryActions{Registry: d.modules, Apps: d.appMgr, MCP: mcpCat}
+	actions := registryActions{Registry: d.modules, Apps: d.appMgr, MCP: mcpCat, Pieces: piecesCat}
 	contextBuilder := wiring.New(actions)
 	// CE-7 : enable semantic search when an embeddings worker is
 	// up. Falls back silently to keyword-only when nil per the

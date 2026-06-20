@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/mbathepaul/digitorn/internal/domain/tool"
+	"github.com/mbathepaul/digitorn/internal/flexjson"
 )
 
 // fetchCache is a concurrency-safe, TTL-bounded, size-capped cache of fetched
@@ -76,10 +77,10 @@ func (c *fetchCache) clear() {
 }
 
 type fetchParams struct {
-	URL     string `json:"url"`
-	Format  string `json:"format"`
-	Extract bool   `json:"extract"`
-	Prompt  string `json:"prompt"`
+	URL     string   `json:"url"`
+	Format  string   `json:"format"`
+	Extract flexjson.Bool `json:"extract"`
+	Prompt  string   `json:"prompt"`
 }
 
 // fetch retrieves a URL and returns its content as text/markdown/html. It is

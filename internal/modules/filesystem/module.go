@@ -9,17 +9,18 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	domainmodule "github.com/mbathepaul/digitorn/internal/domain/module"
 	"github.com/mbathepaul/digitorn/internal/domain/tool"
+	"github.com/mbathepaul/digitorn/internal/flexjson"
 	"github.com/mbathepaul/digitorn/internal/runtime/context/repomap"
 	"github.com/mbathepaul/digitorn/internal/runtime/workdir"
 	"github.com/mbathepaul/digitorn/pkg/module"
@@ -35,6 +36,12 @@ type Config struct {
 type Module struct {
 	module.Base
 	cfg Config
+
+	// semanticApps tracks appIDs where semantic search is confirmed active
+	// (auto_index_workdir=true AND embedder available). Populated on each
+	// dispatch so DynamicToolPrompts can inject the right grep guidance.
+	semanticApps sync.Map   // appID (string) → struct{}
+	embedderSeen atomic.Bool // true once an embedder was observed in any ctx
 }
 
 // PromptSections contributes the filesystem module's operating guidance to the
@@ -57,9 +64,68 @@ func (m *Module) PromptSections(domainmodule.PromptScope) []domainmodule.PromptS
 	}}
 }
 
-// DynamicToolPrompts contributes no runtime tool-prompt overlays (the
-// filesystem tools' guidance is static, declared on their specs).
-func (m *Module) DynamicToolPrompts(domainmodule.PromptScope) map[string]string { return nil }
+// Invoke intercepts every tool dispatch to snapshot per-app semantic search
+// availability, then delegates to Base.Invoke. This keeps DynamicToolPrompts
+// accurate without requiring a separate wiring call.
+func (m *Module) Invoke(ctx context.Context, name string, params []byte) (tool.Result, error) {
+	m.snapshotSemanticStatus(ctx)
+	return m.Base.Invoke(ctx, name, params)
+}
+
+// snapshotSemanticStatus reads the current dispatch context and caches whether
+// semantic search is active for this app. Called on every tool invocation so
+// the status is always fresh by the time the next turn's prompt is assembled.
+func (m *Module) snapshotSemanticStatus(ctx context.Context) {
+	id, ok := tool.IdentityFromContext(ctx)
+	if !ok || id.AppID == "" {
+		return
+	}
+	cfg := module.ModuleConfigFrom(ctx)
+	autoIndex, _ := cfg["auto_index_workdir"].(bool)
+	emb := module.EmbedderFrom(ctx)
+	if emb != nil {
+		m.embedderSeen.Store(true)
+	}
+	if autoIndex && emb != nil {
+		m.semanticApps.Store(id.AppID, struct{}{})
+	}
+}
+
+// DynamicToolPrompts injects an enhanced grep prompt when semantic search is
+// confirmed active for this app (auto_index_workdir=true + embedder running).
+// The overlay is additive — the static ToolPrompt still applies.
+func (m *Module) DynamicToolPrompts(scope domainmodule.PromptScope) map[string]string {
+	if scope.AppID == "" {
+		return nil
+	}
+	if _, ok := m.semanticApps.Load(scope.AppID); !ok {
+		return nil
+	}
+	return map[string]string{
+		"filesystem.grep": semanticGrepPrompt,
+	}
+}
+
+const semanticGrepPrompt = `
+SEMANTIC SEARCH IS ACTIVE (ONNX vector embeddings operational).
+grep returns TWO result sets fused together:
+  1. "matches" — exact RE2 hits (trigram-indexed, instant).
+  2. "related" — semantically similar code chunks ranked by vector score,
+     even when they share NO common text with your pattern.
+
+Each "related" hit includes:
+  • snippet  — the relevant code block
+  • symbol   — the enclosing function/type
+  • callers  — who calls that symbol (call graph, no extra grep needed)
+  • imports  — the file's imports
+
+When to exploit "related":
+  • Conceptual search: grep("handles authentication") → finds auth code even if "authentication" doesn't appear literally
+  • Find similar implementations: grep("retry with backoff") → finds all retry patterns
+  • Cross-language patterns: grep("rate limit") → finds limiters in any language
+  • Alternative approaches: grep("parse JSON") → finds all JSON parsers
+
+Workflow: run ONE grep with a descriptive phrase, read both "matches" and "related", then act. Skip the "find files → open each → search" loop entirely.`
 
 // New constructs the filesystem module with all its actions wired.
 func New() *Module {
@@ -78,18 +144,22 @@ func New() *Module {
 	m.RegisterTool(module.Tool{
 		Name:        "read",
 		Description: "Read a file with line numbers (cat -n style). Read a DIRECTORY (e.g. \".\" for the project root) to get a .gitignore-aware TREE of its structure — the way to orient yourself in an unfamiliar project. IMAGES (PNG/JPG/GIF/WEBP/BMP) are returned as actual visual content you can SEE, not described. Use `outline: true` on a code file OR a directory to get a structural map (functions/classes/headings + line numbers) instead of full content — then read a precise line range or edit by line number. Pass `paths` (a list) to read several files (and/or images) in one call.",
-		ToolPrompt: "To orient in an unfamiliar project, `read` the directory (\".\" or a subfolder) for a structure tree, or `read` a directory with `outline: true` for a map of every file's definitions — far better than globbing a wall of paths.\n" +
-			"Read before you edit or write — never edit a file blind. When you already know the symbol or region you need, read just that range (offset/limit) rather than the whole file; on a large or unfamiliar file run `outline: true` first to map it, then read the precise lines.\n" +
-			"Batch related files in ONE call via `paths` instead of many sequential reads — it is faster and keeps the picture coherent.\n" +
+		ToolPrompt: "DIRECTORY NAVIGATION — `read .` is your starting point for any unfamiliar project:\n" +
+			"  `read .`              → ENRICHED TREE: every file with [package] NLines KeySymbols, every directory with (N files · N lines) totals. Jump directly to any file with Read(path, offset=N).\n" +
+			"  `read . outline:true` → ALL SYMBOLS with line numbers across every file (up to 2000 files). Use this when you need to find any function/type without grep.\n" +
+			"  `read <subdir>`       → Same enriched tree scoped to a subtree.\n" +
+			"These two commands replace 90% of grep/glob use cases for navigation — prefer them.\n\n" +
+			"FILE READING:\n" +
+			"Read before you edit or write — never edit a file blind. When you already know the symbol or region, read just that range (offset/limit) rather than the whole file; on a large file run `outline: true` first to map it, then read the precise lines.\n" +
+			"Batch related files in ONE call via `paths` instead of many sequential reads.\n" +
 			"The line numbers in the output are authoritative: cite locations as path:line and edit by those numbers.\n" +
 			"READ OUTPUT FORMAT: every content line is prefixed with its 1-based line number and a TAB. Example:\n" +
 			"  1\tpackage main\n" +
 			"  2\t\n" +
 			"  3\tfunc main() {\n" +
-			"  The line number and tab are PURE DISPLAY — they are NOT part of the actual file content.\n" +
-			"  When you call `edit` or `write`, NEVER include those line numbers or tabs in old_string / new_string / content.\n" +
-			"  Only use line numbers for start_line/end_line or offset/limit, never inside the text you write back.\n" +
-			"Do NOT re-read a file you just wrote or edited to confirm it worked — the write/edit tool already errors on failure, and the harness tracks the current content for you. Reading to verify is wasted effort.",
+			"  The line number and tab are PURE DISPLAY — NOT part of the actual file content.\n" +
+			"  When you call `edit` or `write`, NEVER include line numbers or tabs in old_string / new_string / content.\n" +
+			"Do NOT re-read a file you just wrote or edited to confirm — the write/edit tool already errors on failure.",
 		Params: []tool.ParamSpec{
 			{Name: "path", Type: "string", Description: "File path relative to the workspace.", Path: true},
 			{Name: "paths", Type: "array", Description: "Read several files in one call (labeled sections). Use instead of path.", Items: &tool.ParamSpec{Type: "string", Path: true}},
@@ -135,11 +205,20 @@ func New() *Module {
 			"• INSERT: `insert_after` / `insert_before` a short unique snippet from the target line, or `prepend` / `append` to add at the file's start/end.\n" +
 			"• By TEXT: `old_string` (exact match, with a forgiving whitespace/indentation fallback). If it occurs N times: add surrounding context, OR set `occurrence` to the Nth match, OR `replace_all`.\n" +
 			"Set `dry_run` to preview the unified diff without writing. `expect` (optional) is a snippet the target must still contain — if not, the edit is refused (guards against editing the wrong place after the file changed).",
-		ToolPrompt: "Always `read` the target first — the edit is anchored to text/lines you must have seen. Right after a read, line locators (start_line/end_line) are the cheapest and most unambiguous; switch to text/anchor locators (old_string, insert_after/before) once earlier edits may have shifted the line numbers.\n" +
-			"CRITICAL: when you pass `old_string`, give ONLY the file's code — never the line-number prefix from `read` (the \"  142\\t\" at the start of each read line). Including it is the #1 cause of a failed first edit. If you just read the lines, prefer start_line/end_line — no text to match, no way to mis-copy.\n" +
-			"`old_string` must uniquely identify the spot: if it matches more than once, add surrounding context, or set `occurrence` to the Nth match, or `replace_all` when you truly mean every one.\n" +
-			"When unsure, set `dry_run: true` and inspect the diff before committing. Use `expect` on a risky edit so it refuses if the file isn't what you think.\n" +
-			"Preserve surrounding indentation and style exactly; an edit that breaks indentation is a bug.",
+		ToolPrompt: "DEFAULT: use start_line/end_line. It never fails — you give numbers, not text.\n" +
+			"old_string is for quick single-line fixes only when you have the EXACT text fresh from a read in the SAME step.\n\n" +
+			"RULE: if you are not 100% sure of every character in old_string (whitespace, quotes, indentation), use start_line/end_line instead. Reconstructing text from memory causes failures.\n\n" +
+			"HOW TO GET LINE NUMBERS — pick the fastest source:\n" +
+			"• Code index in the system prompt: `L302-L450 func Run(...)` → start_line=302, end_line=450\n" +
+			"• grep with context:3 → the line numbers are in the output\n" +
+			"• read(path, outline=true) → every symbol with its line range\n" +
+			"• read(path, offset=N, limit=M) → content with line numbers; use those numbers directly\n\n" +
+			"WHEN old_string IS SAFE:\n" +
+			"• You just ran read/grep in this SAME tool-call batch and are copy-pasting the exact output — not retyping it\n" +
+			"• The change is a single short line with no ambiguous whitespace\n" +
+			"• old_string must be unique in the file; add context lines or use occurrence:N if it appears multiple times\n\n" +
+			"NEVER include the line-number prefix from read ('  142\\t') in old_string — strip it first.\n" +
+			"dry_run:true previews the diff before writing. expect:\"snippet\" guards against editing a stale version.",
 		Params: []tool.ParamSpec{
 			{Name: "path", Type: "string", Description: "File path relative to the workspace.", Required: true, Path: true},
 			{Name: "new_string", Type: "string", Description: "Content to insert or to replace the located region with. Empty string deletes the targeted lines."},
@@ -200,13 +279,18 @@ func New() *Module {
 
 	m.RegisterTool(module.Tool{
 		Name:        "glob",
-		Description: "Find paths matching a glob pattern (supports ** for recursion), newest first. VCS/build dirs are skipped. Pass `tree: true` to get the matches as an indented STRUCTURE instead of a flat list — readable when there are many. To understand a project's layout, prefer `read .` (a directory tree) or `read . outline:true` (definitions per file).",
-		ToolPrompt:  "Reach for `glob` when you know the NAME or path shape (\"**/*.go\", \"src/**/*.{ts,tsx}\", \"cmd/*/main.go\"); reach for `grep` when you know the CONTENT. Full glob syntax is supported (recursive **, brace alternation {a,b}, ranges, character classes). Results are newest-first, so it doubles as \"what changed recently\". For a big result set use `tree: true` so you see the structure, not a wall of paths. To grasp an unfamiliar project, `read` the directory (tree) or `read` it with `outline: true` (a map of every file's definitions) rather than globbing everything.",
+		Description: "Find paths matching a glob pattern (supports ** for recursion), newest first. VCS/build dirs are skipped. Pass `tree: true` to get an ENRICHED tree: each file shows its package, line count, and key symbols — use this to understand a subtree without reading files one by one. To understand the full project layout, prefer `read .` (complete enriched tree with metadata) or `read . outline:true` (all definitions per file with line numbers).",
+		ToolPrompt: "Reach for `glob` when you know the NAME or path shape (\"**/*.go\", \"src/**/*.{ts,tsx}\", \"cmd/*/main.go\"); reach for `grep` when you know the CONTENT.\n" +
+			"Full glob syntax: recursive **, brace alternation {a,b}, ranges, character classes. Results are newest-first — doubles as \"what changed recently\".\n" +
+			"ALWAYS use `tree: true` for any multi-file result: the output is an ENRICHED tree showing [package]  NLines  KeySymbols for every file, and (N files · N lines) totals per directory.\n" +
+			"Example: glob(\"internal/runtime/**/*.go\", tree: true) → shows every file in that subtree with its package, line count, and top symbols — no extra reads needed.\n" +
+			"To orient in an unfamiliar project: `read .` gives the full enriched project tree (package + lines + symbols per file, directory totals). `read . outline:true` gives every symbol with line numbers across all files.\n" +
+			"Skip glob for orientation — `read .` is always better than `glob(\"**/*\", tree: true)` because it adds directory aggregate stats.",
 		Params: []tool.ParamSpec{
 			{Name: "pattern", Type: "string", Description: "Glob pattern, e.g. \"**/*.go\" or \"src/*.ts\".", Required: true},
 			{Name: "type", Type: "string", Description: "Filter: \"file\", \"dir\", or \"any\" (default).", Default: "any"},
-			{Name: "max_results", Type: "integer", Description: "Cap on matches (default 1000).", Default: 0},
-			{Name: "tree", Type: "boolean", Description: "Render matches as an indented directory tree instead of a flat path list.", Default: false},
+			{Name: "max_results", Type: "integer", Description: "Cap on matches (default 10000). Only lower this if you want a short preview.", Default: 0},
+			{Name: "tree", Type: "boolean", Description: "Render as enriched tree: each file shows [package] NLines KeySymbols, directories show (N files · N lines) totals. Default true — pass false only when you need a raw path list.", Default: true},
 		},
 		RiskLevel: tool.RiskLow,
 		Handler:   m.glob,
@@ -214,25 +298,30 @@ func New() *Module {
 
 	m.RegisterTool(module.Tool{
 		Name:        "grep",
-		Description: "Search file contents by RE2 regular expression — fast (trigram-indexed), gitignore-aware, and enriched with the call graph. Supports context lines, output modes (matches / files / count), case-insensitive and multiline matching.",
-		ToolPrompt: "Your primary way to locate code by content — searching beats reading whole files. Work it like an engineer who knows the tool:\n" +
-			"• SCOPE it: set `include` to a glob (\"*.go\", \"*.{ts,tsx}\") and `path` to the relevant subtree so results stay sharp.\n" +
-			"• FIND, then READ: use output_mode \"files_with_matches\" to see WHICH files match (cheap), then narrow to see WHAT; output_mode \"count\" tallies hits per file. Default \"content\" returns the matching lines.\n" +
-			"• SEE the surroundings: set `context` (e.g. 3) to get the lines around each match — you understand the hit without a separate read.\n" +
-			"• FLAGS: `ignore_case` for case-insensitive; `multiline` to match across line boundaries; or use inline RE2 flags in the pattern — (?i) case, (?m) ^/$ per line, (?s) dot matches newline.\n" +
-			"• FOLLOW THE THREAD: each match comes back enriched with its enclosing symbol and that symbol's callers, so one search already hands you the next hop — chase the call graph (caller→callee) instead of guessing.\n" +
-			"Search a distinctive token (a function name, error string, struct field), read the few hits, then act. For a broad open-ended sweep across a large codebase, delegate to the explore sub-agent rather than running many greps yourself — it returns the conclusion without flooding your context.\n" +
-			"A literal that isn't valid regex (a call like `Foo(`, a slice `a[i]`, a path) is searched literally — you don't need to escape metacharacters.\n" +
-			"Note: RE2 has no lookbehind/backreferences (it can never catastrophically backtrack). For those rare cases, drop to bash + `rg -P`.",
+		Description: "Search file contents: exact RE2 regex (trigram-indexed, instant) AND semantic vector search (ONNX embeddings, when auto_index_workdir is enabled). Returns exact \"matches\" + semantically similar \"related\" chunks with callers and imports — one grep call replaces many read+search cycles.",
+		ToolPrompt: "Your primary way to locate code by content. TWO search engines run in parallel:\n" +
+			"  1. EXACT (always): RE2 regex, trigram-indexed — O(matches) not O(files).\n" +
+			"  2. SEMANTIC (active when auto_index_workdir=true + embedder running): ONNX vector search returns a `related` field with the most similar code chunks ranked by score, even with zero text overlap with your pattern.\n\n" +
+			"The `related` field contains: snippet · enclosing symbol · callers (call graph) · imports. One grep = exact hits + semantic context + callers. No follow-up reads needed in most cases.\n\n" +
+			"HOW TO USE:\n" +
+			"• SCOPE: set `include` (\"*.go\", \"*.{ts,tsx}\") and `path` (subtree) so results stay sharp.\n" +
+			"• FIND FIRST: output_mode \"files_with_matches\" → cheap list of matching files; \"count\" → tallies per file. Default \"content\" → the lines.\n" +
+			"• SEE CONTEXT: `context: 3` shows surrounding lines — understand the hit without a separate read.\n" +
+			"• SEMANTIC PATTERNS: use a descriptive phrase like \"handles rate limiting\", \"parses JWT\", \"retries with backoff\" — the vector engine finds conceptually matching code even if the exact words don't appear.\n" +
+			"• FLAGS: `ignore_case`, `multiline`, or inline RE2 flags (?i) (?m) (?s).\n" +
+			"• LITERALS: invalid regex (Foo(, a[i], /path/) is auto-escaped and searched as literal text.\n" +
+			"• CALL GRAPH: each match already carries its callers — follow the thread without more greps.\n" +
+			"Note: RE2 has no lookbehind/backreferences. For those edge cases: bash + `rg -P`.",
 		Params: []tool.ParamSpec{
 			{Name: "pattern", Type: "string", Description: "RE2 regular expression. Inline flags supported: (?i) case-insensitive, (?m) multiline ^/$, (?s) dot matches newline.", Required: true},
 			{Name: "path", Type: "string", Description: "Directory (or file) to search under (default: workspace root).", Default: ".", Path: true},
 			{Name: "include", Type: "string", Description: "Glob to scope files, e.g. \"*.go\" or \"*.{ts,tsx}\".", Default: ""},
 			{Name: "output_mode", Type: "string", Description: "\"content\" (matching lines, default), \"files_with_matches\" (just the paths — find WHERE fast), or \"count\" (match counts per file).", Default: "content"},
-			{Name: "context", Type: "integer", Description: "Lines of surrounding context shown around each match (0-20). Lets you read the hit in situ.", Default: 0},
+			{Name: "context", Type: "integer", Description: "Lines of surrounding context shown around each match (default 3, max 20). Use a higher value when you need to see more of the function to write new_string.", Default: 3},
 			{Name: "ignore_case", Type: "boolean", Description: "Case-insensitive match.", Default: false},
 			{Name: "multiline", Type: "boolean", Description: "Let the pattern match across line boundaries (a single match can span lines).", Default: false},
 			{Name: "max_results", Type: "integer", Description: "Cap on match count.", Default: 500},
+			{Name: "ast_pattern", Type: "string", Description: "Structural symbol search via treesitter AST. Space-separated tokens ALL matched against each symbol's body. Returns full symbol bodies in `ast_matches`. Example: \"context.Context error\" finds every function taking a context that returns an error. Runs in parallel, never slows exact search.", Default: ""},
 		},
 		RiskLevel: tool.RiskLow,
 		Handler:   m.grep,
@@ -340,10 +429,20 @@ func resolveExistingPrefix(abs string) string {
 // to the module's static workspace-rooted resolution, which keeps its strict
 // "relative only" stance for non-agent callers.
 func (m *Module) resolveCtx(ctx context.Context, target string) (string, error) {
+	var abs string
+	var err error
 	if pp, ok := workdir.PathPolicyFromContext(ctx); ok {
-		return pp.Enforce(target)
+		abs, err = pp.Enforce(target)
+	} else {
+		abs, err = m.resolve(target)
 	}
-	return m.resolve(target)
+	if err != nil {
+		return "", err
+	}
+	if isProtectedFile(abs) {
+		return "", fmt.Errorf("access denied: %s is an internal Digitorn configuration file", target)
+	}
+	return abs, nil
 }
 
 // globBase returns the root that glob/grep results are listed relative to —
@@ -379,9 +478,9 @@ type readParams struct {
 	Filename string   `json:"filename"`  // alias
 	File     string   `json:"file"`      // alias
 	Paths    []string `json:"paths"`     // read several files in one call (labeled sections)
-	Offset   flexInt  `json:"offset"`    // 1-based start line (default 1)
-	Limit    flexInt  `json:"limit"`     // max lines to return (default 2000)
-	Outline  flexBool `json:"outline"`   // return a structural map (defs + line numbers) not content
+	Offset   flexjson.Int  `json:"offset"`    // 1-based start line (default 1)
+	Limit    flexjson.Int  `json:"limit"`     // max lines to return (default 2000)
+	Outline  flexjson.Bool `json:"outline"`   // return a structural map (defs + line numbers) not content
 }
 
 const readDefaultLines = 2000
@@ -573,7 +672,7 @@ type writeParams struct {
 	FilePath string      `json:"file_path"`
 	Filename string      `json:"filename"`
 	File     string      `json:"file"`
-	Content  flexContent `json:"content"`
+	Content  flexjson.Content `json:"content"`
 }
 
 var reLineNumber = regexp.MustCompile(`^\s*\d+\t`)
@@ -615,7 +714,7 @@ func (m *Module) write(ctx context.Context, raw json.RawMessage) (tool.Result, e
 		return errResult(err), err
 	}
 
-	p.Content = flexContent(stripLineNumbers(string(p.Content)))
+	p.Content = flexjson.Content(stripLineNumbers(string(p.Content)))
 
 	p.Path = effectivePath(p.Path, p.FilePath, p.Filename, p.File)
 	abs, err := m.resolveCtx(ctx, p.Path)
@@ -668,17 +767,17 @@ type editParams struct {
 	File       string   `json:"file"`
 	OldString  string   `json:"old_string"`
 	NewString  string   `json:"new_string"`
-	ReplaceAll flexBool `json:"replace_all"`
+	ReplaceAll flexjson.Bool `json:"replace_all"`
 	// Surgical locators (alternatives to old_string — provide exactly one).
-	Occurrence   flexInt  `json:"occurrence"`
-	StartLine    flexInt  `json:"start_line"`
-	EndLine      flexInt  `json:"end_line"`
+	Occurrence   flexjson.Int  `json:"occurrence"`
+	StartLine    flexjson.Int  `json:"start_line"`
+	EndLine      flexjson.Int  `json:"end_line"`
 	InsertAfter  string   `json:"insert_after"`
 	InsertBefore string   `json:"insert_before"`
-	Prepend      flexBool `json:"prepend"`
-	Append       flexBool `json:"append"`
+	Prepend      flexjson.Bool `json:"prepend"`
+	Append       flexjson.Bool `json:"append"`
 	Expect       string   `json:"expect"`
-	DryRun       flexBool `json:"dry_run"`
+	DryRun       flexjson.Bool `json:"dry_run"`
 }
 
 func (p editParams) locator() editLocator {
@@ -751,7 +850,16 @@ func applyEditTry(content, oldStr, newStr string, replaceAll, allowStrip bool) (
 				return applyEditTry(content, s, newStr, replaceAll, false)
 			}
 		}
-		return "", 0, "", &editError{kind: "not_found", message: "old_string not found in the file. Likely causes: (1) you pasted the line-number prefix from `read` — give only the code; (2) the text drifted — re-read the file; (3) or edit by line number with start_line/end_line (no text to match). See closest_matches.", closest: closestMatches(content, oldStr, 3)}
+		cms := closestMatches(content, oldStr, 3)
+		hint := "old_string not found in the file."
+		if len(cms) > 0 {
+			hint += fmt.Sprintf(
+				" IMMEDIATE FIX: copy closest_matches[0].preview VERBATIM as your new old_string — do not retype it, do not paraphrase it. The preview is the exact text at L%d-L%d (similarity %.0f%%). Alternatively use start_line=%d end_line=%d.",
+				cms[0].StartLine, cms[0].EndLine, cms[0].Similarity*100, cms[0].StartLine, cms[0].EndLine)
+		} else {
+			hint += " No close match found. Likely causes: (1) line-number prefix from `read` included — strip it; (2) file changed — re-read the target lines; (3) use start_line/end_line locator instead of old_string."
+		}
+		return "", 0, "", &editError{kind: "not_found", message: hint, closest: cms}
 	}
 	if len(spans) > 1 && !replaceAll {
 		lines := make([]int, 0, len(spans))
@@ -829,6 +937,8 @@ func (m *Module) edit(ctx context.Context, raw json.RawMessage) (tool.Result, er
 		return errResult(err), err
 	}
 	tindexes.markDirty(abs)
+	sindexes.markDirty(abs)
+	repomap.MarkDirty(abs)
 	notifyFileChange(ctx) // live workspace push (non-blocking, best-effort)
 	return tool.Result{Success: true, Data: data, Diff: diffView(p.Path, content, updated)}, nil
 }
@@ -841,17 +951,17 @@ type multiEditParams struct {
 	Edits    []struct {
 		OldString    string   `json:"old_string"`
 		NewString    string   `json:"new_string"`
-		ReplaceAll   flexBool `json:"replace_all"`
-		Occurrence   flexInt  `json:"occurrence"`
-		StartLine    flexInt  `json:"start_line"`
-		EndLine      flexInt  `json:"end_line"`
+		ReplaceAll   flexjson.Bool `json:"replace_all"`
+		Occurrence   flexjson.Int  `json:"occurrence"`
+		StartLine    flexjson.Int  `json:"start_line"`
+		EndLine      flexjson.Int  `json:"end_line"`
 		InsertAfter  string   `json:"insert_after"`
 		InsertBefore string   `json:"insert_before"`
-		Prepend      flexBool `json:"prepend"`
-		Append       flexBool `json:"append"`
+		Prepend      flexjson.Bool `json:"prepend"`
+		Append       flexjson.Bool `json:"append"`
 		Expect       string   `json:"expect"`
 	} `json:"edits"`
-	DryRun flexBool `json:"dry_run"`
+	DryRun flexjson.Bool `json:"dry_run"`
 }
 
 // multiEdit applies a batch of edits to one file as a SINGLE atomic operation :
@@ -923,6 +1033,8 @@ func (m *Module) multiEdit(ctx context.Context, raw json.RawMessage) (tool.Resul
 		return errResult(err), err
 	}
 	tindexes.markDirty(abs)
+	sindexes.markDirty(abs)
+	repomap.MarkDirty(abs)
 	notifyFileChange(ctx) // live workspace push (non-blocking, best-effort)
 	return tool.Result{Success: true, Data: map[string]any{
 		"path": p.Path, "edits": applied, "replacements": total,
@@ -991,156 +1103,12 @@ func applyFuzzySpans(content string, spans []matchSpan, newStr string) string {
 	return b.String()
 }
 
-// flexInt accepts a JSON number OR a string ("500", "500.0"), null, or "" — LLMs
-// routinely send numeric tool params as strings, which a plain int rejects and
-// the whole tool call then fails ("cannot unmarshal string into ... of type
-// int"). Unparseable input degrades to 0 so a caller default can take over.
-type flexInt int
-
-func (f *flexInt) UnmarshalJSON(b []byte) error {
-	s := strings.TrimSpace(strings.Trim(strings.TrimSpace(string(b)), `"`))
-	if s == "" || s == "null" {
-		*f = 0
-		return nil
-	}
-	v, err := strconv.ParseFloat(s, 64)
-	if err != nil || math.IsNaN(v) {
-		*f = 0
-		return nil
-	}
-	// Clamp into a safe int range BEFORE the conversion: a negative value (e.g.
-	// "-5") would skip downstream "<= 0 → default" guards inconsistently, and a
-	// huge one ("1e20") makes int(v) implementation-defined (can wrap negative,
-	// then panic make([],0,neg) downstream). MaxInt32 is far beyond any real
-	// offset/limit/context.
-	switch {
-	case v < 0:
-		*f = 0
-	case v > math.MaxInt32:
-		*f = math.MaxInt32
-	default:
-		*f = flexInt(int(v))
-	}
-	return nil
-}
-
-// flexContent accepts the file body in whatever shape the model emits:
-//
-//   - a plain JSON string        → used as-is
-//   - an array of strings        → joined with "\n" (models often send lines this way)
-//   - an array of objects        → the first of "text"/"content"/"line"/"value" key
-//     found on each object is extracted, then joined
-//   - any other scalar (number…) → converted via fmt.Sprintf
-//
-// The extra flexibility prevents the whole write call from failing with
-// "cannot unmarshal array into … of type string" when an LLM structures
-// file content as a line array instead of a single string.
-type flexContent string
-
-func (f *flexContent) UnmarshalJSON(b []byte) error {
-	// 1. Explicit null
-	if string(b) == "null" {
-		*f = ""
-		return nil
-	}
-
-	// 2. Fast path : plain JSON string
-	var s string
-	if err := json.Unmarshal(b, &s); err == nil {
-		*f = flexContent(s)
-		return nil
-	}
-
-	// 3. Array path : []any — each element becomes a line
-	var arr []any
-	if err := json.Unmarshal(b, &arr); err == nil {
-		lines := make([]string, 0, len(arr))
-		for _, el := range arr {
-			switch v := el.(type) {
-			case string:
-				lines = append(lines, v)
-			case map[string]any:
-				found := false
-				for _, k := range []string{"text", "content", "line", "value", "code", "source", "snippet"} {
-					if sv, ok := v[k].(string); ok {
-						lines = append(lines, sv)
-						found = true
-						break
-					}
-				}
-				if !found {
-					b2, _ := json.Marshal(v)
-					lines = append(lines, string(b2))
-				}
-			default:
-				b2, _ := json.Marshal(el)
-				lines = append(lines, string(b2))
-			}
-		}
-		*f = flexContent(strings.Join(lines, "\n"))
-		return nil
-	}
-
-	// 3b. Garde-fou : si le contenu ressemble à du CSS/TOML/YAML mal quoté
-	// (le LLM a oublié les guillemets autour du contenu), on le stocke tel quel
-	// plutôt que de le parser comme un objet JSON et de le corrompre.
-	raw := strings.TrimSpace(string(b))
-	if strings.HasPrefix(raw, "{") {
-		inner := strings.ToLower(raw)
-		if strings.Contains(inner, "--") ||
-			strings.Contains(inner, "@import") ||
-			strings.Contains(inner, "@keyframes") ||
-			strings.Contains(inner, "@theme") ||
-			strings.Contains(inner, "@layer") ||
-			strings.Contains(inner, "@media") {
-			*f = flexContent(raw)
-			return nil
-		}
-	}
-
-	// 4. Object path
-	var obj map[string]any
-	if err := json.Unmarshal(b, &obj); err == nil {
-		for _, k := range []string{"content", "text", "body", "code", "source"} {
-			if sv, ok := obj[k].(string); ok {
-				*f = flexContent(sv)
-				return nil
-			}
-		}
-		// Fallback: serialize the object so the LLM sees its mistake
-		b2, _ := json.MarshalIndent(obj, "", "  ")
-		*f = flexContent(string(b2))
-		return nil
-	}
-
-	// 5. Scalar fallback (number, bool…)
-	*f = flexContent(strings.Trim(string(b), `"`))
-	return nil
-}
-
-// flexBool accepts a JSON bool, OR a string ("true"/"false"/"1"/"0"/"yes"/"no"),
-// OR a number (0/1), OR null — LLMs routinely send booleans as strings
-// (outline:"true"), which a plain bool rejects and fails the whole call.
-// Anything unrecognized degrades to false.
-type flexBool bool
-
-func (f *flexBool) UnmarshalJSON(b []byte) error {
-	s := strings.ToLower(strings.TrimSpace(strings.Trim(strings.TrimSpace(string(b)), `"`)))
-	switch s {
-	case "true", "1", "yes", "on":
-		*f = true
-	default:
-		*f = false
-	}
-	return nil
-}
-
 type globParams struct {
 	Pattern    string  `json:"pattern"`
 	Glob       string  `json:"glob"`        // alias : models often key the pattern under the tool name
 	Type       string  `json:"type"`        // "file" | "dir" | "any" (default)
-	MaxResults flexInt `json:"max_results"` // cap (default globDefaultCap)
-	Tree       bool    `json:"tree"`        // render matches as an indented tree instead of a flat list
+	MaxResults flexjson.Int `json:"max_results"` // cap (default globDefaultCap)
+	Tree       *bool   `json:"tree"`        // nil = default true; false only when explicitly set
 }
 
 // effectivePattern resolves the glob pattern, accepting the common LLM mistake of
@@ -1196,7 +1164,7 @@ func (m *Module) glob(ctx context.Context, raw json.RawMessage) (tool.Result, er
 			return nil // unreadable entry : skip, never abort the walk
 		}
 		if d.IsDir() {
-			if _, skip := skipDirs[d.Name()]; skip && abs != realBase {
+			if isSkipped(d.Name(), abs) && abs != realBase {
 				return filepath.SkipDir
 			}
 			if ignore != nil && abs != realBase {
@@ -1265,23 +1233,42 @@ func (m *Module) glob(ctx context.Context, raw json.RawMessage) (tool.Result, er
 	for i, h := range hits {
 		files[i] = h.rel
 	}
-	if p.Tree {
-		return tool.Result{Success: true, Data: map[string]any{"tree": renderPathsTree(files), "count": len(files), "truncated": truncated}}, nil
+	if p.Tree == nil || *p.Tree {
+		var treeOut string
+		if base != "" {
+			treeOut = renderPathsTreeRich(base, files)
+		} else {
+			treeOut = renderPathsTree(files)
+		}
+		return tool.Result{Success: true, Data: map[string]any{"tree": treeOut, "count": len(files), "truncated": truncated}}, nil
 	}
 	return tool.Result{Success: true, Data: map[string]any{"files": files, "count": len(files), "truncated": truncated}}, nil
 }
 
+// astHit is one AST structural-search result returned in the "ast_matches"
+// field. Defined here (no build tag) so the grep handler can use the type
+// regardless of whether treesitter is compiled in.
+type astHit struct {
+	File    string `json:"file"`
+	Line    int    `json:"line"`
+	Symbol  string `json:"symbol"`
+	Kind    string `json:"kind"`
+	Sig     string `json:"sig"`
+	Snippet string `json:"snippet"` // first ~400 chars of the symbol body
+}
+
 type grepParams struct {
 	Pattern    string  `json:"pattern"`
-	Grep       string  `json:"grep"` // alias : models often key the regex under the tool name
+	Grep       string  `json:"grep"`        // alias : models often key the regex under the tool name
 	Path       string  `json:"path"`
 	Include    string  `json:"include"`
-	MaxResults flexInt `json:"max_results"`
-	Context    flexInt `json:"context"`     // lines of context around each match (0-20)
+	MaxResults flexjson.Int `json:"max_results"`
+	Context    flexjson.Int `json:"context"`     // lines of context around each match (0-20)
 	OutputMode string  `json:"output_mode"` // "content" | "files_with_matches" | "count"
-	Multiline  bool    `json:"multiline"`   // match across line boundaries
-	IgnoreCase bool    `json:"ignore_case"` // case-insensitive match
+	Multiline  flexjson.Bool    `json:"multiline"`   // match across line boundaries
+	IgnoreCase flexjson.Bool    `json:"ignore_case"` // case-insensitive match
 	Semantic   string  `json:"semantic"`    // "auto" (default) | "on" | "off" : fuse code-semantic matches
+	ASTPattern string  `json:"ast_pattern"` // structural symbol search via treesitter
 }
 
 func (m *Module) grep(ctx context.Context, raw json.RawMessage) (tool.Result, error) {
@@ -1302,8 +1289,8 @@ func (m *Module) grep(ctx context.Context, raw json.RawMessage) (tool.Result, er
 		p.MaxResults = 1000
 	}
 	switch {
-	case p.Context < 0:
-		p.Context = 0
+	case p.Context <= 0:
+		p.Context = 3 // default 3 lines of context (like grep -C3)
 	case p.Context > 20:
 		p.Context = 20
 	}
@@ -1328,7 +1315,7 @@ func (m *Module) grep(ctx context.Context, raw json.RawMessage) (tool.Result, er
 		// both literal and regex patterns — RE2-safe, no backtracking.
 		pat = "(?i)" + pat
 	}
-	re, literal, err := compilePattern(pat, p.Multiline)
+	re, literal, err := compilePattern(pat, bool(p.Multiline))
 	literalFallback := false
 	if err != nil {
 		// The pattern isn't valid regex — almost always a LITERAL that happens to
@@ -1392,6 +1379,25 @@ func (m *Module) grep(ctx context.Context, raw json.RawMessage) (tool.Result, er
 			return relInside(base, real)
 		},
 	}
+	// Structural AST search — treesitter symbol scan, parallel, 500ms budget.
+	// Returns full symbol bodies in "ast_matches". No-op when ast_pattern is empty
+	// or treesitter is not compiled in (stub returns nil immediately).
+	var astCh chan []astHit
+	if strings.TrimSpace(p.ASTPattern) != "" {
+		astCh = make(chan []astHit, 1)
+		astRoot := root
+		astPat := strings.TrimSpace(p.ASTPattern)
+		astMax := int(p.MaxResults)
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					astCh <- nil
+				}
+			}()
+			astCh <- m.astSearch(ctx, astRoot, astPat, astMax)
+		}()
+	}
+
 	// Code-intelligence enrichment is kicked IN PARALLEL with the exact scan
 	// so it overlaps and never delays grep. Best-effort + recover-guarded +
 	// bounded at the join : a missing / building / broken index just yields
@@ -1434,6 +1440,9 @@ func (m *Module) grep(ctx context.Context, raw json.RawMessage) (tool.Result, er
 		data["count"] = res.Count
 	default:
 		data["matches"] = res.Matches
+		if len(res.Matches) > 0 {
+			data["output"] = formatGrepOutput(res.Matches)
+		}
 	}
 	// Join the parallel enrichment with a hard budget — the exact result is
 	// already computed, so this never slows grep beyond the budget (and the
@@ -1448,7 +1457,52 @@ func (m *Module) grep(ctx context.Context, raw json.RawMessage) (tool.Result, er
 		case <-ctx.Done():
 		}
 	}
+	// Join AST structural search — 500ms budget (treesitter walk is slower).
+	// Already overlapped with the exact scan + semantic enrichment above.
+	if astCh != nil {
+		select {
+		case hits := <-astCh:
+			if len(hits) > 0 {
+				data["ast_matches"] = hits
+			}
+		case <-time.After(500 * time.Millisecond):
+		case <-ctx.Done():
+		}
+	}
 	return tool.Result{Success: true, Data: data}, nil
+}
+
+// formatGrepOutput renders matches in bash-grep style: file:line:content with
+// context lines and file separators. The agent can read line numbers directly
+// and use them in edit(start_line=N) without parsing JSON fields.
+func formatGrepOutput(matches []grepMatch) string {
+	var b strings.Builder
+	lastFile := ""
+	for i, m := range matches {
+		if m.File != lastFile {
+			if lastFile != "" {
+				b.WriteString("--\n")
+			}
+			lastFile = m.File
+		}
+		for j, line := range m.Before {
+			ln := m.LineNum - len(m.Before) + j
+			fmt.Fprintf(&b, "%s:%d: %s\n", m.File, ln, line)
+		}
+		fmt.Fprintf(&b, "%s:%d: %s\n", m.File, m.LineNum, m.Text)
+		for j, line := range m.After {
+			fmt.Fprintf(&b, "%s:%d: %s\n", m.File, m.LineNum+1+j, line)
+		}
+		if i < len(matches)-1 && matches[i+1].File == m.File {
+			// same file, check if next match is a separate block
+			next := matches[i+1]
+			gap := next.LineNum - m.LineNum - len(m.After)
+			if gap > 1 {
+				b.WriteString("--\n")
+			}
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // codeEnrichBudget caps how long grep waits for the parallel code-semantic
@@ -1457,11 +1511,15 @@ const codeEnrichBudget = 200 * time.Millisecond
 
 // codeEnrich runs the semantic code search + graph context for a pattern.
 // recover-guarded : any failure returns nil (grep stays exact-only).
+// Pipeline: BM25-hybrid vector search → call-graph enrichment → cross-encoder rerank.
+// Each step is independently recover-guarded and timeout-bounded: a slow or broken
+// step skips silently, leaving the result from the previous step intact.
 func (m *Module) codeEnrich(ctx context.Context, root string, emb module.Embedder, model, pattern string) (hits []sHit) {
 	defer func() { _ = recover() }()
 	si := sindexes.get(root, m.cfg.MaxFileBytes)
 	si.maybeBuild(emb, model)
-	hits = si.search(ctx, emb, model, pattern, 8)
+	// Fetch extra candidates so reranking has room to reorder (trimmed to 8 at end).
+	hits = si.search(ctx, emb, model, pattern, 16)
 	for i := range hits {
 		sc := codeContextFor(root, m.cfg.MaxFileBytes, hits[i].Path, hits[i].Line)
 		if hits[i].Symbol == "" {
@@ -1469,6 +1527,42 @@ func (m *Module) codeEnrich(ctx context.Context, root string, emb module.Embedde
 		}
 		hits[i].Callers = sc.Callers
 		hits[i].Imports = sc.Imports
+	}
+
+	// Cross-encoder reranking — hard 50ms budget, any failure keeps original order.
+	// The reranker (BGE-reranker-base, ONNX) is injected by the daemon dispatcher
+	// and auto-downloads on first use. Never blocks the caller beyond the budget.
+	if reranker := module.RerankerFrom(ctx); reranker != nil && len(hits) > 1 {
+		func() {
+			defer func() { _ = recover() }()
+			rctx, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+			defer cancel()
+			docs := make([]string, len(hits))
+			for i, h := range hits {
+				docs[i] = h.Snippet
+			}
+			scores, err := reranker.Rerank(rctx, "bge-reranker-base", pattern, docs)
+			if err != nil || len(scores) != len(hits) {
+				return // keep original order
+			}
+			type scored struct {
+				h sHit
+				s float32
+			}
+			sv := make([]scored, len(hits))
+			for i := range hits {
+				sv[i] = scored{hits[i], scores[i]}
+			}
+			sort.Slice(sv, func(a, b int) bool { return sv[a].s > sv[b].s })
+			for i := range hits {
+				hits[i] = sv[i].h
+			}
+		}()
+	}
+
+	// Trim to 8 after optional reranking.
+	if len(hits) > 8 {
+		hits = hits[:8]
 	}
 	return hits
 }

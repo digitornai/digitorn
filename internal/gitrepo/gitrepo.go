@@ -76,10 +76,8 @@ func gitDirOf(workdir string) string { return filepath.Join(workdir, metaDir, gi
 // Open opens — initialising on first use — the shadow repo for workdir.
 func Open(workdir string) (*Repo, error) {
 	gd := gitDirOf(workdir)
-	storer := noGitlinkStorer{filesystem.NewStorage(osfs.New(gd), cache.NewObjectLRUDefault())}
-	// Wrap the worktree FS so go-git's status/add walk never descends into
-	// node_modules / .git / .digitorn — the speed fix without leaving go-git.
-	wtfs := newPruningFS(osfs.New(workdir))
+	storer := noGitlinkStorer{filesystem.NewStorage(osfs.New(gd), cache.NewObjectLRU(8*1024*1024))}
+	wtfs := newPruningFS(osfs.New(workdir), workdir)
 
 	var (
 		repo *git.Repository

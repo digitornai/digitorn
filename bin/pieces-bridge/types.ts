@@ -9,7 +9,7 @@ export interface PieceMetadata {
   categories: string[]
   actions: Record<string, ActionDef>
   triggers: Record<string, TriggerDef>
-  auth?: AuthDef
+  auth?: AuthDef | AuthDef[]
   minimumSupportedRelease?: string
 }
 

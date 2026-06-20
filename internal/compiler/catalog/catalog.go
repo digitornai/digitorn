@@ -79,6 +79,9 @@ func (c *Catalog) HasTool(moduleID, toolName string) bool {
 	if !ok {
 		return false
 	}
+	if toolName == "*" {
+		return true
+	}
 	_, ok = entry.Tools[toolName]
 	return ok
 }

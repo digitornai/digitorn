@@ -304,6 +304,11 @@ export function Session() {
       local.agent.set("plan")
       lastSwitch = part.id
     }
+
+    if (process.env.DIGITORN_URL && scroll && !scroll.isDestroyed) {
+      const distFromBottom = scroll.scrollHeight - scroll.y - scroll.height
+      if (distFromBottom < scroll.height * 0.5) toBottom()
+    }
   })
 
   let seeded = false
@@ -1656,7 +1661,7 @@ function ReasoningPart(props: { last: boolean; part: ReasoningPart; message: Ass
   const inMinimal = createMemo(() => ctx.thinkingMode() === "hide")
   const duration = createMemo(() => {
     const end = props.part.time.end
-    return end === undefined ? 0 : Math.max(0, end - props.part.time.start)
+    return end === undefined ? 0 : Math.max(0, Math.round(end - props.part.time.start))
   })
   const summary = createMemo(() => reasoningSummary(content()))
   const syntax = createMemo(() => generateSubtleSyntax(theme))
@@ -1847,11 +1852,21 @@ function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMess
           </Match>
         </Switch>
       }>
-        {/* Sub-agents (task) use opencode's dedicated Task renderer (nested
-            sub-agent activity); every other tool uses the uniform renderer. */}
-        <Show when={props.part.tool === "task"} fallback={<UniformTool {...toolprops} />}>
-          <Task {...toolprops} />
-        </Show>
+        {/* write/edit use the native diff/code renderer; task uses Task; everything else: UniformTool. */}
+        <Switch>
+          <Match when={props.part.tool === "task"}>
+            <Task {...toolprops} />
+          </Match>
+          <Match when={props.part.tool === "write"}>
+            <Write {...toolprops} />
+          </Match>
+          <Match when={props.part.tool === "edit"}>
+            <Edit {...toolprops} />
+          </Match>
+          <Match when={true}>
+            <UniformTool {...toolprops} />
+          </Match>
+        </Switch>
       </Show>
     </Show>
   )

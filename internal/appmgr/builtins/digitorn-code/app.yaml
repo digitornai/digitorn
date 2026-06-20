@@ -50,6 +50,16 @@ context:
       builtin: session
       priority: 30
 
+    # ── Context pressure — only shown when window is ≥ 60% full. ──
+    - id: context_pressure
+      title: Context pressure
+      template: |
+        Context window: {{session.context_pct}}% used ({{session.tokens}} / {{session.context_max}} tokens).
+        Above 70%: stop exploring broadly — delegate search to sub-agents, close open loops, avoid reading large files directly.
+        Above 85%: finish the current task only and stop. A compaction is imminent.
+      when: "session.context_pct >= 60"
+      priority: 8
+
     # ── Standing per-turn engineering reminders (kept short; the full operating
     #    guide lives in the agent system_prompt). ──
     - id: dev_rules
@@ -65,6 +75,43 @@ context:
       builtin: code_index
       when: session.workdir
       priority: 35
+
+    # ── Project instruction files — loaded read-only from the workdir root.
+    #    Developers place these files to guide the agent on conventions,
+    #    architecture, and project-specific rules. All optional.
+    - id: agents_md
+      file: AGENTS.md
+      optional: true
+      when: session.workdir
+      priority: 42
+    - id: digitorn_md
+      file: DIGITORN.md
+      optional: true
+      when: session.workdir
+      priority: 43
+    - id: claude_md
+      file: CLAUDE.md
+      optional: true
+      when: session.workdir
+      priority: 44
+
+    # ── Claude Code memory (read-only) — the developer's own Claude Code memory
+    #    for this project, injected as context. The agent reads it but never
+    #    writes to it (no writable: true → no writing directive emitted).
+    #    {{env.home}} and {{session.workdir_slug}} resolve at runtime per user/machine.
+    - id: claude_code_memory
+      dir: "{{env.home}}/.claude/projects/{{session.workdir_slug}}/memory"
+      optional: true
+      when: session.workdir
+      priority: 44
+
+    # ── Persistent file memory — loaded fresh every turn, writing directive ──
+    #    always injected. Agent writes to .digitorn/memory/ to build knowledge
+    #    across sessions. Only active when workdir is set.
+    - id: project_memory
+      builtin: memory_index
+      when: session.workdir
+      priority: 45
 
 runtime:
   mode: conversation
@@ -113,7 +160,7 @@ agents:
   - id: main
     role: coordinator
     delegate_to: [explore, general, architect]
-    max_tool_iterations: 60
+    max_tool_iterations: 250
     brain:
       provider: openai
       model: deepseek-v4-flash
@@ -412,11 +459,14 @@ agents:
       agent_spawn: [agent]
       lsp: [diagnostics, notify_change]
       web: [search, fetch]
+      # Piece tools (Activepieces connectors): ap_{piece}__{action} — installed
+      # pieces appear here as native tools. Risk inference + approval gate apply.
+      pieces: ["*"]
 
   - id: explore
     role: specialist
     specialty: "Read-only codebase search: locates code across many files and returns the conclusion, not raw dumps."
-    max_tool_iterations: 40
+    max_tool_iterations: 150
     brain:
       provider: openai
       model: deepseek-v4-flash
@@ -464,7 +514,7 @@ agents:
   - id: general
     role: specialist
     specialty: "General-purpose worker: completes a self-contained subtask end to end and reports back."
-    max_tool_iterations: 50
+    max_tool_iterations: 150
     brain:
       provider: openai
       model: deepseek-v4-flash
@@ -510,7 +560,7 @@ agents:
   - id: architect
     role: specialist
     specialty: "Design specialist: investigates the codebase and returns a concrete, step-by-step implementation plan — files to touch, patterns to follow, tradeoffs and risks. Read-only; never writes code."
-    max_tool_iterations: 40
+    max_tool_iterations: 150
     brain:
       provider: openai
       model: deepseek-v4-flash
@@ -584,6 +634,9 @@ tools:
     # Web search + fetch (SSRF-hardened). Lets the agent verify a library API or
     # look up current docs/errors instead of guessing from stale knowledge.
     web: {}
+    # Piece tools — Activepieces connectors loaded dynamically via the bridge
+    # subprocess. No static config needed; the bridge discovers tools at start.
+    pieces: {}
   capabilities:
     default_policy: auto
     grant:
@@ -599,6 +652,8 @@ tools:
         tools: [notify_change, diagnostics]
       - module: web
         tools: [search, fetch]
+      - module: pieces
+        tools: ["*"]
     approve:
       - module: bash
         tools: [run]

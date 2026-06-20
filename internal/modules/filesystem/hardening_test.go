@@ -97,7 +97,7 @@ func TestHardening_EmptyFileAndNoMatchGlob(t *testing.T) {
 	if r, err := m.read(ctx, mustJSON(map[string]any{"path": "empty.txt"})); err != nil || !r.Success {
 		t.Fatalf("read empty file: err=%v success=%v", err, r.Success)
 	}
-	if r, err := m.glob(ctx, mustJSON(map[string]any{"pattern": "*.nonexistent_ext"})); err != nil || !r.Success {
+	if r, err := m.glob(ctx, mustJSON(map[string]any{"pattern": "*.nonexistent_ext", "tree": false})); err != nil || !r.Success {
 		t.Fatalf("no-match glob must succeed cleanly: err=%v", err)
 	}
 }

@@ -385,36 +385,109 @@ func checkDdArgs(args []string) error {
 	return nil
 }
 
-// bashismPatterns match UNAMBIGUOUS bash syntax that PowerShell never produces,
-// so detecting them can't false-positive on a real PowerShell command. Checked
-// AFTER env-var translation (psEnv), so a translated `export`/inline-env no
-// longer trips them — only genuinely un-runnable bash does.
-var bashismPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`;\s*(then|do|done|fi|elif|esac)\b`),     // if/for/while/case bodies
-	regexp.MustCompile(`\[\[?\s+-[a-zA-Z]\b`),                   // [ -f x ] / [[ -d y ]] test
-	regexp.MustCompile(`(^|[;&|]|\bdo\b)\s*test\s+-[a-zA-Z]\b`), // test -f / test -d
-	regexp.MustCompile(`(^|[;&|])\s*source\s`),                  // source venv/bin/activate
-	regexp.MustCompile(`(^|[;&|])\s*export\s`),                  // export left untranslated ($-value)
+// ── PTY auto-detection ──────────────────────────────────────────────────────
+
+// needsPTY reports whether command requires a pseudo-terminal to work correctly.
+// These are commands where isatty() must return true — docker -it, ssh, and
+// interactive auth CLIs that open a browser or prompt. The check is deliberately
+// conservative: only unambiguous cases are auto-promoted so that a simple
+// `python script.py` never accidentally opens an interactive REPL.
+//
+// Works identically for bash and PowerShell command strings since the CLIs
+// (docker, ssh, winget, az, gh, gcloud, aws) use the same flags on all OS.
+func needsPTY(command string) bool {
+	masked := maskQuoted(command)
+	for _, re := range ptyAutoPatterns {
+		if re.MatchString(masked) {
+			return true
+		}
+	}
+	return false
 }
 
-// bashismHint returns a clear, actionable message when the command uses bash
-// syntax that does NOT run on the PowerShell shell — so the agent gets guidance
-// instead of a cryptic "[scriptblock]::Create" parse exception it would loop on.
-// Returns "" when nothing unambiguously-bash is present.
+var ptyAutoPatterns = []*regexp.Regexp{
+	// docker run / docker exec with -t (tty) flag — alone, combined (-it/-ti), or --tty.
+	// We require the docker subcommand to come first so `echo "docker run -it"` is ignored.
+	regexp.MustCompile(`(?i)\bdocker\s+(?:run|exec)\b[^|&;]*(?:\s-[a-zA-Z]*t|-{1,2}tty)\b`),
+
+	// ssh to a remote host — needs PTY for interactive shell or -t flag forwarding.
+	// Matches any `ssh` invocation with at least one argument.
+	// (ssh -N port-forwarding with PTY is harmless: no interactive prompt, no hang.)
+	regexp.MustCompile(`(?i)(?:^|[|;&]\s*)\bssh\b\s+\S`),
+
+	// Windows: winget interactive commands (install/upgrade prompt for confirmation).
+	regexp.MustCompile(`(?i)\bwinget\s+(?:install|upgrade|import)\b`),
+
+	// Cloud / auth CLIs that open a browser or interactive prompt.
+	// az login, gcloud auth login, gh auth login, aws configure, aws sso login.
+	regexp.MustCompile(`(?i)\baz\s+login\b`),
+	regexp.MustCompile(`(?i)\bgcloud\s+auth\s+login\b`),
+	regexp.MustCompile(`(?i)\bgh\s+auth\s+login\b`),
+	regexp.MustCompile(`(?i)\baws\s+(?:configure|sso\s+login)\b`),
+
+	// sudo interactive shell switching — needs PTY for the target shell.
+	regexp.MustCompile(`(?i)\bsudo\s+(?:su\b|-[isSu]\b)`),
+}
+
+// bashismEntry is one pattern + its specific PowerShell fix.
+type bashismEntry struct {
+	re  *regexp.Regexp
+	msg string
+}
+
+// bashismChecks matches UNAMBIGUOUS bash syntax that won't run in PowerShell,
+// with a precise, actionable fix for each pattern. Checked AFTER psEnv translation
+// so a translated `export`/inline-env no longer trips them.
+var bashismChecks = []bashismEntry{
+	{
+		re: regexp.MustCompile(`(^|[;&|])\s*source\s`),
+		msg: "PowerShell uses dot-sourcing instead of `source`: `. ./script.ps1`  " +
+			"If the script is bash, run it via `bash -c '. ./script.sh && <next command>'` " +
+			"(single quotes so PowerShell doesn't expand $vars before bash sees them).",
+	},
+	{
+		re: regexp.MustCompile(`;\s*(then|do|done|fi|elif|esac)\b`),
+		msg: "PowerShell uses different control-flow syntax — bash `if/for/while/case` " +
+			"don't parse here.\n" +
+			"  bash: `if [[ -f x ]]; then cmd; fi`\n" +
+			"  PS:   `if (Test-Path x) { cmd }`\n" +
+			"  bash: `for f in *.go; do echo $f; done`\n" +
+			"  PS:   `foreach ($f in Get-ChildItem *.go) { Write-Output $f.Name }`\n" +
+			"Alternatively, write a bash script with filesystem.write and run it via `bash -c`.",
+	},
+	{
+		re: regexp.MustCompile(`\[\[?\s+-[a-zA-Z]\b`),
+		msg: "Bash test syntax `[ -f x ]` / `[[ -d y ]]` is not PowerShell.\n" +
+			"  `-f file`  →  `Test-Path file -PathType Leaf`\n" +
+			"  `-d dir`   →  `Test-Path dir  -PathType Container`\n" +
+			"  `-z $VAR`  →  `[string]::IsNullOrEmpty($env:VAR)`\n" +
+			"  `$A == $B` →  `$A -eq $B`",
+	},
+	{
+		re: regexp.MustCompile(`(^|[;&|]|\bdo\b)\s*test\s+-[a-zA-Z]\b`),
+		msg: "Bash `test -f file` is not available in PowerShell. Use `Test-Path file -PathType Leaf` instead.",
+	},
+	{
+		re: regexp.MustCompile(`(^|[;&|])\s*export\s`),
+		msg: "Bare `export VAR=value` was not translated (complex value). " +
+			"Use `$env:VAR = 'value'` in PowerShell, or pass it inline: `$env:VAR='v'; command`.",
+	},
+}
+
+// bashismHint returns a clear, actionable PowerShell-specific fix when the
+// command uses bash-only syntax. Each pattern gives its own precise guidance
+// so the agent can correct the command immediately. Returns "" when the command
+// is fine for PowerShell.
 //
-// The check runs on a QUOTE-MASKED copy : bash syntax inside quotes is
-// intentional (`bash -c "for x; do …; done"`, `echo "test -f …"`) and must NOT
-// be flagged — explicitly invoking bash is the correct escape hatch, not an error.
+// Runs on a QUOTE-MASKED copy so bash syntax inside quoted strings
+// (e.g. `bash -c "for x; do …"`) is not flagged.
 func bashismHint(command string) string {
 	masked := maskQuoted(command)
-	for _, re := range bashismPatterns {
-		if re.MatchString(masked) {
-			return "this shell is PowerShell, not bash — that command uses bash-only syntax " +
-				"(`if/for/while/[ ]/test`, `export`, or `source`) that won't run directly here. Either use " +
-				"PowerShell (`$env:VAR='v'`, `foreach ($x in …) {…}`, `if (…) {…}`, `Test-Path`), or run the " +
-				"exact bash via `bash -c '…'` — real bash is available; use SINGLE quotes so PowerShell does " +
-				"not expand `$vars` before bash sees them — or write a script file with filesystem.write and " +
-				"run it. Plain commands, pipes, `&&`, `||`, `$(…)`, `export VAR=v` and `2>/dev/null` already work."
+	for _, e := range bashismChecks {
+		if e.re.MatchString(masked) {
+			return "PowerShell syntax required — " + e.msg +
+				"\n\nAlways available: plain commands, pipes (`|`), " +
+				"`&&`/`||` chaining, `$(cmd)` substitution, `$env:VAR`, `>/dev/null`, `2>&1`."
 		}
 	}
 	return ""

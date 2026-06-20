@@ -84,7 +84,18 @@ type ContextView struct {
 // origin ; the caller overlays Round / LiveOutput / a fresher Used when it has
 // them (e.g. straight off a tokenizer notification).
 func ViewFromSnapshot(snap sessionstore.SessionSnapshot, brain schema.Brain) ContextView {
-	s := Resolve(snap, brain)
+	return ViewFromSnapshotWithRuntime(snap, brain, 0)
+}
+
+// ViewFromSnapshotWithRuntime is ViewFromSnapshot with a runtime-level window
+// fallback (runtime.context.max_tokens) used when the brain has no explicit
+// max_tokens and the model is not in the built-in window table.
+func ViewFromSnapshotWithRuntime(snap sessionstore.SessionSnapshot, brain schema.Brain, runtimeMaxTokens int) ContextView {
+	return ViewFromSnapshotWithRuntimeAndGateway(snap, brain, runtimeMaxTokens, 0)
+}
+
+func ViewFromSnapshotWithRuntimeAndGateway(snap sessionstore.SessionSnapshot, brain schema.Brain, runtimeMaxTokens, gatewayWindow int) ContextView {
+	s := ResolveWithRuntimeAndGateway(snap, brain, runtimeMaxTokens, gatewayWindow)
 	v := ContextView{
 		Used:           s.TokensUsed,
 		Window:         s.Window,

@@ -22,6 +22,7 @@ import (
 	_ "go.uber.org/automaxprocs"
 
 	"github.com/mbathepaul/digitorn/internal/module/worker"
+	"github.com/mbathepaul/digitorn/internal/pathutil"
 
 	// Built-in modules. Each side-effect import registers the module
 	// in pkg/module.Default ; the runner picks the right ones at
@@ -35,11 +36,13 @@ import (
 	_ "github.com/mbathepaul/digitorn/internal/modules/mcp"
 	_ "github.com/mbathepaul/digitorn/internal/modules/pieces"
 	_ "github.com/mbathepaul/digitorn/internal/modules/rag"
+	_ "github.com/mbathepaul/digitorn/internal/modules/http"
 	_ "github.com/mbathepaul/digitorn/internal/modules/web"
 	_ "github.com/mbathepaul/digitorn/internal/modules/workspace"
 )
 
 func main() {
+	pathutil.AugmentPath()
 	if err := worker.Run(worker.Defaults()); err != nil {
 		fmt.Fprintf(os.Stderr, "digitorn-worker: %v\n", err)
 		os.Exit(1)

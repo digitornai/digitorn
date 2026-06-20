@@ -60,14 +60,37 @@ type Snapshot struct {
 // call on the hot path every turn. A zero-value brain resolves the window via
 // the provider/model default table.
 func Resolve(snap sessionstore.SessionSnapshot, brain schema.Brain) Snapshot {
+	return ResolveWithRuntime(snap, brain, 0)
+}
+
+// ResolveWithRuntime is Resolve with an explicit runtime-level window hint.
+// Precedence: brain.context.max_tokens → runtimeMaxTokens → model table.
+func ResolveWithRuntime(snap sessionstore.SessionSnapshot, brain schema.Brain, runtimeMaxTokens int) Snapshot {
+	return ResolveWithRuntimeAndGateway(snap, brain, runtimeMaxTokens, 0)
+}
+
+// ResolveWithRuntimeAndGateway resolves the context window with the full priority chain:
+//  1. brain.context.max_tokens  (explicit per-agent YAML config)
+//  2. gatewayWindow             (live from /v1/models max_context_tokens — changes with model switch)
+//  3. runtimeMaxTokens          (app-level runtime.context.max_tokens — general ceiling)
+//  4. ContextWindowFor()        (hardcoded table — last resort for unknown models)
+//
+// gatewayWindow wins over runtimeMaxTokens so switching to a smaller-window model
+// automatically caps the budget and triggers proactive compaction before overflow.
+func ResolveWithRuntimeAndGateway(snap sessionstore.SessionSnapshot, brain schema.Brain, runtimeMaxTokens, gatewayWindow int) Snapshot {
 	window := 0
 	reserved := 0
 	if brain.Context != nil {
 		window = brain.Context.MaxTokens
 		reserved = brain.Context.OutputReserved
 	}
+	if window <= 0 && gatewayWindow > 0 {
+		window = gatewayWindow
+	}
+	if window <= 0 && runtimeMaxTokens > 0 {
+		window = runtimeMaxTokens
+	}
 	if window <= 0 {
-		// max_tokens:0 → auto-detect the provider's documented window.
 		window = contextcompact.ContextWindowFor(brain.Provider, brain.Model)
 	}
 	if reserved <= 0 {

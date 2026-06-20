@@ -1,33 +1,50 @@
 package gitrepo
 
 import (
+	"bufio"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/go-git/go-billy/v5"
 )
 
-// prunedDirs are directory basenames go-git's worktree walk must never descend
-// into. They are dependency / VCS metadata trees that hold no agent change worth
-// tracking and that the shadow repo already excludes anyway — but go-git, unlike
-// native git, would still stat every file inside them to apply the ignore rules.
-// Hiding them at the filesystem boundary keeps the walk O(real files), not
-// O(repo). The set is deliberately tiny: only dirs that are NEVER tracked agent
-// changes, so the visible status is identical to walking the whole tree.
 var prunedDirs = map[string]bool{
 	".git":         true,
-	metaDir:        true, // .digitorn (the shadow repo lives here)
+	metaDir:        true,
 	"node_modules": true,
 }
 
-// pruningFS wraps a billy.Filesystem and removes prunedDirs from every ReadDir,
-// so go-git never recurses into them. Only the worktree-walk surface (ReadDir,
-// and Chroot which go-git uses to descend) is overridden; all other operations
-// pass straight through. Pure read-side filter: it changes nothing on disk.
 type pruningFS struct {
 	billy.Filesystem
+	extraPruned map[string]bool
 }
 
-func newPruningFS(fs billy.Filesystem) pruningFS { return pruningFS{Filesystem: fs} }
+func newPruningFS(fs billy.Filesystem, workdir string) pruningFS {
+	return pruningFS{Filesystem: fs, extraPruned: loadGitignoreDirs(workdir)}
+}
+
+func loadGitignoreDirs(workdir string) map[string]bool {
+	out := map[string]bool{}
+	f, err := os.Open(filepath.Join(workdir, ".gitignore"))
+	if err != nil {
+		return out
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "!") {
+			continue
+		}
+		name := strings.TrimSuffix(line, "/")
+		if strings.ContainsAny(name, "/*?[") {
+			continue
+		}
+		out[name] = true
+	}
+	return out
+}
 
 func (f pruningFS) ReadDir(path string) ([]os.FileInfo, error) {
 	ents, err := f.Filesystem.ReadDir(path)
@@ -36,7 +53,7 @@ func (f pruningFS) ReadDir(path string) ([]os.FileInfo, error) {
 	}
 	out := ents[:0]
 	for _, e := range ents {
-		if e.IsDir() && prunedDirs[e.Name()] {
+		if e.IsDir() && (prunedDirs[e.Name()] || f.extraPruned[e.Name()]) {
 			continue
 		}
 		out = append(out, e)
@@ -49,5 +66,5 @@ func (f pruningFS) Chroot(path string) (billy.Filesystem, error) {
 	if err != nil {
 		return nil, err
 	}
-	return pruningFS{Filesystem: sub}, nil
+	return pruningFS{Filesystem: sub, extraPruned: f.extraPruned}, nil
 }

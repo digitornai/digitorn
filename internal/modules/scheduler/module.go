@@ -22,6 +22,7 @@ import (
 
 	domainmodule "github.com/mbathepaul/digitorn/internal/domain/module"
 	"github.com/mbathepaul/digitorn/internal/domain/tool"
+	"github.com/mbathepaul/digitorn/internal/flexjson"
 	"github.com/mbathepaul/digitorn/pkg/module"
 )
 
@@ -149,7 +150,7 @@ func (m *Module) schedule(ctx context.Context, raw json.RawMessage) (tool.Result
 		Message  string `json:"message"`
 		Context  string `json:"context"`
 		Reply    string `json:"reply"`
-		Reports  bool   `json:"reports"`
+		Reports  flexjson.Bool   `json:"reports"`
 	}
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return tool.Result{Success: false, Error: "invalid params: " + err.Error()}, nil

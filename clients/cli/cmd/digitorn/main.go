@@ -6,6 +6,7 @@
 //
 // Run `digitorn --help` for the full command list. The TUI launches
 // with `digitorn chat <app-id>`.
+
 package main
 
 import (
@@ -33,41 +34,46 @@ func main() {
 	}
 }
 
-// newRoot builds the cobra command tree. Subcommands are wired in
-// here as they land in subsequent sprints (CLI-1 list/install, CLI-3
-// chat, etc.). Keeping all subcommand wiring in this single function
-// avoids surprise init() ordering bugs.
+
+
 func newRoot() *cobra.Command {
-	root := &cobra.Command{
-		Use:   "digitorn",
-		Short: "Native TUI/CLI client for digitorn agent apps",
-		Long: "" +
-			"digitorn is the terminal client for the digitorn daemon.\n" +
-			"It talks to a running daemon over REST + Socket.IO and gives\n" +
-			"you chat, app management, session browsing — all from your shell.",
-		Version:       version,
-		SilenceUsage:  true,
-		SilenceErrors: true,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			// Default behavior when called without subcommand : print
-			// the help text. The TUI does NOT auto-launch — explicit
-			// `digitorn chat` is required, to avoid surprising users
-			// who just ran the binary to see what it does.
-			return cmd.Help()
-		},
-	}
-	// Subcommands wired here as sprints land :
-	root.AddCommand(commands.NewList())      // list installed apps
-	root.AddCommand(commands.NewChat())      // TUI chat
-	root.AddCommand(commands.NewSessions())  // list sessions per app
-	root.AddCommand(commands.NewInstall())   // install an app
-	root.AddCommand(commands.NewUninstall()) // remove an app
-	root.AddCommand(commands.NewEnable())    // enable an app
-	root.AddCommand(commands.NewDisable())   // disable an app
-	root.AddCommand(commands.NewLogin())     // OAuth sign-in via browser
-	root.AddCommand(commands.NewLogout())    // wipe local credentials
-	root.AddCommand(commands.NewWhoami())    // who's signed in
-	return root
+		// Propagate build-time version to the commands package.
+		commands.Version = version
+
+		root := &cobra.Command{
+			Use:   "digitorn",
+			Short: "Official CLI client for the digitorn daemon",
+			Long: "Digitorn is the terminal client for the digitorn daemon.\n" +
+				"It talks to a running daemon over REST + Socket.IO and gives\n" +
+				"you chat, app management, session browsing — all from your shell.",
+			Version:       version,
+			SilenceUsage:  true,
+			SilenceErrors: true,
+			RunE: func(cmd *cobra.Command, args []string) error {
+
+				return cmd.Help()
+			},
+		}
+
+		root.AddCommand(commands.NewChat())      // TUI chat (launches the opencode fork)
+		root.AddCommand(commands.NewList())      // list installed apps
+		root.AddCommand(commands.NewSessions())  // list sessions per app
+		root.AddCommand(commands.NewInstall())   // install an app
+		root.AddCommand(commands.NewUninstall()) // remove an app
+		root.AddCommand(commands.NewEnable())    // enable an app
+		root.AddCommand(commands.NewDisable())   // disable an app
+		root.AddCommand(commands.NewLogin())     // OAuth sign-in via browser
+		root.AddCommand(commands.NewLogout())    // wipe local credentials
+		root.AddCommand(commands.NewWhoami())    // who's signed in
+		root.AddCommand(commands.NewAppInfo())   // app info
+		root.AddCommand(commands.NewAppStatus()) // app health
+		root.AddCommand(commands.NewAppReload()) // app reload
+		root.AddCommand(commands.NewDaemonStats()) // daemon stats
+		root.AddCommand(commands.NewSecret())    // secret group
+		root.AddCommand(commands.NewVersion())   // version
+		root.AddCommand(commands.NewStatus())    // daemon status
+		root.AddCommand(commands.NewDoctor())    // environment doctor
+		return root
 }
 
 // ensureBuildable is a no-op guard called from tests to verify the

@@ -42,6 +42,7 @@ type registryActions struct {
 	Registry *module.Registry
 	Apps     appmgr.Manager
 	MCP      *mcpCatalog
+	Pieces   *piecesCatalog
 }
 
 // ForApp implements wiring.AvailableActions. ctx-free contract
@@ -91,6 +92,10 @@ func (a registryActions) ForApp(appID string) []policy.AvailableAction {
 		mcpActions = filterMCPByServer(mcpActions, allowed)
 	}
 	out = append(out, mcpActions...)
+	// Pieces virtual tools — same pattern as MCP: fetch LiveTools from the
+	// pieces bridge and inject them into the universe so the tool index sees them.
+	piecesActions := a.Pieces.forApp(appID)
+	out = append(out, piecesActions...)
 	return out
 }
 
@@ -236,6 +241,7 @@ func (c registryContributors) Gather(scope domainmodule.PromptScope, authorizedM
 type registryToolSpecs struct {
 	Registry *module.Registry
 	MCP      *mcpCatalog
+	Pieces   *piecesCatalog
 }
 
 func (r registryToolSpecs) LookupToolSpec(moduleID, action string) *tool.Spec {
@@ -247,18 +253,11 @@ func (r registryToolSpecs) LookupToolSpec(moduleID, action string) *tool.Spec {
 		}
 	}
 	// ap_<piece> tools are runtime-discovered from the pieces bridge.
-	// Reconstruct the canonical wire name and look it up via the pieces LiveTooler.
-	if r.Registry != nil && strings.HasPrefix(moduleID, "ap_") {
-		if mod, err := r.Registry.Get("pieces"); err == nil {
-			if lt, ok := mod.(domainmodule.LiveTooler); ok {
-				wireName := moduleID + "__" + action
-				for _, spec := range lt.LiveTools(context.Background()) {
-					if spec.Name == wireName {
-						s := spec
-						return &s
-					}
-				}
-			}
+	// The LLM sees them as "ap_{piece}.{action}" and they're registered
+	// under module "ap_{piece}" with the canonical FQN.
+	if r.Pieces != nil && strings.HasPrefix(moduleID, "ap_") {
+		if s := r.Pieces.lookupSpec(moduleID, action); s != nil {
+			return s
 		}
 	}
 	if r.Registry == nil {

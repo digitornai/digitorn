@@ -2,6 +2,7 @@ package filesystem
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -10,6 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/mbathepaul/digitorn/internal/modules/rag"
 	pkgmodule "github.com/mbathepaul/digitorn/pkg/module"
 )
 
@@ -23,8 +25,8 @@ import (
 
 const (
 	sindexTTL        = 15 * time.Minute // idle index ages out
-	sindexMaxRoots   = 4                // hot per-workdir indexes kept (memory cap)
-	sindexMaxChunks  = 8000             // per-root chunk cap (memory cap)
+	sindexMaxRoots   = 2                // hot per-workdir indexes (was 4 — halves peak RAM)
+	sindexMaxChunks  = 3000             // per-root chunk cap (was 8000 — 62% less RAM)
 	sindexChunkLines = 60
 	sindexOverlap    = 10
 	sindexBatch      = 64
@@ -40,8 +42,9 @@ var sindexIgnoredDirs = map[string]bool{
 type sChunk struct {
 	path string
 	line int
-	text string
+	text string // used during build for embedding+BM25, then cleared to save RAM
 	sym  string // "func Deploy" etc. (AST chunks) ; empty for line windows
+	end  int    // last line of this chunk (for on-demand disk reads)
 	vec  []float32
 }
 
@@ -64,6 +67,7 @@ type sindex struct {
 	ready    bool
 	model    string
 	chunks   []sChunk
+	bm25     *rag.BM25 // parallel keyword index for BM25-hybrid scoring
 	builtAt  time.Time
 	usedAt   time.Time
 	dirty    bool
@@ -143,9 +147,10 @@ func (s *sindex) maybeBuild(emb pkgmodule.Embedder, model string) {
 			s.building = false
 			s.mu.Unlock()
 		}()
-		chunks := s.build(emb, model)
+		chunks, bm := s.build(emb, model)
 		s.mu.Lock()
 		s.chunks = chunks
+		s.bm25 = bm
 		s.ready = true
 		s.dirty = false
 		s.builtAt = time.Now()
@@ -153,10 +158,11 @@ func (s *sindex) maybeBuild(emb pkgmodule.Embedder, model string) {
 	}()
 }
 
-func (s *sindex) build(emb pkgmodule.Embedder, model string) []sChunk {
+func (s *sindex) build(emb pkgmodule.Embedder, model string) ([]sChunk, *rag.BM25) {
 	var pending []sChunk
 	var texts []string
 	out := make([]sChunk, 0, 1024)
+	bm := rag.NewBM25() // fresh BM25 for this build
 
 	flush := func() {
 		if len(texts) == 0 {
@@ -166,6 +172,7 @@ func (s *sindex) build(emb pkgmodule.Embedder, model string) []sChunk {
 		if err == nil && len(vecs) == len(pending) {
 			for i := range pending {
 				pending[i].vec = vecs[i]
+				pending[i].text = "" // clear text after embedding — saves ~19 MB per root
 				out = append(out, pending[i])
 			}
 		}
@@ -201,6 +208,7 @@ func (s *sindex) build(emb pkgmodule.Embedder, model string) []sChunk {
 			chs = chunkLines(string(b), rel) // fallback : line windows
 		}
 		for _, ch := range chs {
+			bm.Add(fmt.Sprintf("%s:%d", ch.path, ch.line), ch.text)
 			pending = append(pending, ch)
 			texts = append(texts, ch.text)
 			if len(texts) >= sindexBatch {
@@ -213,7 +221,7 @@ func (s *sindex) build(emb pkgmodule.Embedder, model string) []sChunk {
 		return nil
 	})
 	flush()
-	return out
+	return out, bm
 }
 
 // search embeds the query and returns the topK nearest code chunks. nil
@@ -226,6 +234,7 @@ func (s *sindex) search(ctx context.Context, emb pkgmodule.Embedder, model, quer
 	}
 	s.usedAt = time.Now()
 	chunks := s.chunks
+	bm := s.bm25
 	s.mu.Unlock()
 
 	vecs, _, err := emb.EmbedModel(ctx, model, "query", []string{query})
@@ -233,23 +242,77 @@ func (s *sindex) search(ctx context.Context, emb pkgmodule.Embedder, model, quer
 		return nil
 	}
 	q := vecs[0]
+
+	// HyDE (Hypothetical Document Embeddings) — for complex multi-word queries,
+	// generate a template code snippet and average its embedding with the query
+	// vector. Improves conceptual recall (e.g. "handles rate limiting").
+	// Hard 30ms budget, recover-guarded; failure leaves q unchanged.
+	func() {
+		defer func() { recover() }()
+		hydeDoc := hydeExpand(query)
+		if hydeDoc == "" {
+			return
+		}
+		hctx, cancel := context.WithTimeout(ctx, 30*time.Millisecond)
+		defer cancel()
+		hydeVecs, _, herr := emb.EmbedModel(hctx, model, "document", []string{hydeDoc})
+		if herr != nil || len(hydeVecs) == 0 || len(hydeVecs[0]) != len(q) {
+			return
+		}
+		hv := hydeVecs[0]
+		for i := range q {
+			q[i] = 0.55*q[i] + 0.45*hv[i] // weight query slightly more than hypothesis
+		}
+	}()
+
+	// BM25 keyword scores — pure in-memory, ~0ms, recover-guarded.
+	bm25Map := make(map[string]float32, 64)
+	func() {
+		defer func() { recover() }()
+		if bm == nil {
+			return
+		}
+		bmHits := bm.Search(query, 100)
+		var maxScore float64
+		for _, h := range bmHits {
+			if h.Score > maxScore {
+				maxScore = h.Score
+			}
+		}
+		if maxScore > 0 {
+			for _, h := range bmHits {
+				bm25Map[h.ID] = float32(h.Score / maxScore)
+			}
+		}
+	}()
+
+	// Vector cosine scores — fused with BM25: 0.6×vector + 0.4×BM25.
 	hits := make([]sHit, 0, len(chunks))
 	for i := range chunks {
-		score := cosineF(q, chunks[i].vec)
-		if score <= 0 {
+		vec := cosineF(q, chunks[i].vec)
+		if vec <= 0 {
 			continue
 		}
-		hits = append(hits, sHit{Path: chunks[i].path, Line: chunks[i].line, Symbol: chunks[i].sym, Snippet: snippet(chunks[i].text), Score: score})
+		id := fmt.Sprintf("%s:%d", chunks[i].path, chunks[i].line)
+		fused := 0.6*vec + 0.4*bm25Map[id]
+		hits = append(hits, sHit{Path: chunks[i].path, Line: chunks[i].line, Symbol: chunks[i].sym, Score: fused})
+		// Snippet field left empty — filled in below for top-K only (disk read).
 	}
 	sort.Slice(hits, func(i, j int) bool { return hits[i].Score > hits[j].Score })
 	if topK > 0 && len(hits) > topK {
 		hits = hits[:topK]
 	}
+	// Read snippets from disk only for the top-K results so we never keep
+	// the text of 8000 chunks in RAM (was ~19 MB per indexed root).
+	for i := range hits {
+		hits[i].Snippet = readChunkSnippet(s.root, hits[i].Path, hits[i].Line)
+	}
 	return hits
 }
 
 // chunkLines splits source into overlapping line windows, tagged with the
-// 1-based start line for citation.
+// 1-based start line for citation. Text is kept temporarily for embedding;
+// callers clear it before storing the chunk to save RAM.
 func chunkLines(src, path string) []sChunk {
 	lines := strings.Split(src, "\n")
 	var out []sChunk
@@ -258,27 +321,118 @@ func chunkLines(src, path string) []sChunk {
 		step = sindexChunkLines
 	}
 	for i := 0; i < len(lines); i += step {
-		end := i + sindexChunkLines
-		if end > len(lines) {
-			end = len(lines)
+		endIdx := i + sindexChunkLines
+		if endIdx > len(lines) {
+			endIdx = len(lines)
 		}
-		text := strings.TrimSpace(strings.Join(lines[i:end], "\n"))
+		text := strings.TrimSpace(strings.Join(lines[i:endIdx], "\n"))
 		if text != "" {
-			out = append(out, sChunk{path: path, line: i + 1, text: text})
+			out = append(out, sChunk{path: path, line: i + 1, end: endIdx, text: text})
 		}
-		if end == len(lines) {
+		if endIdx == len(lines) {
 			break
 		}
 	}
 	return out
 }
 
-func snippet(s string) string {
+// readChunkSnippet reads sindexChunkLines lines starting at startLine from
+// the workspace-relative relPath. Called only for top-K search hits so the
+// disk I/O is bounded (typically 8 reads per grep call).
+func readChunkSnippet(root, relPath string, startLine int) string {
+	abs := filepath.Join(root, filepath.FromSlash(relPath))
+	b, err := os.ReadFile(abs)
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(string(b), "\n")
+	lo := startLine - 1
+	if lo < 0 {
+		lo = 0
+	}
+	hi := lo + sindexChunkLines
+	if hi > len(lines) {
+		hi = len(lines)
+	}
+	s := strings.TrimSpace(strings.Join(lines[lo:hi], "\n"))
 	const max = 800
 	if len(s) > max {
 		return s[:max] + "\n…"
 	}
 	return s
+}
+
+// hydeExpand generates a template hypothetical Go code snippet from a natural
+// language query (Hypothetical Document Embeddings). Returns "" for short or
+// low-information queries where HyDE adds no value. The snippet is embedded
+// and averaged with the query vector to improve conceptual recall.
+func hydeExpand(query string) string {
+	words := strings.Fields(strings.ToLower(query))
+	if len(words) < 4 {
+		return "" // short queries: BM25+vector already handles them well
+	}
+	stopWords := map[string]bool{
+		"the": true, "a": true, "an": true, "is": true, "are": true,
+		"that": true, "for": true, "with": true, "to": true, "of": true,
+		"in": true, "on": true, "at": true, "by": true, "from": true,
+		"and": true, "or": true, "but": true, "how": true, "when": true,
+		"what": true, "which": true, "code": true, "function": true,
+	}
+	codeKws := []string{
+		"error", "context", "http", "json", "auth", "token", "rate",
+		"limit", "retry", "timeout", "cache", "parse", "decode", "encode",
+		"validate", "handle", "process", "fetch", "send", "connect",
+		"read", "write", "create", "delete", "update", "list", "search",
+		"filter", "stream", "event", "notify", "log", "metric", "trace",
+		"middleware", "handler", "client", "server", "session", "request",
+		"response", "database", "query", "transaction", "pool", "worker",
+	}
+	q := strings.Join(words, " ")
+	var tags []string
+	for _, kw := range codeKws {
+		if strings.Contains(q, kw) {
+			tags = append(tags, kw)
+		}
+	}
+
+	// Build function name from first 2-3 content words.
+	var nameParts []string
+	for _, w := range words {
+		if stopWords[w] || len(w) < 3 {
+			continue
+		}
+		nameParts = append(nameParts, strings.ToUpper(w[:1])+w[1:])
+		if len(nameParts) == 3 {
+			break
+		}
+	}
+	if len(nameParts) == 0 {
+		return ""
+	}
+
+	params := "ctx context.Context"
+	ret := "error"
+	for _, t := range tags {
+		switch t {
+		case "list", "fetch", "search", "query":
+			ret = "([]interface{}, error)"
+		case "parse", "decode":
+			params += ", data []byte"
+		case "http", "request", "handler":
+			params += ", r *http.Request, w http.ResponseWriter"
+		case "token", "auth", "session":
+			params += ", token string"
+		case "database", "transaction":
+			params += ", db *sql.DB"
+		}
+	}
+
+	comment := query
+	if len(tags) > 0 {
+		comment = fmt.Sprintf("%s // keywords: %s", query, strings.Join(tags, ", "))
+	}
+	return fmt.Sprintf("func %s(%s) %s {\n\t// %s\n\treturn nil\n}",
+		strings.Join(nameParts, ""), params, ret, comment)
 }
 
 func cosineF(a, b []float32) float32 {

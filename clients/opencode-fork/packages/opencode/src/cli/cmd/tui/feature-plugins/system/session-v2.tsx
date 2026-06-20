@@ -577,6 +577,7 @@ function InlineTool(props: {
   complete: unknown
   pending: string
   spinner?: boolean
+  onClick?: () => void
   children: JSX.Element
   part: SessionMessageAssistantTool
 }) {
@@ -611,11 +612,12 @@ function InlineTool(props: {
       flexDirection="row"
       gap={1}
       backgroundColor={hover() && error() ? theme.backgroundMenu : undefined}
-      onMouseOver={() => error() && setHover(true)}
+      onMouseOver={() => (error() || props.onClick) && setHover(true)}
       onMouseOut={() => setHover(false)}
       onMouseUp={() => {
-        if (!error()) return
         if (renderer.getSelection()?.getSelectedText()) return
+        if (props.onClick) { props.onClick(); return }
+        if (!error()) return
         setShowError((prev) => !prev)
       }}
       renderBefore={function () {
@@ -845,10 +847,18 @@ function Write(props: ToolProps) {
   const { theme, syntax } = useTheme()
   const filePath = createMemo(() => stringValue(props.input.filePath) ?? "")
   const content = createMemo(() => stringValue(props.input.content) ?? "")
+  const [expanded, setExpanded] = createSignal(false)
+  const done = createMemo(() => !!(content() && props.part.state.status === "completed"))
+  const lineCount = createMemo(() => {
+    const n = Number(props.metadata.additions)
+    if (n > 0) return n
+    const c = content()
+    return c ? c.split("\n").length : 0
+  })
   return (
     <Switch>
-      <Match when={content() && props.part.state.status === "completed"}>
-        <BlockTool title={"# Wrote " + normalizePath(filePath())} part={props.part}>
+      <Match when={done() && expanded()}>
+        <BlockTool title={"# Wrote " + normalizePath(filePath())} part={props.part} onClick={() => setExpanded(false)}>
           <line_number fg={theme.textMuted} minWidth={3} paddingRight={1}>
             <code
               conceal={false}
@@ -861,8 +871,28 @@ function Write(props: ToolProps) {
           <Diagnostics diagnostics={props.metadata.diagnostics} filePath={filePath()} />
         </BlockTool>
       </Match>
+      <Match when={done()}>
+        <InlineTool
+          icon="←"
+          complete={true}
+          pending=""
+          onClick={() => setExpanded(true)}
+          part={props.part}
+        >
+          Wrote {normalizePath(filePath())}
+          <Show when={lineCount() > 0}>
+            <span style={{ fg: theme.diffHighlightAdded }}> +{lineCount()}</span>
+          </Show>
+        </InlineTool>
+      </Match>
       <Match when={true}>
-        <InlineTool icon="←" pending="Preparing write..." complete={filePath()} part={props.part}>
+        <InlineTool
+          icon="←"
+          pending={filePath() ? "Writing " + normalizePath(filePath()) + "…" : "Preparing write…"}
+          complete={props.part.state.status !== "running"}
+          spinner={props.part.state.status === "running"}
+          part={props.part}
+        >
           Write {normalizePath(filePath())}
         </InlineTool>
       </Match>
@@ -875,14 +905,17 @@ function Edit(props: ToolProps) {
   const dimensions = useTerminalDimensions()
   const filePath = createMemo(() => stringValue(props.input.filePath) ?? "")
   const diff = createMemo(() => stringValue(props.metadata.diff))
+  const [expanded, setExpanded] = createSignal(false)
+  const additions = createMemo(() => Number(props.metadata.additions ?? 0))
+  const deletions = createMemo(() => Number(props.metadata.deletions ?? 0))
   return (
     <Switch>
-      <Match when={diff()}>
-        {(diff) => (
-          <BlockTool title={"← Edit " + normalizePath(filePath())} part={props.part}>
+      <Match when={diff() && expanded()}>
+        {(_) => (
+          <BlockTool title={"← Edit " + normalizePath(filePath())} part={props.part} onClick={() => setExpanded(false)}>
             <box paddingLeft={1}>
               <diff
-                diff={diff()}
+                diff={diff()!}
                 view={dimensions().width > 120 ? "split" : "unified"}
                 filetype={filetype(filePath())}
                 syntaxStyle={syntax()}
@@ -905,8 +938,31 @@ function Edit(props: ToolProps) {
           </BlockTool>
         )}
       </Match>
+      <Match when={diff()}>
+        <InlineTool
+          icon="←"
+          complete={true}
+          pending=""
+          onClick={() => setExpanded(true)}
+          part={props.part}
+        >
+          Edit {normalizePath(filePath())}
+          <Show when={additions() > 0}>
+            <span style={{ fg: theme.diffHighlightAdded }}> +{additions()}</span>
+          </Show>
+          <Show when={deletions() > 0}>
+            <span style={{ fg: theme.diffHighlightRemoved }}> -{deletions()}</span>
+          </Show>
+        </InlineTool>
+      </Match>
       <Match when={true}>
-        <InlineTool icon="←" pending="Preparing edit..." complete={filePath()} part={props.part}>
+        <InlineTool
+          icon="←"
+          pending={filePath() ? "Editing " + normalizePath(filePath()) + "…" : "Preparing edit…"}
+          complete={props.part.state.status !== "running"}
+          spinner={props.part.state.status === "running"}
+          part={props.part}
+        >
           Edit {normalizePath(filePath())} {input({ replaceAll: props.input.replaceAll })}
         </InlineTool>
       </Match>
