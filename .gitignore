@@ -51,9 +51,11 @@ bin/_deleted-configs-bak/
 clients/opencode-fork/bun.lock
 
 # --- vendored sub-projects (excluded from code index / repomap) -----------
-# These are large third-party repos embedded in the tree. They are NOT indexed
-# by the repomap (gitignore respected during walk) so they don't drown out the
-# actual Digitorn source in the ranked symbol map.
 activepieces-main/
-clients/opencode-fork/
 vendor-references/
+
+# GoReleaser build artifacts (TUI cross-compiled binaries)
+.goreleaser-tui/
+
+# Large vendored binary (exceeds GitHub 100 MB limit)
+clients/cli/opencode
