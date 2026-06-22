@@ -44,3 +44,9 @@ func (b *boundedBuf) String() string {
 	}
 	return string(b.buf)
 }
+
+func (b *boundedBuf) Len() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return len(b.buf)
+}

@@ -49,7 +49,7 @@ func utf16leBytes(s string) []byte {
 // input so it can answer prompts). stdout/stderr are drained concurrently into
 // bounded buffers (no pipe deadlock), and on timeout OR caller cancellation the
 // whole process group is reaped (Cmd.Cancel), so nothing is orphaned.
-func runDetached(ctx context.Context, kind, path, command, dir string, env []string, maxOut int, input string, timeout time.Duration) (cmdResult, error) {
+func runDetached(ctx context.Context, kind, path, command, dir string, env []string, maxOut int, input string, timeout time.Duration, promptWait time.Duration) (cmdResult, error) {
 	var cctx context.Context
 	var cancel context.CancelFunc
 	if timeout > 0 {
@@ -124,6 +124,31 @@ func runDetached(ctx context.Context, kind, path, command, dir string, env []str
 	if err := cmd.Start(); err != nil {
 		return cmdResult{}, err
 	}
+
+	// Prompt detection: when no input is provided and promptWait > 0, monitor
+	// stdout/stderr for output. If no output for promptWait duration, assume the
+	// command is waiting for interactive input and kill it.
+	var waitingForInput bool
+	if input == "" && promptWait > 0 && cmd.Process != nil {
+		done := make(chan struct{})
+		go func() {
+			select {
+			case <-done:
+				return
+			case <-time.After(promptWait):
+				// Check if any output was produced
+				outLen := out.Len()
+				errLen := errb.Len()
+				if outLen == 0 && errLen == 0 {
+					// No output for promptWait seconds - assume waiting for input
+					waitingForInput = true
+					killProcessTree(cmd.Process.Pid)
+				}
+			}
+		}()
+		defer close(done)
+	}
+
 	waitErr := cmd.Wait()
 
 	exit := 0
@@ -136,6 +161,10 @@ func runDetached(ctx context.Context, kind, path, command, dir string, env []str
 		}
 	}
 	res := cmdResult{Stdout: trimTrailing(out.String()), Stderr: trimTrailing(errb.String()), ExitCode: exit, Cwd: dir}
+	if waitingForInput {
+		res.WaitingForInput = true
+		return res, errWaitingForInput
+	}
 	if cctx.Err() != nil {
 		if ctx.Err() != nil {
 			res.Cancelled = true

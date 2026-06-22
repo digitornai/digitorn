@@ -34,6 +34,12 @@ type Config struct {
 	TimeoutSecs int      `json:"timeout_seconds" yaml:"timeout_seconds"`
 	IdleSecs    int      `json:"idle_seconds" yaml:"idle_seconds"`
 	EnvAllow    []string `json:"env_allow" yaml:"env_allow"`
+
+	// PromptWaitSecs is the number of seconds to wait for output before assuming
+	// the command is waiting for interactive input (e.g. sudo password prompt).
+	// When triggered, the agent receives a WaitingForInput error and can retry
+	// with the `input` parameter. Set to 0 to disable (default: 15 seconds).
+	PromptWaitSecs int `json:"prompt_wait_secs" yaml:"prompt_wait_secs"`
 }
 
 type Module struct {
@@ -314,6 +320,9 @@ func (m *Module) Init(ctx context.Context, cfg map[string]any) error {
 	if m.cfg.IdleSecs <= 0 {
 		m.cfg.IdleSecs = 900
 	}
+	if m.cfg.PromptWaitSecs <= 0 {
+		m.cfg.PromptWaitSecs = 15 // 15 seconds default
+	}
 
 	prefer := m.cfg.Shell
 	if env := strings.TrimSpace(os.Getenv("DIGITORN_BASH_PATH")); env != "" {
@@ -461,6 +470,11 @@ type runResult struct {
 	Shell     string `json:"shell"`
 	TimedOut  bool   `json:"timed_out,omitempty"`
 	Cancelled bool   `json:"cancelled,omitempty"`
+
+	// WaitingForInput indicates the command produced no output for a configurable
+	// period and is likely waiting for interactive input (e.g. sudo password prompt).
+	// The agent should retry with the `input` parameter to provide the answer.
+	WaitingForInput bool `json:"waiting_for_input,omitempty"`
 
 	DurationMs   int64    `json:"duration_ms,omitempty"`
 	FilesChanged []string `json:"files_changed,omitempty"`
@@ -616,8 +630,8 @@ func (m *Module) run(ctx context.Context, raw json.RawMessage) (tool.Result, err
 		// and read markers, so injecting data would corrupt it. Fall back to a
 		// fresh one-shot subprocess (runDetached) which sets cmd.Stdin cleanly.
 		var rerr error
-		res, rerr = runDetached(ctx, m.kind, m.path, command, root, buildEnv(m.cfg.EnvAllow), m.cfg.MaxOutput, p.Input, timeout)
-		if rerr != nil && !errors.Is(rerr, errTimeout) && !errors.Is(rerr, errCancelled) {
+		res, rerr = runDetached(ctx, m.kind, m.path, command, root, buildEnv(m.cfg.EnvAllow), m.cfg.MaxOutput, p.Input, timeout, 0)
+		if rerr != nil && !errors.Is(rerr, errTimeout) && !errors.Is(rerr, errCancelled) && !errors.Is(rerr, errWaitingForInput) {
 			return errResult(rerr), nil
 		}
 	} else {
@@ -670,7 +684,7 @@ func (m *Module) runInSession(ctx context.Context, key, dir, command string, tim
 		// WSL path: wsl.exe -e bash -c "cd DIR && COMMAND"
 		// No persistent session — each call is one-shot inside WSL bash.
 		wrapped := "cd " + wslQuotePath(dir) + " && " + command
-		res, _ := runDetached(ctx, "bash", m.path, wrapped, dir, buildEnv(m.cfg.EnvAllow), m.cfg.MaxOutput, "", timeout)
+		res, _ := runDetached(ctx, "bash", m.path, wrapped, dir, buildEnv(m.cfg.EnvAllow), m.cfg.MaxOutput, "", timeout, 0)
 		return res
 	}
 	if tool.IsBackground(ctx) {
@@ -678,12 +692,12 @@ func (m *Module) runInSession(ctx context.Context, key, dir, command string, tim
 		// manager's live log. runDetached connects the LiveSink via io.MultiWriter;
 		// the persistent session does not. Each background task is isolated anyway,
 		// so losing session persistence here has no user-visible effect.
-		res, _ := runDetached(ctx, m.kind, m.path, command, dir, buildEnv(m.cfg.EnvAllow), m.cfg.MaxOutput, "", timeout)
+		res, _ := runDetached(ctx, m.kind, m.path, command, dir, buildEnv(m.cfg.EnvAllow), m.cfg.MaxOutput, "", timeout, 0)
 		return res
 	}
 	sh, err := m.getShell(key, dir)
 	if err != nil {
-		res, _ := runDetached(ctx, m.kind, m.path, command, dir, buildEnv(m.cfg.EnvAllow), m.cfg.MaxOutput, "", timeout)
+		res, _ := runDetached(ctx, m.kind, m.path, command, dir, buildEnv(m.cfg.EnvAllow), m.cfg.MaxOutput, "", timeout, time.Duration(m.cfg.PromptWaitSecs)*time.Second)
 		return res
 	}
 	res, err := sh.run(ctx, command, timeout)
@@ -694,7 +708,7 @@ func (m *Module) runInSession(ctx context.Context, key, dir, command string, tim
 		// Transparent fallback: if the session produced no usable output, retry
 		// one-shot so a transient shell death is invisible to the agent.
 		if res.Stdout == "" && res.Stderr == "" && res.ExitCode == 0 {
-			res2, _ := runDetached(ctx, m.kind, m.path, command, dir, buildEnv(m.cfg.EnvAllow), m.cfg.MaxOutput, "", timeout)
+			res2, _ := runDetached(ctx, m.kind, m.path, command, dir, buildEnv(m.cfg.EnvAllow), m.cfg.MaxOutput, "", timeout, time.Duration(m.cfg.PromptWaitSecs)*time.Second)
 			return res2
 		}
 	}
@@ -734,21 +748,22 @@ func (m *Module) result(command string, res cmdResult, err error, timeout time.D
 	// Without this distinction "kill $PID" on a missing process (exit 1) or
 	// "pkill nginx" with no match (exit 1) look like tool failures and confuse the
 	// agent into retrying indefinitely.
-	toolFailed := res.TimedOut || res.Cancelled || errors.Is(err, errShellExited)
+	toolFailed := res.TimedOut || res.Cancelled || errors.Is(err, errShellExited) || errors.Is(err, errWaitingForInput)
 	out := tool.Result{
 		Success: !toolFailed,
 		Data: runResult{
-			Stdout:       res.Stdout,
-			Stderr:       res.Stderr,
-			ExitCode:     res.ExitCode,
-			Cwd:          res.Cwd,
-			Shell:        m.shellName(),
-			TimedOut:     res.TimedOut,
-			Cancelled:    res.Cancelled,
-			DurationMs:   res.DurationMs,
-			FilesChanged: res.FilesChanged,
-			FilesNote:    res.FilesNote,
-			Git:          res.Git,
+			Stdout:          res.Stdout,
+			Stderr:          res.Stderr,
+			ExitCode:        res.ExitCode,
+			Cwd:             res.Cwd,
+			Shell:           m.shellName(),
+			TimedOut:        res.TimedOut,
+			Cancelled:       res.Cancelled,
+			WaitingForInput: res.WaitingForInput,
+			DurationMs:      res.DurationMs,
+			FilesChanged:    res.FilesChanged,
+			FilesNote:       res.FilesNote,
+			Git:             res.Git,
 		},
 		Display: &tool.DisplayHint{Type: "text", Title: firstToken(command)},
 	}
@@ -760,6 +775,8 @@ func (m *Module) result(command string, res cmdResult, err error, timeout time.D
 			out.Error = fmt.Sprintf("command timed out after %s; its process tree was killed", timeout)
 		case errors.Is(err, errShellExited):
 			out.Error = "the command ended the shell session (e.g. `exit`); a fresh shell starts on the next call"
+		case errors.Is(err, errWaitingForInput):
+			out.Error = "command is waiting for interactive input (e.g. sudo password prompt). Retry with the `input` parameter to provide the answer."
 		}
 	}
 	// Non-zero exit codes are surfaced via exit_code in Data (always present).

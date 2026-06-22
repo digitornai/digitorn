@@ -387,7 +387,7 @@ func TestDetached_BasicOutput(t *testing.T) {
 	if err != nil || kind != "bash" {
 		t.Skip("no bash available")
 	}
-	res, err := runDetached(context.Background(), kind, path, "echo detached-ok", t.TempDir(), buildEnv(nil), 1<<20, "", 10*time.Second)
+	res, err := runDetached(context.Background(), kind, path, "echo detached-ok", t.TempDir(), buildEnv(nil), 1<<20, "", 10*time.Second, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -401,7 +401,7 @@ func TestDetached_InputFedToStdin(t *testing.T) {
 	if err != nil || kind != "bash" {
 		t.Skip("no bash available")
 	}
-	res, err := runDetached(context.Background(), kind, path, "read x; echo \"GOT:$x\"", t.TempDir(), buildEnv(nil), 1<<20, "hello-stdin\n", 10*time.Second)
+	res, err := runDetached(context.Background(), kind, path, "read x; echo \"GOT:$x\"", t.TempDir(), buildEnv(nil), 1<<20, "hello-stdin\n", 10*time.Second, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -422,7 +422,7 @@ func TestDetached_CancelKillsTree(t *testing.T) {
 	}
 	ch := make(chan o, 1)
 	go func() {
-		r, e := runDetached(ctx, kind, path, "sleep 30", t.TempDir(), buildEnv(nil), 1<<20, "", 60*time.Second)
+		r, e := runDetached(ctx, kind, path, "sleep 30", t.TempDir(), buildEnv(nil), 1<<20, "", 60*time.Second, 0)
 		ch <- o{r, e}
 	}()
 	time.Sleep(400 * time.Millisecond)

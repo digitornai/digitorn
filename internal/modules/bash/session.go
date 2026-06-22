@@ -22,9 +22,10 @@ import (
 )
 
 var (
-	errShellExited = errors.New("shell exited during command")
-	errTimeout     = errors.New("command timed out")
-	errCancelled   = errors.New("command cancelled")
+	errShellExited     = errors.New("shell exited during command")
+	errTimeout         = errors.New("command timed out")
+	errCancelled       = errors.New("command cancelled")
+	errWaitingForInput = errors.New("command waiting for input")
 )
 
 type cmdResult struct {
@@ -34,6 +35,11 @@ type cmdResult struct {
 	Cwd       string
 	TimedOut  bool
 	Cancelled bool
+
+	// WaitingForInput indicates the command produced no output for a configurable
+	// period and is likely waiting for interactive input (e.g. sudo password prompt).
+	// The agent should retry with the `input` parameter to provide the answer.
+	WaitingForInput bool
 
 	// Optional enrichment (see Module.enrich); zero values are omitted downstream.
 	DurationMs   int64

@@ -83,7 +83,7 @@ func TestDetached_PowerShellRun(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Apply the same translation pipeline as module.run
 			cmd := psNulSink(psChain(psEnv(tt.command)))
-			res, err := runDetached(context.Background(), kind, path, cmd, dir, env, 1<<20, "", 15*time.Second)
+			res, err := runDetached(context.Background(), kind, path, cmd, dir, env, 1<<20, "", 15*time.Second, 0)
 			if tt.wantErr {
 				if err == nil && res.ExitCode == 0 {
 					t.Errorf("expected error, got exit=%d stdout=%q", res.ExitCode, res.Stdout)

@@ -43,7 +43,7 @@ func runWithPTY(ctx context.Context, kind, shellPath, command, dir string, env [
 	pt, err := gopty.New()
 	if err != nil {
 		// PTY unavailable (headless container, CI without /dev/ptmx, etc.).
-		res, _ := runDetached(ctx, kind, shellPath, command, dir, env, maxOut, "", timeout)
+		res, _ := runDetached(ctx, kind, shellPath, command, dir, env, maxOut, "", timeout, 0)
 		if res.Stderr != "" {
 			res.Stderr = "[pty unavailable, ran without tty] " + res.Stderr
 		} else {
@@ -68,7 +68,7 @@ func runWithPTY(ctx context.Context, kind, shellPath, command, dir string, env [
 	cmd.Env = env
 
 	if err := cmd.Start(); err != nil {
-		res, _ := runDetached(ctx, kind, shellPath, command, dir, env, maxOut, "", timeout)
+		res, _ := runDetached(ctx, kind, shellPath, command, dir, env, maxOut, "", timeout, 0)
 		return res
 	}
 
