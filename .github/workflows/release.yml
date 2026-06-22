@@ -37,7 +37,7 @@ jobs:
           bun-version: latest
 
       - name: Install TUI dependencies
-        working-directory: digitorn-tui-src
+        working-directory: digitorn-tui-src/packages/opencode
         run: bun install --frozen-lockfile
 
       - name: Build TUI binaries
