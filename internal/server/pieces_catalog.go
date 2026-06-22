@@ -74,27 +74,64 @@ func (pc *piecesCatalog) fetch(appID string) []policy.AvailableAction {
 		slog.Debug("pieces_catalog: no live tools from bridge", "app_id", appID)
 		return nil
 	}
-	slog.Debug("pieces_catalog: fetched tools from bridge", "app_id", appID, "count", len(specs))
+
+	// Determine if the app listed specific tools or granted wildcard access.
+	// Wildcard ("*" or empty tools list) → DiscoveryOnly: schemas are never
+	// injected directly (they would blow the token budget). The agent discovers
+	// them via search_tools / get_tool.
+	// Explicit list → index normally; the auto-switch threshold still applies.
+	wildcardGrant := pc.isPiecesWildcard(appID)
+	slog.Debug("pieces_catalog: fetched tools from bridge", "app_id", appID, "count", len(specs), "discovery_only", wildcardGrant)
+
 	out := make([]policy.AvailableAction, 0, len(specs))
 	for i := range specs {
-		// Pieces tools are named "ap_{piece}__{action}".
-		// Canonicalize converts to "ap_{piece}.{action}" → SplitFQN gives module="ap_{piece}", action="action".
-		// We register with module="ap_{piece}" so the index FQN is "ap_{piece}.action"
-		// (matches what the LLM sees). Gate1a resolves "ap_*" via the "pieces" umbrella.
 		canonical := toolname.Canonicalize(specs[i].Name)
 		modID, action := toolname.SplitFQN(canonical)
 		if modID == "" || action == "" {
 			continue
 		}
 		fqnSpec := specs[i]
-		fqnSpec.Name = canonical // "ap_{piece}.action"
+		fqnSpec.Name = canonical
 		out = append(out, policy.AvailableAction{
-			Module: modID,  // "ap_{piece}" — gate1a resolves via "pieces" umbrella
-			Action: action, // "action" — bare action name
-			Spec:   &fqnSpec,
+			Module:        modID,
+			Action:        action,
+			Spec:          &fqnSpec,
+			DiscoveryOnly: wildcardGrant,
 		})
 	}
 	return out
+}
+
+// isPiecesWildcard reports whether the app's pieces grant is a wildcard
+// (tools: ["*"] or no explicit tool list). Wildcard → DiscoveryOnly.
+func (pc *piecesCatalog) isPiecesWildcard(appID string) bool {
+	if pc.apps == nil {
+		return true
+	}
+	rt, err := pc.apps.Get(context.Background(), appID)
+	if err != nil || rt == nil || rt.Definition == nil || rt.Definition.Tools == nil {
+		return true
+	}
+	caps := rt.Definition.Tools.Capabilities
+	if caps == nil {
+		return true
+	}
+	for _, g := range caps.Grant {
+		if g.Module != "pieces" {
+			continue
+		}
+		tools := g.EffectiveTools()
+		if len(tools) == 0 {
+			return true
+		}
+		for _, t := range tools {
+			if t == "*" {
+				return true
+			}
+		}
+		return false // explicit list of tools
+	}
+	return true // pieces declared in modules but no grant entry → wildcard
 }
 
 func (pc *piecesCatalog) lookupSpec(moduleID, action string) *tool.Spec {

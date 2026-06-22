@@ -256,6 +256,56 @@ func TestGrep_Truncation(t *testing.T) {
 	}
 }
 
+func TestEdit_BlockAnchorLive(t *testing.T) {
+	m, ws := setupFS(t)
+	writeFile(t, ws, "main.go", "package main\n\nimport \"fmt\"\n\nfunc main() {\n\ta := 1\n\tb := 2\n\tc := 3\n\td := 4\n\te := 5\n\tfmt.Println(a, b, c, d, e)\n}\n")
+	// Simule un multi-edit sans re-read : l'agent a un old_string dont le milieu ne matche pas
+	r, err := m.edit(context.Background(), mustJSON(map[string]any{
+		"path": "main.go",
+		"old_string": "\ta := 1\n\tb := TWO\n\tc := 3\n\td := 4\n\te := 5",
+		"new_string": "\ta := 1\n\tb := 2\n\tc := 3\n\td := 4\n\te := 5",
+	}))
+	if err != nil || !r.Success {
+		t.Fatalf("block-anchor should have matched: err=%v success=%v data=%v", err, r.Success, r.Data)
+	}
+	strat := r.Data.(map[string]any)["strategy"]
+	t.Logf("matched via: %v", strat)
+	if strat != "block-anchor" {
+		t.Errorf("expected block-anchor, got %v", strat)
+	}
+}
+
 func filepathBase(i int) string {
 	return "f" + string(rune('a'+i%26)) + string(rune('a'+(i/26)%26)) + ".txt"
+}
+
+func TestEdit_FuzzyBlockAnchor(t *testing.T) {
+	m, ws := setupFS(t)
+	writeFile(t, ws, "f.go", "func main() {\n\tx := 1\n\ty := 2\n\tz := 3\n}\n")
+	r, err := m.edit(context.Background(), mustJSON(map[string]any{
+		"path": "f.go", "old_string": "func main() {\n\tx := 99\n\ty := 2\n\tz := 3\n}", "new_string": "func main() {\n\tx := 1\n\ty := 2\n\tz := 3\n}",
+	}))
+	if err != nil || !r.Success {
+		t.Fatalf("edit failed (should fuzzy-match via block-anchor): %v (%v)", err, r.Error)
+	}
+	if got := r.Data.(map[string]any)["strategy"]; got != "block-anchor" {
+		t.Errorf("strategy = %v, want block-anchor", got)
+	}
+	if readFile(t, ws, "f.go") != "func main() {\n\tx := 1\n\ty := 2\n\tz := 3\n}\n" {
+		t.Errorf("content wrong: %q", readFile(t, ws, "f.go"))
+	}
+}
+
+func TestEdit_FuzzyBlockAnchorTooFewLines(t *testing.T) {
+	m, ws := setupFS(t)
+	writeFile(t, ws, "f.txt", "one\n")
+	r, err := m.edit(context.Background(), mustJSON(map[string]any{
+		"path": "f.txt", "old_string": "two", "new_string": "ONE",
+	}))
+	if err == nil {
+		t.Fatalf("single-line mismatch should return an error")
+	}
+	if r.Success {
+		t.Fatalf("single-line mismatch should not succeed")
+	}
 }

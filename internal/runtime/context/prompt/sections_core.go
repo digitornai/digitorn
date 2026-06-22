@@ -107,7 +107,8 @@ func groupInjectedByModule(specs []llm.ToolSpec) ([]string, map[string][]llm.Too
 
 // renderDirectInstructions lists every directly-callable tool grouped by
 // module — signature, one-line description, IRREVERSIBLE badge (from the
-// index). Describes EXACTLY the injected set.
+// index). Describes EXACTLY the injected set, then lists any discovery-only
+// catalogs (pieces, MCP) so the agent knows to search for them.
 func renderDirectInstructions(injected []llm.ToolSpec, idx *index.ToolIndex) string {
 	if len(injected) == 0 {
 		return ""
@@ -129,7 +130,47 @@ func renderDirectInstructions(injected []llm.ToolSpec, idx *index.ToolIndex) str
 			fmt.Fprintf(&b, "- %s%s: %s%s\n", s.Name, specSignature(s), firstSentence(s.Description), badge)
 		}
 	}
+	if extra := renderDiscoveryOnlyCatalogs(idx); extra != "" {
+		b.WriteString(extra)
+	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// renderDiscoveryOnlyCatalogs appends a brief section listing all index
+// categories that contain only DiscoveryOnly tools (pieces, large MCP
+// catalogs). Even when the overall mode is direct, the agent needs to know
+// these catalogs exist so it can search them via search_tools / get_tool.
+func renderDiscoveryOnlyCatalogs(idx *index.ToolIndex) string {
+	if idx == nil {
+		return ""
+	}
+	type cat struct{ name, count string }
+	var cats []cat
+	for mod, fqns := range idx.Categories {
+		if len(fqns) == 0 {
+			continue
+		}
+		allDiscovery := true
+		for _, fqn := range fqns {
+			if t := idx.Tools[fqn]; t != nil && !t.DiscoveryOnly {
+				allDiscovery = false
+				break
+			}
+		}
+		if allDiscovery {
+			cats = append(cats, cat{mod, fmt.Sprintf("%d", len(fqns))})
+		}
+	}
+	if len(cats) == 0 {
+		return ""
+	}
+	sort.Slice(cats, func(i, j int) bool { return cats[i].name < cats[j].name })
+	var b strings.Builder
+	b.WriteString("\n\n## Also available (discovery — use search_tools / get_tool / execute_tool)\n")
+	for _, c := range cats {
+		fmt.Fprintf(&b, "- %s (%s tools)\n", c.name, c.count)
+	}
+	return b.String()
 }
 
 // renderCompactInstructions is the terse variant : one line per tool ;

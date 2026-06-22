@@ -128,6 +128,21 @@ func workingMemoryView(snap sessionstore.SessionSnapshot) *prompt.WorkingMemoryV
 	for _, t := range snap.Todos {
 		wm.Todos = append(wm.Todos, prompt.TodoLine{ID: t.ID, Text: t.Text, Status: t.Status})
 	}
+	// CurrentQuestion comes from snap.LastUserMessage — persisted in the snapshot,
+	// survives compaction, always reflects the current user request.
+	if q := strings.TrimSpace(snap.LastUserMessage); q != "" {
+		wm.CurrentQuestion = q
+	}
+	// NeedsGoal: the agent has active (non-done) todos but no goal.
+	// Triggers a directive to call memory.set_goal before any other action.
+	if snap.Goal == "" {
+		for _, t := range snap.Todos {
+			if t.Status != "done" && t.Status != "completed" {
+				wm.NeedsGoal = true
+				break
+			}
+		}
+	}
 	return wm
 }
 

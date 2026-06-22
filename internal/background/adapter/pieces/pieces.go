@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mbathepaul/digitorn/internal/background/adapter"
@@ -38,10 +39,13 @@ type Provider struct {
 
 // Adapter polls a set of Pieces triggers with their own storeState-aware loop.
 type Adapter struct {
+	mu        sync.Mutex
 	providers []Provider
 	cursors   CursorStore
 	log       *slog.Logger
 	client    *http.Client
+	ctx       context.Context
+	sink      adapter.Sink
 }
 
 func New(providers []Provider, cursors CursorStore, log *slog.Logger) *Adapter {
@@ -57,11 +61,26 @@ func (a *Adapter) Name() string                                       { return "
 func (a *Adapter) Send(context.Context, map[string]any, string) error { return nil }
 
 func (a *Adapter) Start(ctx context.Context, sink adapter.Sink) error {
+	a.mu.Lock()
+	a.ctx = ctx
+	a.sink = sink
 	for _, p := range a.providers {
 		go a.loop(ctx, p, sink)
 	}
+	a.mu.Unlock()
 	<-ctx.Done()
 	return nil
+}
+
+// Arm adds a provider and starts polling it live without restarting the service.
+func (a *Adapter) Arm(p Provider) {
+	a.mu.Lock()
+	ctx, sink := a.ctx, a.sink
+	a.providers = append(a.providers, p)
+	a.mu.Unlock()
+	if ctx != nil && sink != nil {
+		go a.loop(ctx, p, sink)
+	}
 }
 
 func (a *Adapter) loop(ctx context.Context, p Provider, sink adapter.Sink) {
@@ -151,12 +170,14 @@ func (a *Adapter) poll(ctx context.Context, p Provider, sink adapter.Sink) {
 	}
 
 	for i, ev := range pr.Events {
+		normalized := normalizePiecesPayload(ev, p.Piece, p.Trigger)
 		if err := sink(ctx, adapter.Event{
 			Provider: p.Name,
 			Adapter:  "pieces",
-			DedupKey: eventID(ev, p.Piece, p.Trigger, i),
+			DedupKey: eventID(normalized, p.Piece, p.Trigger, i),
 			Source:   p.Piece + "." + p.Trigger,
-			Payload:  ev,
+			Message:  extractMessage(normalized),
+			Payload:  normalized,
 		}); err != nil {
 			a.log.Warn("pieces: sink failed", "provider", p.Name, "err", err)
 		}
@@ -166,6 +187,42 @@ func (a *Adapter) poll(ctx context.Context, p Provider, sink adapter.Sink) {
 		a.log.Info("pieces: trigger fired", "provider", p.Name,
 			"piece", p.Piece, "trigger", p.Trigger, "events", len(pr.Events))
 	}
+}
+
+func normalizePiecesPayload(raw map[string]any, piece, trigger string) map[string]any {
+	out := make(map[string]any, len(raw)+2)
+	for k, v := range raw {
+		out[k] = v
+	}
+	out["piece"] = piece
+	out["trigger"] = trigger
+
+	commonFields := []string{"subject", "title", "from", "to", "body", "snippet",
+		"content", "text", "name", "url", "id", "email", "date", "summary"}
+	for _, k := range []string{"message", "page", "item", "record", "data", "event", "object"} {
+		if nested, ok := raw[k].(map[string]any); ok {
+			for _, field := range commonFields {
+				if _, exists := out[field]; !exists {
+					if v, ok := nested[field]; ok {
+						out[field] = v
+					}
+				}
+			}
+		}
+	}
+	return out
+}
+
+func extractMessage(payload map[string]any) string {
+	for _, k := range []string{"subject", "title", "name", "text", "content", "snippet", "summary", "body"} {
+		if v, ok := payload[k].(string); ok && v != "" {
+			if len(v) > 200 {
+				v = v[:200] + "..."
+			}
+			return v
+		}
+	}
+	return ""
 }
 
 func eventID(ev map[string]any, piece, trigger string, pos int) string {

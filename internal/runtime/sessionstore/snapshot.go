@@ -60,8 +60,10 @@ type SessionSnapshot struct {
 	EntryAgent            string                    `json:"entry_agent,omitempty"`
 	ContextExtra          string                    `json:"context,omitempty"`
 	ModelOverrides        map[string]string         `json:"model_overrides,omitempty"`
+	EntryModelWindow      int                       `json:"entry_model_window,omitempty"`
 	TurnCount             int                       `json:"turn_count,omitempty"`
 	Interrupted           bool                      `json:"interrupted,omitempty"`
+	LastUserMessage       string                    `json:"last_user_message,omitempty"`
 
 	// CurrentTurn* mirrors the SessionState fields ; populated when a
 	// turn is in flight, cleared when EventTurnEnded fires. Used by

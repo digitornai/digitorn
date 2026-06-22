@@ -1,0 +1,118 @@
+version: 2
+
+# CI/CD releases: see .github/workflows/release.yml (native matrix runners, no Docker needed).
+# goreleaser is kept for local dev/snapshot builds only. Run: goreleaser build --snapshot --clean
+
+project_name: digitorn
+
+builds:
+  - id: digitornd
+    main: ./cmd/digitornd
+    binary: digitornd
+    flags: [-trimpath]
+    ldflags: &ldflags
+      - -s -w
+      - -X github.com/mbathepaul/digitorn/internal/version.Version={{ .Version }}
+      - -X github.com/mbathepaul/digitorn/internal/version.BuildDate={{ .Date }}
+    tags: [treesitter]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    env: [CGO_ENABLED=1]
+
+  - id: digitorn
+    dir: ./clients/cli
+    main: ./cmd/digitorn
+    binary: digitorn
+    flags: [-trimpath]
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    env: [CGO_ENABLED=0]
+
+  - id: digitorn-background
+    main: ./cmd/digitorn-background
+    binary: digitorn-background
+    flags: [-trimpath]
+    ldflags: *ldflags
+    tags: [treesitter]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    env: [CGO_ENABLED=1]
+
+  - id: digitorn-voice
+    main: ./cmd/digitorn-voice
+    binary: digitorn-voice
+    flags: [-trimpath]
+    ldflags: *ldflags
+    tags: [treesitter]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    env: [CGO_ENABLED=1]
+
+  - id: digitorn-worker
+    main: ./cmd/digitorn-worker
+    binary: digitorn-worker
+    flags: [-trimpath]
+    ldflags: *ldflags
+    tags: [treesitter]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    env: [CGO_ENABLED=1]
+
+  - id: digitorn-worker-llm
+    main: ./cmd/digitorn-worker-llm
+    binary: digitorn-worker-llm
+    flags: [-trimpath]
+    ldflags: *ldflags
+    tags: [treesitter]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    env: [CGO_ENABLED=1]
+
+  - id: digitorn-worker-embeddings
+    main: ./cmd/digitorn-worker-embeddings
+    binary: digitorn-worker-embeddings
+    flags: [-trimpath]
+    ldflags: *ldflags
+    tags: [treesitter, onnx]
+    goos: [linux]
+    goarch: [amd64, arm64]
+    env: [CGO_ENABLED=1]
+
+  - id: digitorn-worker-tokenizer
+    main: ./cmd/digitorn-worker-tokenizer
+    binary: digitorn-worker-tokenizer
+    flags: [-trimpath]
+    ldflags: *ldflags
+    tags: [treesitter]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    env: [CGO_ENABLED=1]
+
+archives:
+  - id: default
+    name_template: "{{ .ProjectName }}-{{ .Version }}-{{ .Os }}-{{ .Arch }}"
+    formats: [tar.gz]
+    files:
+      - .digitorn.yaml.example
+      - LICENSE
+      - scripts/install.sh
+      - scripts/install.ps1
+      - .goreleaser-tui/{{ .Os }}/{{ .Arch }}/digitorn-tui{{ .Extension }}
+
+checksum:
+  name_template: "checksums-{{ .Version }}.txt"
+
+release:
+  github:
+    owner: mbathe
+    name: digitorn
+  header: |
+    ## Digitorn {{ .Version }}
+  footer: |
+    See the [install guide](https://docs.digitorn.ai/install) for setup instructions.
+  extra_files:
+    - glob: ./scripts/install.sh
+    - glob: ./scripts/install.ps1

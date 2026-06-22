@@ -36,7 +36,7 @@ export CGO_ENABLED=1
 
 # Stop running daemon/workers unless --no-stop (avoids file-lock issues).
 if [ "$NO_STOP" = false ]; then
-  pkill -f 'digitornd|digitorn-worker' 2>/dev/null || true
+  pkill -f 'digitornd|digitorn-worker|digitorn-background|digitorn-voice' 2>/dev/null || true
   sleep 0.6
 fi
 
@@ -49,6 +49,8 @@ TARGETS=(
   "bin/digitorn-worker-llm|./cmd/digitorn-worker-llm|${BASE_TAGS}"
   "bin/digitorn-worker-embeddings|./cmd/digitorn-worker-embeddings|${BASE_TAGS} onnx"
   "bin/digitorn-worker-tokenizer|./cmd/digitorn-worker-tokenizer|${BASE_TAGS}"
+  "bin/digitorn-background|./cmd/digitorn-background|${BASE_TAGS}"
+  "bin/digitorn-voice|./cmd/digitorn-voice|${BASE_TAGS}"
 )
 
 for entry in "${TARGETS[@]}"; do

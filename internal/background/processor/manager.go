@@ -80,7 +80,12 @@ func (m *Manager) Sink() adapter.Sink {
 	return func(ctx context.Context, ev adapter.Event) error {
 		rt, ok := m.routes[ev.Provider]
 		if !ok {
-			return fmt.Errorf("intake: no armed trigger for provider %q", ev.Provider)
+			// Debug: log available routes when provider not found
+			routeKeys := make([]string, 0, len(m.routes))
+			for k := range m.routes {
+				routeKeys = append(routeKeys, k)
+			}
+			return fmt.Errorf("intake: no armed trigger for provider %q (available: %v)", ev.Provider, routeKeys)
 		}
 		payload, err := json.Marshal(ev)
 		if err != nil {

@@ -17,9 +17,14 @@ type Config struct {
 
 // AuthConfig carries inline credentials for a piece in app-config.
 type AuthConfig struct {
-	Type   string            `json:"type"` // "secret_text", "custom", "oauth2", "basic", "none"
-	Value  string            `json:"value,omitempty"`
-	Fields map[string]string `json:"fields,omitempty"`
+	Type         string            `json:"type" yaml:"type"`
+	Value        string            `json:"value,omitempty" yaml:"value,omitempty"`
+	Fields       map[string]string `json:"fields,omitempty" yaml:"fields,omitempty"`
+	AccessToken  string            `json:"accessToken,omitempty" yaml:"accessToken,omitempty"`
+	RefreshToken string            `json:"refreshToken,omitempty" yaml:"refreshToken,omitempty"`
+	TokenType    string            `json:"tokenType,omitempty" yaml:"tokenType,omitempty"`
+	Username     string            `json:"username,omitempty" yaml:"username,omitempty"`
+	Password     string            `json:"password,omitempty" yaml:"password,omitempty"`
 }
 
 // bridgeBinaryName returns the expected file name of the bridge binary for the

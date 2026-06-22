@@ -606,9 +606,12 @@ type MetaPayload struct {
 	Interrupted bool   `json:"interrupted,omitempty"`
 	// Model + AgentID carry a per-session, per-agent model override on
 	// EventModelChanged : set AgentID's model to Model (empty Model clears it →
-	// revert that agent to its Brain default).
-	Model   string `json:"model,omitempty"`
-	AgentID string `json:"agent_id,omitempty"`
+	// revert that agent to its Brain default). MaxContextTokens is the gateway's
+	// documented window for this model, persisted at switch time so the daemon
+	// never needs a user token to resolve the context window — survives restart.
+	Model            string `json:"model,omitempty"`
+	AgentID          string `json:"agent_id,omitempty"`
+	MaxContextTokens int    `json:"max_ctx_tokens,omitempty"`
 	// EntryAgent pins which agent handles this session (overrides the app's YAML
 	// entry agent) and ContextExtra is extra system-prompt text for the session.
 	// Both are set at creation by non-human launchers (e.g. a background channel

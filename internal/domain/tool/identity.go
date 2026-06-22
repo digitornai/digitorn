@@ -121,3 +121,23 @@ func FileChangeNotifierFromContext(ctx context.Context) (FileChangeNotifier, boo
 	n, ok := ctx.Value(fileChangeNotifierKey{}).(FileChangeNotifier)
 	return n, ok
 }
+
+type eventBusKey struct{}
+
+// WithEventBus attaches an EventBus to ctx so modules can publish events.
+// Absent (CLI / tests) means no bus — the module simply skips event emission.
+// The bus parameter is typed as interface{} to avoid import cycles; the
+// getter (EventBusFromContext) performs the type assertion.
+func WithEventBus(ctx context.Context, bus interface{}) context.Context {
+	if bus == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, eventBusKey{}, bus)
+}
+
+// EventBusFromContext returns the EventBus carried on ctx, if any.
+// The caller must type-assert the result to the concrete EventBus type.
+func EventBusFromContext(ctx context.Context) (interface{}, bool) {
+	b, ok := ctx.Value(eventBusKey{}).(interface{})
+	return b, ok
+}

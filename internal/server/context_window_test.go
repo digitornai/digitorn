@@ -50,14 +50,16 @@ func TestSessionWindowBrain_FollowsSelectedModelAndGatewayWindow(t *testing.T) {
 	}
 
 	// Gateway window unknown (admin has not filled max_context_tokens) : the selected
-	// model is still applied, and the window falls back to the app's configured budget.
+	// model is still applied, but MaxTokens is cleared so ContextWindowFor() is
+	// used instead of the YAML's 1M budget — a static 1M would mask compaction
+	// for a model whose real window is, say, 131k.
 	setGatewayWindows(t, nil)
 	b := d.sessionWindowBrain(snap)
 	if b.Model != "mimo-v2.5" {
 		t.Fatalf("selected model not applied: got %q", b.Model)
 	}
-	if b.Context == nil || b.Context.MaxTokens != 1000000 {
-		t.Fatalf("fallback window wrong: %+v", b.Context)
+	if b.Context != nil && b.Context.MaxTokens != 0 {
+		t.Fatalf("expected MaxTokens cleared for unknown override model, got %+v", b.Context)
 	}
 
 	// Gateway reports the real window for the selected model : it wins, and feeds

@@ -155,10 +155,13 @@ func (b *Background) loop() {
 	}
 }
 
-// recompute does the EXACT count for one session via the tokenizer worker.
-// Fully recover-guarded : a panic in the counter / view can never crash the
-// pool. On any error (worker down/slow) it returns WITHOUT calling onResult, so
-// the gauge keeps its last exact value — never an estimate.
+// Recompute runs an exact synchronous token count for a session and calls
+// onResult with the result. Blocks until the count completes or times out.
+// Use after compaction to get the real post-compaction context immediately.
+func (b *Background) Recompute(sid string) {
+	b.recompute(sid)
+}
+
 func (b *Background) recompute(sid string) {
 	defer safego.Recover("contextsvc.recompute")
 	if b.view == nil || b.counter == nil {

@@ -51,6 +51,11 @@ type IndexedTool struct {
 	// section. Mirrors tool.Spec.ToolPrompt.
 	ToolPrompt string
 
+	// DiscoveryOnly: tool is searchable/getable but never included in direct
+	// JSON schemas sent to the LLM. Set when the app grants wildcard access to
+	// a large catalog (pieces, MCP) — avoids blowing the token budget.
+	DiscoveryOnly bool
+
 	// Tags : free-form classification keywords from @action(tags=...).
 	// e.g. ["io", "files", "read"]. Used by browse_category and by
 	// the keyword search for tag-boost scoring.

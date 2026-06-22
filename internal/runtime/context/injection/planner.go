@@ -211,6 +211,9 @@ func buildDirectSchemas(idx *index.ToolIndex) []llm.ToolSpec {
 		if t == nil {
 			continue
 		}
+		if t.DiscoveryOnly {
+			continue // never inject as direct schema — only discoverable via search/get_tool
+		}
 		name, canonical := sanitizeToolName(t.FQN), ""
 		if alias, canon, ok := mcpWireAlias(t.FQN); ok {
 			name, canonical = alias, canon

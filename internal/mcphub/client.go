@@ -231,7 +231,7 @@ func (c *Client) PiecesList(ctx context.Context) ([]PieceEntry, error) {
 	c.mu.Unlock()
 
 	var resp piecesListResponse
-	if err := c.getJSON(ctx, "/api/v1/pieces?limit=500&bundle_only=true", &resp); err != nil {
+	if err := c.getJSON(ctx, "/api/v1/pieces?limit=500", &resp); err != nil {
 		c.mu.Lock()
 		stale, good := c.pieces, c.piecesGood
 		c.mu.Unlock()

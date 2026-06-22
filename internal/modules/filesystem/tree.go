@@ -14,10 +14,10 @@ import (
 )
 
 const (
-	treeMaxEntries = 20000 // large codebases can have thousands of files
+	treeMaxEntries = 300  // keeps read output under ~10k tokens
 	treeMaxDepth   = 20   // deep enough for any real nesting
 
-	dirOutlineMaxFiles = 2000
+	dirOutlineMaxFiles = 50
 	dirOutlineFileCap  = 512 << 10
 )
 
@@ -224,9 +224,9 @@ func renderPathsTreeRich(root string, paths []string) string {
 // renderDirOutline produces a cross-file structural map of a directory: every
 // code file with its definitions + line numbers. Uses the repomap per-file cache
 // when available (treesitter symbols with line numbers); falls back to the regex
-// outliner for files not yet cached. Cap raised to 500 files.
+// outliner for files not yet cached. Cap raised to 50 files.
 func renderDirOutline(base string) string {
-	const outlineCap = 500
+	const outlineCap = 50
 	ignore := loadGitignore(base)
 	var files []string
 	_ = filepath.WalkDir(base, func(abs string, d os.DirEntry, err error) error {

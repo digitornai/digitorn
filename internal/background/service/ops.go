@@ -15,32 +15,26 @@ import (
 	"github.com/mbathepaul/digitorn/internal/background/store"
 )
 
-// CreateTriggerRequest is the body of POST /ops/triggers — programming a trigger
-// (today: a cron) at runtime. The Rearm hook turns it into a persisted, live
-// trigger. This is a runtime override: YAML discovery remains authoritative on
-// restart, so a runtime trigger is live for this process lifetime (to make it
-// permanent, add it to the app YAML).
+// CreateTriggerRequest is the body of POST /ops/triggers.
+// The Rearm hook persists and arms the trigger live (no restart needed).
 type CreateTriggerRequest struct {
 	AppID    string `json:"app_id"`
 	Provider string `json:"provider"`
-	Adapter  string `json:"adapter"` // currently only "cron" can be armed live
+	Adapter  string `json:"adapter"` // "cron", "pieces", "rss", "webhook", …
 	Schedule string `json:"schedule"`
 	Agent    string `json:"agent"`
 	Message  string `json:"message"`
 	Session  string `json:"session"`
 	Reply    string `json:"reply"`
-	// Schedule (session wake-up) extras: the session to wake runs AS Owner with
-	// Context injected, and Kind marks the row as a schedule (vs a channel trigger).
-	Owner   string `json:"owner"`
-	Context string `json:"context"`
-	Kind    string `json:"kind"`
-	// Reports opts the schedule into a dated, downloadable output folder : at each
-	// fire the woken agent is told to write any file it produces under
-	// attachments/<stamp>/ in its workdir. Off by default.
-	Reports bool `json:"reports"`
-	// Attachments are INPUT blobs (already uploaded to the app's blob store) the
-	// schedule carries to every fire — the CV the agent reads each morning.
-	Attachments []channels.AttachmentRef `json:"attachments"`
+	Owner    string `json:"owner"`
+	Context  string `json:"context"`
+	Kind     string `json:"kind"`
+	Reports  bool   `json:"reports"`
+	// Config carries adapter-specific config stored in ConfigJSON.
+	// For pieces: {piece, trigger, auth, props, interval, trigger_url}.
+	Config      map[string]any           `json:"config,omitempty"`
+	Activation  *channels.ActivationConfig `json:"activation,omitempty"`
+	Attachments []channels.AttachmentRef  `json:"attachments"`
 }
 
 // OpsConfig configures the ops/admin API. Token, when set, is required as a

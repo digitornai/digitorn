@@ -17,6 +17,7 @@ import (
 	domainmodule "github.com/mbathepaul/digitorn/internal/domain/module"
 	"github.com/mbathepaul/digitorn/internal/domain/tool"
 	"github.com/mbathepaul/digitorn/internal/flexjson"
+	"github.com/mbathepaul/digitorn/internal/modules/eventemitter"
 	"github.com/mbathepaul/digitorn/internal/safehttp"
 	"github.com/mbathepaul/digitorn/pkg/module"
 )
@@ -143,6 +144,16 @@ func New() *Module {
 	return m
 }
 
+// DeclaredEvents returns the list of event topics this module may emit.
+// Implements domainmodule.EventEmitter.
+func (m *Module) DeclaredEvents() []map[string]string {
+	return []map[string]string{
+		{"topic": "http.request.success", "type": "request.success"},
+		{"topic": "http.request.error", "type": "request.error"},
+		{"topic": "http.request.timeout", "type": "request.timeout"},
+	}
+}
+
 func (m *Module) Init(_ context.Context, cfg map[string]any) error {
 	var c Config
 	if err := m.BindConfig(cfg, &c); err != nil {
@@ -217,9 +228,32 @@ func (m *Module) doRequest(ctx context.Context, method string, raw json.RawMessa
 
 	resp, err := client.Do(req)
 	if err != nil {
+		// Check if it's a timeout error
+		if ctx.Err() == context.DeadlineExceeded {
+			eventemitter.EmitWithModule(ctx, "http", "http.request.timeout", map[string]any{
+				"url":     p.URL,
+				"method":  method,
+				"timeout": p.Timeout,
+			})
+		} else {
+			eventemitter.EmitWithModule(ctx, "http", "http.request.error", map[string]any{
+				"url":    p.URL,
+				"method": method,
+				"error":  err.Error(),
+			})
+		}
 		return errResult(err), err
 	}
 	defer resp.Body.Close()
+
+	// Emit success event
+	eventemitter.EmitWithModule(ctx, "http", "http.request.success", map[string]any{
+		"url":          p.URL,
+		"method":       method,
+		"status_code":  resp.StatusCode,
+		"content_type": resp.Header.Get("Content-Type"),
+	})
+
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxBody))
 	ct := resp.Header.Get("Content-Type")
 

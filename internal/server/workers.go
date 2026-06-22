@@ -18,6 +18,7 @@ import (
 
 	"github.com/mbathepaul/digitorn/internal/compiler/schema"
 	"github.com/mbathepaul/digitorn/internal/config"
+	digitornruntime "github.com/mbathepaul/digitorn/internal/runtime"
 	"github.com/mbathepaul/digitorn/internal/embeddings"
 	"github.com/mbathepaul/digitorn/internal/llm"
 	"github.com/mbathepaul/digitorn/internal/module/gateway"
@@ -298,6 +299,49 @@ func (d *Daemon) touchContext(sessionID string) {
 	}
 }
 
+func (d *Daemon) touchContextSync(sessionID string) {
+	if bg := d.contextBG.Load(); bg != nil {
+		bg.Recompute(sessionID)
+	}
+}
+
+// preWarmContext builds the system prompt for a session before the first turn
+// so the context gauge shows the real overhead immediately on session open.
+// It uses the engine's context builder to assemble system+tools, records them
+// via recordContextParts, then runs a synchronous recount.
+func (d *Daemon) preWarmContext(sessionID, appID string) {
+	if eng, ok := d.engine.(*digitornruntime.Engine); ok {
+		eng.PreWarmSession(sessionID, appID)
+	}
+	d.touchContext(sessionID)
+}
+
+func (d *Daemon) touchContextIncrement(sessionID string, deltaTokens int) {
+	if d.contextTracker == nil || sessionID == "" || deltaTokens <= 0 {
+		return
+	}
+	cv, _ := d.contextTracker.Get(sessionID)
+	cv.Used += deltaTokens
+	d.contextTracker.Put(sessionID, cv)
+
+	st, err := d.sessionStore.State(sessionID)
+	if err != nil || st == nil {
+		return
+	}
+	snap := st.Snapshot()
+	brain := d.sessionWindowBrain(snap)
+	view := contextsvc.Resolve(snap, brain)
+	_, _ = d.sessionStore.Append(context.Background(), sessionstore.Event{
+		Type:      sessionstore.EventContextTokens,
+		SessionID: sessionID,
+		CtxTokens: &sessionstore.ContextTokensPayload{
+			Total:  cv.Used,
+			Window: view.Window,
+			Limit:  view.MaxTokens,
+		},
+	})
+}
+
 // onContextRecomputed receives the EXACT count from the background service and
 // persists it as EventContextTokens — which sets the occupancy gauge, streams
 // to clients via the bridge, and feeds context_pressure. Skips a no-change
@@ -313,18 +357,33 @@ func (d *Daemon) onContextRecomputed(r contextsvc.Result) {
 	}
 	snap := st.Snapshot()
 
-	// Calibrate the raw tokenizer (tiktoken) count to THIS session's provider
-	// REAL count — provider-agnostic, learned from the provider's own usage. A
-	// fresh provider anchor (turn just ended) → the displayed total is the
-	// provider's EXACT count ; otherwise (between turns / post-compaction) apply
-	// the learned ratio. The breakdown is scaled so the buckets still sum to it.
 	oldRatio := 0.0
 	if d.contextTracker != nil {
 		if old, ok := d.contextTracker.Get(r.SessionID); ok {
 			oldRatio = old.TokRatio
 		}
 	}
-	total, newRatio := contextsvc.CalibrateTotal(r.Total, snap.ContextProviderTokens, oldRatio)
+	calibRatio := oldRatio
+	switch {
+	case snap.ContextProviderTokens == 0:
+		calibRatio = 0.0
+	case oldRatio > 0 && r.Total > 0:
+		anchorTiktoken := float64(snap.ContextProviderTokens) / oldRatio
+		drift := float64(r.Total)/anchorTiktoken - 1.0
+		if drift > 0.25 || drift < -0.25 {
+			calibRatio = 0.0
+		}
+	}
+	// If the tokenizer count is significantly higher than the last provider
+	// anchor (>2%), the anchor is stale — tool results were added since the
+	// last LLM call. Pass providerAnchor=0 so CalibrateTotal uses ratio
+	// estimation instead of returning the frozen old anchor verbatim.
+	// This makes the gauge grow as tool results accumulate between LLM calls.
+	providerAnchor := snap.ContextProviderTokens
+	if providerAnchor > 0 && r.Total > int(float64(providerAnchor)*1.02) {
+		providerAnchor = 0
+	}
+	total, newRatio := contextsvc.CalibrateTotal(r.Total, providerAnchor, calibRatio)
 	system, tools, messages := r.System, r.Tools, r.Messages
 	if r.Total > 0 && total != r.Total {
 		f := float64(total) / float64(r.Total)
@@ -403,15 +462,35 @@ func (d *Daemon) sessionWindowBrain(snap sessionstore.SessionSnapshot) schema.Br
 		return base
 	}
 	eff := *brain
+	hasOverride := false
 	if ov := snap.ModelOverrides[entryID]; ov != "" {
 		eff.Model = ov
+		hasOverride = true
 	}
-	if w := d.gatewayModelWindow(eff.Model); w > 0 {
+	// EntryModelWindow from the session metadata (persisted at model switch time)
+	// takes priority over the gateway cache — it survives restart and doesn't need
+	// a user token. If set, use it directly.
+	if snap.EntryModelWindow > 0 {
+		reserved := 0
+		if eff.Context != nil {
+			reserved = eff.Context.OutputReserved
+		}
+		eff.Context = &schema.ContextConfig{MaxTokens: snap.EntryModelWindow, OutputReserved: reserved}
+	} else if w := d.gatewayModelWindow(eff.Model); w > 0 {
 		reserved := 0
 		if eff.Context != nil {
 			reserved = eff.Context.OutputReserved
 		}
 		eff.Context = &schema.ContextConfig{MaxTokens: w, OutputReserved: reserved}
+	} else if hasOverride {
+		// Model override but no window known yet : drop the YAML's
+		// context.max_tokens so Resolve falls through to ContextWindowFor()
+		// (the hardcoded model table) instead of using 1M which masks compaction.
+		if eff.Context != nil {
+			cc := *eff.Context
+			cc.MaxTokens = 0
+			eff.Context = &cc
+		}
 	}
 	return eff
 }
@@ -463,15 +542,26 @@ func (v *contextViewSource) ContextView(sessionID string) (contextsvc.View, bool
 	if snap.ContextCompaction != nil && snap.ContextCompaction.CutoffSeq > 0 {
 		msgs = contextcompact.ApplyView(msgs, snap.ContextCompaction.CutoffSeq, snap.ContextCompaction.Summary)
 	}
+	const maxMsgBytes = 100 * 1024 // mirrors maxMessageBytes in oversized.go
 	messages := make([]string, 0, len(msgs))
 	for i := range msgs {
-		messages = append(messages, plainText(msgs[i]))
+		txt := plainText(msgs[i])
+		if len(txt) > maxMsgBytes {
+			txt = txt[:maxMsgBytes]
+		}
+		messages = append(messages, txt)
 	}
-	view := contextsvc.View{Messages: messages}
-	if p, ok := v.d.ctxParts.Load(sessionID); ok {
-		parts := p.(ctxParts)
-		view.System = parts.system
-		view.Tools = parts.tools
+	p, partsSet := v.d.ctxParts.Load(sessionID)
+	if !partsSet {
+		// ctxParts not yet recorded (before first turn): skip recount to avoid
+		// showing a messages-only partial count that misses system+tools.
+		return contextsvc.View{}, false
+	}
+	parts := p.(ctxParts)
+	view := contextsvc.View{
+		Messages: messages,
+		System:   parts.system,
+		Tools:    parts.tools,
 	}
 	if len(view.System) == 0 && len(view.Tools) == 0 && len(view.Messages) == 0 {
 		return contextsvc.View{}, false

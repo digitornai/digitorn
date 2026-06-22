@@ -39,12 +39,8 @@ type contextCompactor struct {
 	apps   appmgr.Manager
 	llm    chatLLM
 	logger *slog.Logger
-	// touch triggers an immediate background context recount for a session.
-	// Wired by bootstrap to Daemon.touchContext ; nil in tests (no-op). Called
-	// right after a compaction so the EXACT post-compaction occupancy (system +
-	// tools + kept messages) lands promptly instead of waiting for the next turn
-	// — the gauge must show the real freed context, not an estimate, ASAP.
-	touch func(sessionID string)
+	touch     func(sessionID string) // async recount (mid-turn updates)
+	touchSync func(sessionID string) // synchronous recount (post-compaction exact count)
 
 	// nonBlocking (CTX-8 feature flag) makes the summarize strategy NEVER call the
 	// LLM on the turn loop: it applies a background-PREPARED summary when one is
@@ -75,7 +71,7 @@ func (c *contextCompactor) CompactSession(ctx context.Context, sessionID, strate
 	}
 	snap := state.Snapshot()
 
-	cfg, brain, byok := c.resolveContextConfig(ctx, snap.AppID)
+	cfg, brain, byok := c.resolveContextConfig(ctx, snap.AppID, sessionID)
 
 	keepRecent := keepLast
 	if keepRecent <= 0 && cfg != nil {
@@ -83,8 +79,23 @@ func (c *contextCompactor) CompactSession(ctx context.Context, sessionID, strate
 	}
 	keepRecent = contextcompact.KeepRecentOrDefault(keepRecent)
 
+	// Always protect the last user message: it must never land in the dropped
+	// portion, even when system/tool notifications were injected after it.
+	// Find the last user message and extend keepRecent to include it.
+	for i := len(snap.Messages) - 1; i >= 0; i-- {
+		if snap.Messages[i].Role == "user" {
+			if minKeep := len(snap.Messages) - i; keepRecent < minKeep {
+				keepRecent = minKeep
+			}
+			break
+		}
+	}
+
 	if strategy == "" && cfg != nil {
 		strategy = string(cfg.Strategy)
+	}
+	if strategy == "" {
+		strategy = contextcompact.StrategySummarize
 	}
 	summaryMax := 2048
 	if cfg != nil && cfg.SummaryMaxTokens > 0 {
@@ -168,12 +179,10 @@ func (c *contextCompactor) CompactSession(ctx context.Context, sessionID, strate
 	}
 
 	// Abort cancels EVERYTHING, including an in-flight compaction. If the turn ctx
-	// was cancelled while compacting, ABANDON the compaction : apply NO cutoff (the
-	// context stays exactly as the user left it) and emit a clean END marker with
-	// CutoffSeq 0 so the in-flight flag is cleared (never wedged at "compacting…").
-	// The END is persisted on a DETACHED ctx so the cancelled turn ctx can't strand
-	// it. The result is consistent + lossless : nothing was compacted, history intact.
-	if ctx.Err() != nil {
+	// Abort only when the context was cancelled AND no usable result was produced
+	// (res.Dropped == 0). If truncate already ran and produced a valid cutoff,
+	// apply it even if the LLM summarize was cancelled — the result is complete.
+	if ctx.Err() != nil && res.Dropped == 0 {
 		dctx, dcancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer dcancel()
 		_, _ = c.store.AppendDurable(dctx, sessionstore.Event{
@@ -255,11 +264,6 @@ func (c *contextCompactor) CompactSession(ctx context.Context, sessionID, strate
 			break
 		}
 	}
-	// Kick an immediate EXACT recount so the gauge converges to the real
-	// post-compaction occupancy (system + tools + kept messages) within the
-	// recount latency, instead of lingering on the informational estimate until
-	// the next turn. Non-blocking. Covers every trigger path (guard, hook,
-	// emergency) from one place.
 	if c.touch != nil {
 		c.touch(sessionID)
 	}
@@ -316,6 +320,13 @@ func contextMessageBudget(cfg *schema.ContextConfig, brain schema.Brain, snap se
 	if window <= 0 {
 		window = contextcompact.ContextWindowFor(brain.Provider, brain.Model)
 	}
+	// EntryModelWindow is the authoritative real window persisted at model-switch
+	// time. Use it when the resolved window is the generic ContextWindowFor
+	// fallback (i.e. model not in hardcoded table) so truncate targets the correct
+	// budget, not an 8k placeholder.
+	if snap.EntryModelWindow > 0 && window == contextcompact.ContextWindowFor(brain.Provider, brain.Model) {
+		window = snap.EntryModelWindow
+	}
 	if reserved <= 0 {
 		reserved = 4096
 	}
@@ -334,7 +345,9 @@ func contextMessageBudget(cfg *schema.ContextConfig, brain schema.Brain, snap se
 // to use for summarisation (summary_brain when set, else the agent's
 // main brain). Per-agent brain.context overrides app-level runtime.context
 // field-by-field (doc _resolve_context_config). nil cfg = no config.
-func (c *contextCompactor) resolveContextConfig(ctx context.Context, appID string) (*schema.ContextConfig, schema.Brain, bool) {
+// When sessionID is provided, the agent's ModelOverride (from PUT /sessions/{id}/model)
+// is applied so the compactor uses the same model as the conversation.
+func (c *contextCompactor) resolveContextConfig(ctx context.Context, appID, sessionID string) (*schema.ContextConfig, schema.Brain, bool) {
 	var brain schema.Brain
 	if c.apps == nil || appID == "" {
 		return nil, brain, false
@@ -360,6 +373,25 @@ func (c *contextCompactor) resolveContextConfig(ctx context.Context, appID strin
 	// Summary brain : explicit summary_brain wins, else the main brain.
 	if eff != nil && eff.SummaryBrain != nil {
 		brain = *eff.SummaryBrain
+	}
+	// Apply per-session model override so compactor uses the same model
+	// the conversation is running on (respects PUT /sessions/{id}/model).
+	if sessionID != "" && brain.Model != "" {
+		if state, err := c.store.State(sessionID); err == nil && state != nil {
+			snap := state.Snapshot()
+			agentID := ""
+			if len(app.Definition.Agents) > 0 {
+				agentID = app.Definition.Agents[0].ID
+			}
+			if ovr, ok := snap.ModelOverrides[agentID]; ok && ovr != "" {
+				brain.Model = ovr
+				// Clear the YAML's context.max_tokens so contextMessageBudget
+				// falls through to ContextWindowFor(ovr) — the real model's window.
+				if eff != nil {
+					eff.MaxTokens = 0
+				}
+			}
+		}
 	}
 	return eff, brain, byok
 }
@@ -421,15 +453,18 @@ func buildSummarizerPrompt(maxTokens int) string {
 	if words < 80 {
 		words = 80
 	}
-	return fmt.Sprintf(`You are compacting an AI agent's working session. This handoff will become the agent's ONLY memory of everything before now — the full conversation is being permanently deleted and the agent continues with NOTHING but what you write here. Anything you omit is lost forever and the agent will act as if it never happened. So capture EVERYTHING needed to continue the task seamlessly; when in doubt, KEEP it. For anything important, completeness beats brevity — dropping a needed detail is far worse than running slightly long.
+	return fmt.Sprintf(`You are compacting an AI agent's working session. You are seeing ONLY the OLDER portion of the conversation — the agent will receive your summary followed by the RECENT messages verbatim (those recent messages are NOT shown to you here). Your summary must capture everything the agent needs to understand the full context when it reads both your summary AND the recent messages that follow.
+
+This handoff will become the agent's complete memory of the compacted history. Anything you omit is lost forever. Capture EVERYTHING needed to continue seamlessly; when in doubt, KEEP it.
 
 Produce a dense, factual HANDOFF — never a vague paragraph. Use EXACTLY these sections, each a short header followed by tight bullet points. Omit a section only if it is truly empty:
 
-KEY FACTS: every concrete fact, value, or instruction the user stated or asked to be remembered — codewords, credentials, identifiers, names, numbers, dates, URLs, file paths, exact values, requirements, preferences, decisions, agreements, and explicit constraints — recorded VERBATIM. This is the MOST IMPORTANT section and is MANDATORY: never drop, paraphrase away, generalise, or compress these, and NEVER dismiss a user-stated fact as "filler", "no task", or irrelevant, even if the rest of the session is idle chatter or test content. If the user said "remember X" or gave any specific value, it goes here verbatim.
-MISSION: the user's overall goal and intent in their own words, AND their most recent request / what they want next.
-TASK & PLAN: what is being worked on right now, the chosen approach/strategy, the steps and sequencing, and the key design decisions and why.
-PROGRESS: what has been done, what now works, and the key decisions made and WHY.
-FILES & ARTIFACTS: files or resources created/modified, their role, and any important paths or contents.
+KEY FACTS: every concrete fact, value, or instruction the user stated or asked to be remembered — codewords, credentials, identifiers, names, numbers, dates, URLs, file paths, exact values, requirements, preferences, decisions, agreements, and explicit constraints — recorded VERBATIM. MANDATORY: never drop, paraphrase, or compress these.
+LAST USER REQUEST: the exact verbatim text of the LAST thing the user asked or requested in this compacted portion. Copy it word-for-word. MANDATORY even if it seems simple or already captured elsewhere.
+MISSION: the user's overall goal and intent in their own words.
+TASK & PLAN: what is being worked on right now, the chosen approach/strategy, and key design decisions.
+PROGRESS: what has been done, what now works, and key decisions made and WHY.
+FILES & ARTIFACTS: files or resources created/modified, their role, and important paths or contents.
 OPEN ITEMS: what remains, blockers, unanswered questions, and the immediate next step.
 PITFALLS: errors hit and how they were fixed, hard constraints, and things to avoid.
 

@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/mbathepaul/digitorn/internal/compiler/schema"
+	"github.com/mbathepaul/digitorn/internal/llm"
 	"github.com/mbathepaul/digitorn/internal/runtime"
 	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
 	"github.com/mbathepaul/digitorn/internal/runtime/workdir"
@@ -672,6 +673,38 @@ func (d *Daemon) compactSession(w http.ResponseWriter, r *http.Request) {
 		snap := state.Snapshot()
 		d.lifecycle.FireLifecycle(r.Context(), schema.HookEventPreCompact, snap.AppID, sid, snap.UserID)
 	}
+	// LLM context compaction — the primary action. Emits context_compacting +
+	// context_compacted events so the TUI shows the "compacting…" indicator and
+	// the gauge updates. Uses the request JWT for the summarize strategy.
+	ctxCompacted := false
+	if d.compactor != nil {
+		snapBefore := state.Snapshot()
+		cutoffBefore := uint64(0)
+		if snapBefore.ContextCompaction != nil {
+			cutoffBefore = snapBefore.ContextCompaction.CutoffSeq
+		}
+		// Use a detached context so compaction is never cancelled by the HTTP
+		// request lifecycle (TUI AbortSignal, server write timeout, etc.).
+		// The JWT is carried explicitly so the summarize LLM call can auth.
+		compactCtx, compactCancel := context.WithTimeout(
+			llm.WithUserJWT(context.Background(), extractBearer(r)),
+			10*time.Minute,
+		)
+		defer compactCancel()
+		if err := d.compactor.CompactSession(compactCtx, sid, "", 0); err != nil {
+			writeError(w, http.StatusInternalServerError, "compact_failed", err.Error())
+			return
+		}
+		d.touchContext(sid)
+		snapAfter := state.Snapshot()
+		cutoffAfter := uint64(0)
+		if snapAfter.ContextCompaction != nil {
+			cutoffAfter = snapAfter.ContextCompaction.CutoffSeq
+		}
+		ctxCompacted = cutoffAfter > cutoffBefore
+	}
+
+	// Sessionstore compaction — flush the event log to a binary snapshot on disk.
 	c := d.sessionStore.Compactor(sessionstore.CompactorConfig{})
 	res, err := c.Compact(r.Context(), state, sessionstore.CompactOptions{
 		TruncateMode: sessionstore.TruncateSync,
@@ -682,10 +715,11 @@ func (d *Daemon) compactSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"session_id":       res.SessionID,
-		"cutoff_seq":       res.CutoffSeq,
-		"compact_done_seq": res.CompactDoneSeq,
-		"snapshot_sha256":  res.SnapshotSHA256,
+		"session_id":        res.SessionID,
+		"context_compacted": ctxCompacted,
+		"cutoff_seq":        res.CutoffSeq,
+		"compact_done_seq":  res.CompactDoneSeq,
+		"snapshot_sha256":   res.SnapshotSHA256,
 		"binary":           res.SnapshotFormat == sessionstore.SnapshotBinary,
 		"events_compacted": res.EventsCompacted,
 		"bytes_before":     res.JSONLBytesBefore,

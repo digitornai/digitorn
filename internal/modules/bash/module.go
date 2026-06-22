@@ -21,6 +21,7 @@ import (
 	domainmodule "github.com/mbathepaul/digitorn/internal/domain/module"
 	"github.com/mbathepaul/digitorn/internal/domain/tool"
 	"github.com/mbathepaul/digitorn/internal/flexjson"
+	"github.com/mbathepaul/digitorn/internal/modules/eventemitter"
 	"github.com/mbathepaul/digitorn/internal/runtime/workdir"
 	"github.com/mbathepaul/digitorn/internal/safego"
 	"github.com/mbathepaul/digitorn/pkg/module"
@@ -305,7 +306,7 @@ func (m *Module) Init(ctx context.Context, cfg map[string]any) error {
 		_ = json.Unmarshal(raw, &m.cfg)
 	}
 	if m.cfg.MaxOutput <= 0 {
-		m.cfg.MaxOutput = 1 << 20
+		m.cfg.MaxOutput = 100 << 10 // 100 KB, matches Claude Code/opencode
 	}
 	if m.cfg.TimeoutSecs <= 0 {
 		m.cfg.TimeoutSecs = 900
@@ -467,6 +468,16 @@ type runResult struct {
 	Git          *gitInfo `json:"git,omitempty"`
 }
 
+// DeclaredEvents returns the list of event topics this module may emit.
+// Implements domainmodule.EventEmitter.
+func (m *Module) DeclaredEvents() []map[string]string {
+	return []map[string]string{
+		{"topic": "bash.command.executed", "type": "command.executed"},
+		{"topic": "bash.command.failed", "type": "command.failed"},
+		{"topic": "bash.command.timed_out", "type": "command.timed_out"},
+	}
+}
+
 func (m *Module) run(ctx context.Context, raw json.RawMessage) (tool.Result, error) {
 	var p runParams
 	if err := json.Unmarshal(raw, &p); err != nil {
@@ -617,6 +628,27 @@ func (m *Module) run(ctx context.Context, raw json.RawMessage) (tool.Result, err
 	}
 	m.enrich(&res, root, started)
 	workdir.NotifyFileChange(ctx)
+
+	// Emit event based on command result
+	if res.TimedOut {
+		eventemitter.EmitWithModule(ctx, "bash", "bash.command.timed_out", map[string]any{
+			"command":    command,
+			"duration_ms": res.DurationMs,
+		})
+	} else if res.ExitCode != 0 {
+		eventemitter.EmitWithModule(ctx, "bash", "bash.command.failed", map[string]any{
+			"command":    command,
+			"exit_code":  res.ExitCode,
+			"duration_ms": res.DurationMs,
+		})
+	} else {
+		eventemitter.EmitWithModule(ctx, "bash", "bash.command.executed", map[string]any{
+			"command":    command,
+			"exit_code":  res.ExitCode,
+			"duration_ms": res.DurationMs,
+		})
+	}
+
 	return m.result(command, res, nil, timeout), nil
 }
 

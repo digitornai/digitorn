@@ -60,6 +60,7 @@ func (d *Daemon) installApp(w http.ResponseWriter, r *http.Request) {
 		writeError(w, appMgrErrStatus(err), "install_failed", err.Error())
 		return
 	}
+	go d.pushTriggersToBackground(r.Context(), app)
 	writeJSON(w, http.StatusOK, installResponse{
 		AppID: app.AppID, Name: app.Name, Version: app.Version,
 		Source: req.Source, InstallDir: filepath.Join(d.cfg.Apps.Root, app.AppID),

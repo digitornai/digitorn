@@ -42,7 +42,42 @@ func (d *Daemon) piecesList(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "list_failed", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"pieces": list, "count": len(list)})
+
+	// Enrich with action/trigger counts and configured status from the bridge.
+	bridge := pm.Bridge()
+	type enriched struct {
+		UserID        string `json:"UserID"`
+		PieceName     string `json:"PieceName"`
+		Version       string `json:"Version"`
+		AuthType      string `json:"AuthType"`
+		Enabled       bool   `json:"Enabled"`
+		ActionCount   int    `json:"actionCount"`
+		TriggerCount  int    `json:"triggerCount"`
+		Configured    bool   `json:"configured"`
+	}
+	out := make([]enriched, 0, len(list))
+	for _, p := range list {
+		e := enriched{
+			UserID:    p.UserID,
+			PieceName: p.PieceName,
+			Version:   p.Version,
+			AuthType:  p.AuthType,
+			Enabled:   p.Enabled,
+			Configured: len(p.SecretKeys) > 0,
+		}
+		if bridge != nil {
+			if status, err2 := bridge.GetPieceStatus(p.PieceName); err2 == nil {
+				if v, ok := status["actionCount"].(float64); ok {
+					e.ActionCount = int(v)
+				}
+				if v, ok := status["triggerCount"].(float64); ok {
+					e.TriggerCount = int(v)
+				}
+			}
+		}
+		out = append(out, e)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"pieces": out, "count": len(out)})
 }
 
 // POST /api/pieces — install a piece for the caller.

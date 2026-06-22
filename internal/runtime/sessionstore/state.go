@@ -123,8 +123,16 @@ type SessionState struct {
 	// their logical id (so the choice applies to every future sub-turn). nil/empty
 	// = every agent uses its Brain default.
 	ModelOverrides map[string]string
-	TurnCount      int
-	Interrupted    bool
+	// EntryModelWindow is the gateway's documented max_context_tokens for the
+	// entry agent's selected model, persisted from EventModelChanged so the
+	// background recount resolves the real window without a gateway call.
+	EntryModelWindow int
+	TurnCount        int
+	Interrupted      bool
+	// LastUserMessage is the verbatim text of the most recent user message.
+	// Updated by every EventUserMessage projection — survives compaction so
+	// working memory always knows what the agent must currently answer.
+	LastUserMessage string
 
 	// CurrentTurnID identifies the in-flight turn, or "" when no turn is
 	// running. CurrentTurnPhase tracks its state across phase changes ;
@@ -409,11 +417,10 @@ func (s *SessionState) Snapshot() SessionSnapshot {
 		Title:                    s.Title,
 		Workspace:                s.Workspace,
 		Workdir:                  s.Workdir,
-		EntryAgent:               s.EntryAgent,
-		ContextExtra:             s.ContextExtra,
-		ModelOverrides:           s.ModelOverrides,
-		TurnCount:                s.TurnCount,
-		Interrupted:              s.Interrupted,
+			EntryAgent:               s.EntryAgent,
+			ContextExtra:             s.ContextExtra,
+			ModelOverrides:           s.ModelOverrides,
+			EntryModelWindow:         s.EntryModelWindow,
 		CurrentTurnID:            s.CurrentTurnID,
 		CurrentTurnPhase:         s.CurrentTurnPhase,
 		CurrentTurnStartedAtNano: s.CurrentTurnStartedAtNano,
@@ -422,6 +429,9 @@ func (s *SessionState) Snapshot() SessionSnapshot {
 		EventCount:               s.EventCount,
 		BytesEst:                 s.BytesEst,
 		Partial:                  s.Partial,
+		TurnCount:                s.TurnCount,
+		Interrupted:              s.Interrupted,
+		LastUserMessage:          s.LastUserMessage,
 	}
 	return snap
 }

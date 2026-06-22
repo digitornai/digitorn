@@ -49,7 +49,7 @@ func biMemoryIndex(d Data) string {
 	}
 	var out strings.Builder
 	memDir := filepath.Join(workdir, ".digitorn", "memory")
-	if content := renderDir(memDir, true, ""); content != "" {
+	if content := renderDirBudget(memDir); content != "" {
 		out.WriteString("<system-reminder>\n")
 		out.WriteString(content)
 		out.WriteString("\n</system-reminder>\n\n")

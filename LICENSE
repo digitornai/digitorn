@@ -1,0 +1,36 @@
+Business Source License 1.1
+
+Licensor: Paul Mbathé
+Licensed Work: Digitorn
+Additional Use Grant: You may use, copy, modify, and distribute the
+Licensed Work for non-production purposes. Production use requires a
+commercial license from the Licensor.
+Change Date: The date on which the Licensed Work reverts to Apache-2.0.
+Change License: Apache-2.0
+
+For the avoidance of doubt:
+
+1. "Production use" means any use of the Licensed Work in a commercial
+   environment where the Licensed Work is used to provide services to
+   third parties, including but not limited to offering the Licensed Work
+   as a managed service, hosting the Licensed Work for others, or
+   providing the Licensed Work as part of a commercial product or service.
+
+2. "Non-production use" means personal, internal, development, testing,
+   evaluation, and educational use.
+
+3. If you are unsure whether your use constitutes production use, contact
+   the Licensor.
+
+Terms: The licensor grants you a non-exclusive, royalty-free, worldwide
+license to use, copy, modify, and distribute the software source code and
+compiled binaries for non-production purposes, subject to the Additional
+Use Grant above.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR
+OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE SOFTWARE.

@@ -189,6 +189,9 @@ func (d *Daemon) MountAPI() {
 			r.Get("/api/_dev/pieces/catalog", d.piecesCatalogDiag)
 		}
 
+		// ----- Events stream (for background service primitives adapter) -----
+		r.Get("/api/events/recent", d.handleEventsRecent)
+
 		// ----- Stubs for routes requiring runtime / deployment subsystems -----
 		d.mountStubs(r)
 	})

@@ -151,6 +151,7 @@ func hydrateFromSnapshot(s *SessionState, snap *SessionSnapshot) {
 	s.Facts = append(s.Facts[:0], snap.Facts...)
 	s.AllowedSignatures = append(s.AllowedSignatures[:0], snap.AllowedSignatures...)
 	s.Goal = snap.Goal
+	s.LastUserMessage = snap.LastUserMessage
 	if len(snap.WorkspaceFiles) > 0 {
 		s.WorkspaceFiles = cloneFileStates(snap.WorkspaceFiles)
 	}
@@ -185,8 +186,9 @@ func hydrateFromSnapshot(s *SessionState, snap *SessionSnapshot) {
 	s.ContextToolsTokens = snap.ContextToolsTokens
 	s.ContextMessageTokens = snap.ContextMessageTokens
 	s.ContextProviderTokens = snap.ContextProviderTokens
-	s.TokensIn = snap.TokensIn
-	s.TokensOut = snap.TokensOut
+		s.TokensIn = snap.TokensIn
+		s.TokensOut = snap.TokensOut
+		s.EntryModelWindow = snap.EntryModelWindow
 	s.UsdTotal = snap.UsdTotal
 	s.Title = snap.Title
 	s.Workspace = snap.Workspace

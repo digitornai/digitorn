@@ -151,7 +151,7 @@ func TestArm_PersistsTriggers_Idempotent(t *testing.T) {
 	plan := BuildPlan(apps, func(string) string { return "" })
 	st := newStore(t)
 
-	_, reg, err := Arm(context.Background(), st, plan, nil)
+	_, reg, err := Arm(context.Background(), st, plan, "", nil)
 	if err != nil {
 		t.Fatalf("Arm: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestArm_PersistsTriggers_Idempotent(t *testing.T) {
 	}
 
 	// Re-arm (simulating a re-scan) must NOT duplicate (stable ids).
-	if _, _, err := Arm(context.Background(), st, plan, nil); err != nil {
+	if _, _, err := Arm(context.Background(), st, plan, "", nil); err != nil {
 		t.Fatalf("re-arm: %v", err)
 	}
 	triggers2, _ := st.ListTriggers(context.Background(), "")

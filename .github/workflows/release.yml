@@ -1,0 +1,198 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (must already exist, e.g. v0.2.0)'
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  GO_VERSION_FILE: go.mod
+  PKG: github.com/mbathepaul/digitorn
+  CLI_PKG: github.com/mbathepaul/digitorn-cli
+
+jobs:
+  # ── Build TUI binaries once, share via artifact ─────────────────────
+  build-tui:
+    name: Build TUI (all platforms)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install TUI dependencies
+        working-directory: clients/opencode-fork
+        run: bun install --frozen-lockfile
+
+      - name: Build TUI binaries
+        run: |
+          VERSION="${GITHUB_REF_NAME:-${{ github.event.inputs.tag }}}"
+          ./scripts/build-release-tui.sh "${VERSION#v}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tui-binaries
+          path: .goreleaser-tui/
+          retention-days: 1
+
+  # ── Build Go binaries per platform ──────────────────────────────────
+  build:
+    name: Build ${{ matrix.os }}/${{ matrix.arch }}
+    needs: build-tui
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {runner: ubuntu-latest,  os: linux,   arch: amd64}
+          - {runner: ubuntu-latest,  os: linux,   arch: arm64,  cross_cc: aarch64-linux-gnu-gcc,    cross_cxx: aarch64-linux-gnu-g++}
+          - {runner: ubuntu-latest,  os: windows, arch: amd64,  cross_cc: x86_64-w64-mingw32-gcc,   cross_cxx: x86_64-w64-mingw32-g++, ext: .exe}
+          - {runner: macos-latest,   os: darwin,  arch: arm64}
+          - {runner: macos-13,       os: darwin,  arch: amd64}
+
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ env.GO_VERSION_FILE }}
+          cache: true
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: tui-binaries
+          path: .goreleaser-tui/
+
+      - name: Install cross-compilation toolchains (Linux runner)
+        if: matrix.runner == 'ubuntu-latest'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
+                                  gcc-mingw-w64-x86-64  g++-mingw-w64-x86-64
+
+      - name: Set version
+        id: version
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME:-${{ github.event.inputs.tag }}}"
+          echo "tag=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "dir=${VERSION#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build binaries
+        shell: bash
+        env:
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+          CGO_ENABLED: "1"
+          CC: ${{ matrix.cross_cc || 'gcc' }}
+          CXX: ${{ matrix.cross_cxx || 'g++' }}
+          VERSION: ${{ steps.version.outputs.tag }}
+          EXT: ${{ matrix.ext }}
+        run: |
+          mkdir -p bin
+          LDFLAGS="-s -w -X ${PKG}/internal/version.Version=${VERSION} -X ${PKG}/internal/version.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          GOFLAGS="-trimpath -tags treesitter"
+
+          for target in digitornd digitorn-background digitorn-voice digitorn-worker digitorn-worker-llm digitorn-worker-tokenizer; do
+            echo "▶ ${target}"
+            go build ${GOFLAGS} -ldflags "${LDFLAGS}" -o "bin/${target}${EXT}" "./cmd/${target}"
+          done
+
+          if [[ "${GOOS}" == "linux" ]]; then
+            echo "▶ digitorn-worker-embeddings (onnx)"
+            go build -trimpath -tags "treesitter onnx" -ldflags "${LDFLAGS}" -o "bin/digitorn-worker-embeddings${EXT}" ./cmd/digitorn-worker-embeddings
+          fi
+
+          echo "▶ digitorn (CLI, CGO_ENABLED=0)"
+          CLI_LDFLAGS="-s -w -X main.version=${VERSION}"
+          (cd clients/cli && CGO_ENABLED=0 go build -trimpath -ldflags "${CLI_LDFLAGS}" -o "../../bin/digitorn${EXT}" ./cmd/digitorn)
+
+      - name: Copy TUI binary
+        shell: bash
+        env:
+          OS: ${{ matrix.os }}
+          ARCH: ${{ matrix.arch }}
+          EXT: ${{ matrix.ext }}
+        run: |
+          TUI_SRC=".goreleaser-tui/${OS}/${ARCH}/digitorn-tui${EXT}"
+          if [[ -f "${TUI_SRC}" ]]; then
+            cp "${TUI_SRC}" "bin/digitorn-tui${EXT}"
+            echo "✓ TUI binary copied"
+          else
+            echo "⚠ TUI binary not found at ${TUI_SRC} — skipping"
+          fi
+
+      - name: Copy installer and config
+        shell: bash
+        run: |
+          cp scripts/install.sh bin/ 2>/dev/null || true
+          cp scripts/install.ps1 bin/ 2>/dev/null || true
+          cp .digitorn.yaml.example bin/ 2>/dev/null || true
+          cp LICENSE bin/ 2>/dev/null || true
+
+      - name: Create archive
+        shell: bash
+        env:
+          OS: ${{ matrix.os }}
+          ARCH: ${{ matrix.arch }}
+          VERSION_DIR: ${{ steps.version.outputs.dir }}
+        run: |
+          ARCHIVE="digitorn-${VERSION_DIR}-${OS}-${ARCH}.tar.gz"
+          tar -czf "${ARCHIVE}" -C bin --transform "s|^|digitorn-${VERSION_DIR}-${OS}-${ARCH}/|" .
+          echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: archive-${{ matrix.os }}-${{ matrix.arch }}
+          path: ${{ env.ARCHIVE }}
+          retention-days: 1
+
+  # ── Publish GitHub Release ───────────────────────────────────────────
+  release:
+    name: Publish Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: archive-*
+          path: dist/
+          merge-multiple: true
+
+      - name: Set version
+        id: version
+        run: |
+          VERSION="${GITHUB_REF_NAME:-${{ github.event.inputs.tag }}}"
+          echo "tag=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "dir=${VERSION#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate checksums
+        working-directory: dist
+        run: |
+          sha256sum *.tar.gz > "checksums-${{ steps.version.outputs.dir }}.txt"
+          cat "checksums-${{ steps.version.outputs.dir }}.txt"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.tag }}
+          VERSION_DIR: ${{ steps.version.outputs.dir }}
+        run: |
+          gh release create "${VERSION}" \
+            dist/*.tar.gz \
+            "dist/checksums-${VERSION_DIR}.txt" \
+            scripts/install.sh \
+            scripts/install.ps1 \
+            --title "Digitorn ${VERSION}" \
+            --generate-notes

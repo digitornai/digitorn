@@ -145,12 +145,20 @@ func (a *account) GetKeysForProvider(ctx context.Context, _ schemas.ModelProvide
 		if r.APIKey == "" {
 			return nil, errors.New("bifrost: BYOK requested but APIKey is empty")
 		}
-		return []schemas.Key{{
+		key := schemas.Key{
 			ID:     "direct",
 			Value:  schemas.EnvVar{Val: r.APIKey, FromEnv: false},
 			Models: schemas.WhiteList{"*"},
 			Weight: 1.0,
-		}}, nil
+		}
+		// BYOK + custom BaseURL: attach it as VLLMKeyConfig so the VLLM
+		// provider uses this URL instead of the provider-level default.
+		if r.BaseURL != "" {
+			key.VLLMKeyConfig = &schemas.VLLMKeyConfig{
+				URL: schemas.EnvVar{Val: r.BaseURL, FromEnv: false},
+			}
+		}
+		return []schemas.Key{key}, nil
 	}
 	if r.UserJWT == "" {
 		return nil, errors.New("bifrost: gateway mode requires UserJWT")
@@ -206,6 +214,14 @@ func (a *account) GetConfigForProvider(p schemas.ModelProvider) (*schemas.Provid
 func ResolveProvider(req *llm.ChatRequest) schemas.ModelProvider {
 	if !req.BYOK {
 		return schemas.OpenAI
+	}
+	// BYOK + custom BaseURL: route through VLLM provider which supports
+	// per-key URL overrides (VLLMKeyConfig.URL). The VLLM provider speaks
+	// OpenAI-compatible API, so it works with any OpenAI-compatible endpoint.
+	// This covers any provider with a custom base_url (e.g. opencode, ollama,
+	// vLLM, or any OpenAI-compatible endpoint) — not just "openai".
+	if req.BaseURL != "" {
+		return schemas.VLLM
 	}
 	switch strings.ToLower(req.Provider) {
 	case "anthropic":

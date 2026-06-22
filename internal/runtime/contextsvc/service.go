@@ -70,22 +70,32 @@ func ResolveWithRuntime(snap sessionstore.SessionSnapshot, brain schema.Brain, r
 }
 
 // ResolveWithRuntimeAndGateway resolves the context window with the full priority chain:
-//  1. brain.context.max_tokens  (explicit per-agent YAML config)
-//  2. gatewayWindow             (live from /v1/models max_context_tokens — changes with model switch)
+//  1. gatewayWindow             (live from /v1/models max_context_tokens — authoritative model window)
+//  2. brain.context.max_tokens  (explicit per-agent YAML config — fallback when gateway unknown)
 //  3. runtimeMaxTokens          (app-level runtime.context.max_tokens — general ceiling)
 //  4. ContextWindowFor()        (hardcoded table — last resort for unknown models)
 //
-// gatewayWindow wins over runtimeMaxTokens so switching to a smaller-window model
-// automatically caps the budget and triggers proactive compaction before overflow.
+// gatewayWindow is the AUTHENTIC source for the model's real context window. It
+// wins over brain.context.max_tokens because the YAML config is often set to the
+// model's documented maximum (e.g. 1M), while the gateway knows the actual
+// window the model serves through (which may differ per deployment / provider
+// tier). This ensures compaction fires at the RIGHT pressure, not at a
+// hypothetical 1M limit the model doesn't actually support. Without this
+// priority, context can overflow well past the real window because pressure
+// reads 150k/1M = 15% instead of 150k/131k = 115%.
 func ResolveWithRuntimeAndGateway(snap sessionstore.SessionSnapshot, brain schema.Brain, runtimeMaxTokens, gatewayWindow int) Snapshot {
 	window := 0
 	reserved := 0
 	if brain.Context != nil {
-		window = brain.Context.MaxTokens
 		reserved = brain.Context.OutputReserved
 	}
-	if window <= 0 && gatewayWindow > 0 {
+	// Gateway window is the authoritative model window — it wins over
+	// brain.context.max_tokens (which may be a YAML-set maximum that doesn't
+	// match the actual model deployment).
+	if gatewayWindow > 0 {
 		window = gatewayWindow
+	} else if brain.Context != nil && brain.Context.MaxTokens > 0 {
+		window = brain.Context.MaxTokens
 	}
 	if window <= 0 && runtimeMaxTokens > 0 {
 		window = runtimeMaxTokens

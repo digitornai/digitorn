@@ -68,6 +68,7 @@ func (b *Builder) Build(
 			it.Permissions = a.Spec.Permissions
 			it.ToolPrompt = a.Spec.ToolPrompt
 		}
+		it.DiscoveryOnly = a.DiscoveryOnly
 		idx.Tools[fqn] = it
 		idx.Categories[a.Module] = append(idx.Categories[a.Module], fqn)
 		b.indexTokens(idx, it)

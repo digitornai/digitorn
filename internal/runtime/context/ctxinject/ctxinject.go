@@ -159,6 +159,13 @@ func sectionBody(s schema.ContextSection, d Data, bag map[string]any) string {
 		return renderFiles(paths, s.Optional, workdir)
 	}
 	if dir := strings.TrimSpace(interp(s.Dir, bag)); dir != "" {
+		absDir := dir
+		if !filepath.IsAbs(absDir) && workdir != "" {
+			absDir = filepath.Join(workdir, absDir)
+		}
+		if strings.Contains(strings.ToLower(filepath.Base(absDir)), "memory") {
+			return renderDirBudget(absDir)
+		}
 		return renderDir(dir, s.Optional, workdir)
 	}
 	if s.Template != "" {
@@ -197,6 +204,114 @@ func renderFiles(paths []string, optional bool, workdir string) string {
 			content = "## " + filepath.Base(p) + "\n" + content
 		}
 		parts = append(parts, content)
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+// memoryDirBudget is the max chars injected per memory directory. MEMORY.md
+// (the index) is always included; individual files fill the remaining budget
+// ordered by type priority then recency. When the budget is exhausted a note
+// is appended so the agent knows more context exists in the directory.
+const memoryDirBudget = 4000
+
+// typePriority returns the injection priority for a memory file. Lower = higher
+// priority. feedback > project > user > reference > unknown.
+func typePriority(name string) int {
+	switch {
+	case strings.HasPrefix(name, "feedback_"):
+		return 0
+	case strings.HasPrefix(name, "project_"):
+		return 1
+	case strings.HasPrefix(name, "user_"):
+		return 2
+	case strings.HasPrefix(name, "reference_"):
+		return 3
+	default:
+		return 4
+	}
+}
+
+// renderDirBudget renders a memory directory with a char budget. MEMORY.md is
+// always injected; other files are included by priority then recency until the
+// budget is exhausted. Use this instead of renderDir for memory sections.
+func renderDirBudget(dir string) string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+
+	type fileInfo struct {
+		name    string
+		modTime time.Time
+		size    int64
+		isIndex bool
+	}
+
+	var files []fileInfo
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(strings.ToLower(e.Name()), ".md") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		files = append(files, fileInfo{
+			name:    e.Name(),
+			modTime: info.ModTime(),
+			size:    info.Size(),
+			isIndex: strings.EqualFold(e.Name(), "MEMORY.md"),
+		})
+	}
+	if len(files) == 0 {
+		return ""
+	}
+
+	// Sort: MEMORY.md first, then by type priority asc, then recency desc.
+	sort.SliceStable(files, func(i, j int) bool {
+		if files[i].isIndex != files[j].isIndex {
+			return files[i].isIndex
+		}
+		pi, pj := typePriority(files[i].name), typePriority(files[j].name)
+		if pi != pj {
+			return pi < pj
+		}
+		return files[i].modTime.After(files[j].modTime)
+	})
+
+	budget := memoryDirBudget
+	var parts []string
+	skipped := 0
+
+	for _, fi := range files {
+		if budget <= 0 {
+			skipped++
+			continue
+		}
+		content, err := os.ReadFile(filepath.Join(dir, fi.name))
+		if err != nil {
+			continue
+		}
+		text := string(content)
+		if len(text) > budget && !fi.isIndex {
+			skipped++
+			continue
+		}
+		if len(text) > budget {
+			text = text[:budget]
+			if i := strings.LastIndexByte(text, '\n'); i > 0 {
+				text = text[:i]
+			}
+			text += "\n[… truncated]"
+		}
+		header := "## " + fi.name
+		entry := header + "\n" + text
+		parts = append(parts, entry)
+		budget -= len(entry)
+	}
+
+	if skipped > 0 {
+		parts = append(parts, fmt.Sprintf("[%d memory file(s) not injected — budget exhausted. Use filesystem.read to load them.]", skipped))
 	}
 	return strings.Join(parts, "\n\n")
 }

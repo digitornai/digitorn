@@ -28,8 +28,8 @@ func TestHardening_ReadBeyondEOF(t *testing.T) {
 	}
 	// offset/limit as STRINGS too (LLM habit) + far beyond EOF.
 	r, err := m.read(ctx, mustJSON(map[string]any{"path": "a.txt", "offset": "999999", "limit": "50"}))
-	if err != nil || !r.Success {
-		t.Fatalf("read beyond EOF must succeed cleanly, got err=%v success=%v", err, r.Success)
+	if err == nil {
+		t.Fatalf("read beyond EOF must return an error, got err=nil success=%v", r.Success)
 	}
 }
 

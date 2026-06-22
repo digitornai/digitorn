@@ -5,6 +5,9 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -26,6 +29,7 @@ func main() {
 	root.AddCommand(compileCmd())
 	root.AddCommand(inspectCmd())
 	root.AddCommand(versionCmd())
+	root.AddCommand(chatCmd())
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -121,6 +125,53 @@ func inspectCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+func chatCmd() *cobra.Command {
+	var daemonURL string
+	var gatewayURL string
+	var app string
+
+	cmd := &cobra.Command{
+		Use:   "chat",
+		Short: "Launch the Digitorn chat TUI (dev mode — bun run dev)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			exe, err := os.Executable()
+			if err != nil {
+				return err
+			}
+			repoRoot := filepath.Join(filepath.Dir(exe), "..", "..")
+			pkg := filepath.Join(repoRoot, "clients", "opencode-fork", "packages", "opencode")
+
+			cwd, _ := os.Getwd()
+			env := append(os.Environ(),
+				"DIGITORN_CWD="+cwd,
+				"DIGITORN_URL="+daemonURL,
+				"DIGITORN_APP="+app,
+				"DIGITORN_GATEWAY_URL="+gatewayURL,
+			)
+
+			var bunCmd string
+			if runtime.GOOS == "windows" {
+				bunCmd = "bun.exe"
+			} else {
+				bunCmd = "bun"
+			}
+
+			c := exec.Command(bunCmd, "run", "dev")
+			c.Dir = pkg
+			c.Env = env
+			c.Stdin = os.Stdin
+			c.Stdout = os.Stdout
+			c.Stderr = os.Stderr
+			return c.Run()
+		},
+	}
+
+	cmd.Flags().StringVarP(&daemonURL, "url", "u", "http://localhost:8000", "Daemon URL")
+	cmd.Flags().StringVarP(&gatewayURL, "gateway", "g", "https://gateway.digitorn.ai", "Gateway URL")
+	cmd.Flags().StringVarP(&app, "app", "a", "chat", "App ID to open")
+	return cmd
 }
 
 func versionCmd() *cobra.Command {

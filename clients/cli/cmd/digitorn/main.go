@@ -70,6 +70,7 @@ func newRoot() *cobra.Command {
 		root.AddCommand(commands.NewAppReload()) // app reload
 		root.AddCommand(commands.NewDaemonStats()) // daemon stats
 		root.AddCommand(commands.NewSecret())    // secret group
+		root.AddCommand(commands.NewUpgrade())    // self-update
 		root.AddCommand(commands.NewVersion())   // version
 		root.AddCommand(commands.NewStatus())    // daemon status
 		root.AddCommand(commands.NewDoctor())    // environment doctor

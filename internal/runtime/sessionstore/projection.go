@@ -99,6 +99,23 @@ func applyLocked(s *SessionState, ev *Event) {
 				}
 				s.SeenClientMsgIDs[ev.Message.ClientMessageID] = ev.Seq
 			}
+			// Track last user message verbatim — survives compaction, always
+			// reflects what the agent must currently answer.
+			txt := content
+			if txt == "" {
+				for _, p := range parts {
+					if p.Type == PartTypeText && p.Text != "" {
+						txt = p.Text
+						break
+					}
+				}
+			}
+			if len(txt) > 500 {
+				txt = txt[:500] + "…"
+			}
+			if txt != "" {
+				s.LastUserMessage = txt
+			}
 		}
 		// A mode-switch directive binds the session's active mode, so it is
 		// reconstructed verbatim on cold-load / replay.
@@ -367,7 +384,20 @@ func applyLocked(s *SessionState, ev *Event) {
 					s.Todos[i].Text = ev.Todo.Text
 				}
 				s.Todos[i].UpdatedAt = ev.TsUnixNano
-				return
+				break
+			}
+		}
+		// Auto-clear goal when all todos are done — the objective was reached.
+		if s.Goal != "" && len(s.Todos) > 0 {
+			allDone := true
+			for _, t := range s.Todos {
+				if t.Status != "done" && t.Status != "completed" {
+					allDone = false
+					break
+				}
+			}
+			if allDone {
+				s.Goal = ""
 			}
 		}
 
@@ -409,16 +439,19 @@ func applyLocked(s *SessionState, ev *Event) {
 	case EventModelChanged:
 		// Set OR clear the per-agent model override (empty Model = revert that
 		// agent to its Brain default).
-		if ev.Meta != nil {
-			if ev.Meta.Model == "" {
-				delete(s.ModelOverrides, ev.Meta.AgentID)
-			} else {
-				if s.ModelOverrides == nil {
-					s.ModelOverrides = map[string]string{}
+			if ev.Meta != nil {
+				if ev.Meta.Model == "" {
+					delete(s.ModelOverrides, ev.Meta.AgentID)
+				} else {
+					if s.ModelOverrides == nil {
+						s.ModelOverrides = map[string]string{}
+					}
+					s.ModelOverrides[ev.Meta.AgentID] = ev.Meta.Model
 				}
-				s.ModelOverrides[ev.Meta.AgentID] = ev.Meta.Model
+				if ev.Meta.MaxContextTokens > 0 {
+					s.EntryModelWindow = ev.Meta.MaxContextTokens
+				}
 			}
-		}
 
 	case EventSessionStarted:
 		if ev.Meta != nil {

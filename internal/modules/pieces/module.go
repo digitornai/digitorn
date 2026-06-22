@@ -197,9 +197,14 @@ func appAuthFor(ctx context.Context, pieceName string) *APAuthWire {
 		return nil
 	}
 	return &APAuthWire{
-		Type:   ac.Type,
-		Value:  ac.Value,
-		Fields: ac.Fields,
+		Type:         ac.Type,
+		Value:        ac.Value,
+		Fields:       ac.Fields,
+		AccessToken:  ac.AccessToken,
+		RefreshToken: ac.RefreshToken,
+		TokenType:    ac.TokenType,
+		Username:     ac.Username,
+		Password:     ac.Password,
 	}
 }
 

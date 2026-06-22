@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/mbathepaul/digitorn/internal/core/servicebus"
+	"github.com/mbathepaul/digitorn/internal/domain/tool"
 	"github.com/mbathepaul/digitorn/internal/module/proxy"
 )
 
@@ -71,8 +72,12 @@ func (d *Daemon) devInvoke(w http.ResponseWriter, r *http.Request) {
 		params = []byte(`{}`)
 	}
 
+	// Inject the EventBus into the context so modules that implement
+	// EventEmitter can publish events.
+	ctx := tool.WithEventBus(r.Context(), d.eventBus)
+
 	start := time.Now()
-	res, callErr := d.bus.Call(r.Context(), req.ModuleID, req.Tool, params)
+	res, callErr := d.bus.Call(ctx, req.ModuleID, req.Tool, params)
 	elapsed := time.Since(start)
 
 	resp := devInvokeResponse{

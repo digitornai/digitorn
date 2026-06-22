@@ -21,6 +21,7 @@ import (
 	domainmodule "github.com/mbathepaul/digitorn/internal/domain/module"
 	"github.com/mbathepaul/digitorn/internal/domain/tool"
 	"github.com/mbathepaul/digitorn/internal/flexjson"
+	"github.com/mbathepaul/digitorn/internal/ports"
 	"github.com/mbathepaul/digitorn/internal/runtime/context/repomap"
 	"github.com/mbathepaul/digitorn/internal/runtime/workdir"
 	"github.com/mbathepaul/digitorn/pkg/module"
@@ -152,6 +153,7 @@ func New() *Module {
 			"FILE READING:\n" +
 			"Read before you edit or write — never edit a file blind. When you already know the symbol or region, read just that range (offset/limit) rather than the whole file; on a large file run `outline: true` first to map it, then read the precise lines.\n" +
 			"Batch related files in ONE call via `paths` instead of many sequential reads.\n" +
+			"Avoid tiny repeated slices (30 line chunks) — if you need context for an edit, read a larger window (100-200 lines) so old_string matches cleanly.\n" +
 			"The line numbers in the output are authoritative: cite locations as path:line and edit by those numbers.\n" +
 			"READ OUTPUT FORMAT: every content line is prefixed with its 1-based line number and a TAB. Example:\n" +
 			"  1\tpackage main\n" +
@@ -159,12 +161,18 @@ func New() *Module {
 			"  3\tfunc main() {\n" +
 			"  The line number and tab are PURE DISPLAY — NOT part of the actual file content.\n" +
 			"  When you call `edit` or `write`, NEVER include line numbers or tabs in old_string / new_string / content.\n" +
-			"Do NOT re-read a file you just wrote or edited to confirm — the write/edit tool already errors on failure.",
+			"Do NOT re-read a file you just wrote or edited to confirm — the write/edit tool already errors on failure.\n" +
+			"\n" +
+			"CRITICAL: limit output tokens:\n" +
+			"- Default output is capped at 100 KB per file.\n" +
+			"- Always prefer reading a precise range with offset/limit instead of the whole file.\n" +
+			"- When you need to read a large file, do it in consecutive chunks (e.g. offset=1 limit=400, then offset=401 limit=400).\n" +
+			"- Use outline:true first when exploring large files, then read only the relevant lines.",
 		Params: []tool.ParamSpec{
 			{Name: "path", Type: "string", Description: "File path relative to the workspace.", Path: true},
 			{Name: "paths", Type: "array", Description: "Read several files in one call (labeled sections). Use instead of path.", Items: &tool.ParamSpec{Type: "string", Path: true}},
 			{Name: "offset", Type: "integer", Description: "1-based line to start from (default 1).", Default: 1},
-			{Name: "limit", Type: "integer", Description: "Max lines to return (default 2000).", Default: 0},
+			{Name: "limit", Type: "integer", Description: "Max lines to return (default 200). Set higher explicitly when you need more — e.g. limit:500.", Default: 0},
 			{Name: "outline", Type: "boolean", Description: "Return a structural map (definitions + line numbers) instead of content — ideal to navigate a large file cheaply.", Default: false},
 		},
 		RiskLevel: tool.RiskLow,
@@ -477,13 +485,16 @@ type readParams struct {
 	FilePath string   `json:"file_path"` // alias (Claude editor convention)
 	Filename string   `json:"filename"`  // alias
 	File     string   `json:"file"`      // alias
-	Paths    []string `json:"paths"`     // read several files in one call (labeled sections)
+	Paths    flexjson.StringSlice `json:"paths"` // read several files in one call (labeled sections)
 	Offset   flexjson.Int  `json:"offset"`    // 1-based start line (default 1)
 	Limit    flexjson.Int  `json:"limit"`     // max lines to return (default 2000)
 	Outline  flexjson.Bool `json:"outline"`   // return a structural map (defs + line numbers) not content
 }
 
-const readDefaultLines = 2000
+const (
+	readDefaultLines    = 200  // default when no limit given — forces targeted reads
+	readAutoOutlineOver = 300  // files larger than this get an outline prepended when read from the top
+)
 
 func (m *Module) read(ctx context.Context, raw json.RawMessage) (tool.Result, error) {
 	var p readParams
@@ -578,7 +589,7 @@ func (m *Module) readBody(ctx context.Context, rel string, p readParams) (string
 
 	capBytes := m.cfg.MaxFileBytes
 	if capBytes <= 0 {
-		capBytes = 10 << 20
+		capBytes = 100 << 10
 	}
 	data, overCap, err := readCapped(abs, capBytes)
 	if err != nil {
@@ -621,9 +632,22 @@ func (m *Module) readBody(ctx context.Context, rel string, p readParams) (string
 	if p.Offset <= 0 {
 		start = 0
 	}
+	explicitLimit := int(p.Limit) > 0
 	limit := int(p.Limit)
 	if limit <= 0 {
 		limit = readDefaultLines
+	}
+
+	// Auto-outline: when reading a large file from the top without an explicit
+	// limit, prepend the structural outline so the agent can navigate before
+	// reading more. Skipped when the caller already set outline:true or requested
+	// a specific range (offset > 0) or explicitly set a limit.
+	var autoOutlinePrefix string
+	if !bool(p.Outline) && start == 0 && !explicitLimit && total > readAutoOutlineOver {
+		if om, n := outlineOf(string(data)); n > 0 {
+			autoOutlinePrefix = fmt.Sprintf("[%s has %d lines. Structure:\n%s\nShowing first %d lines below — use offset to read more.]\n\n",
+				filepath.Base(abs), total, om, limit)
+		}
 	}
 	if start > total {
 		start = total
@@ -633,7 +657,10 @@ func (m *Module) readBody(ctx context.Context, rel string, p readParams) (string
 		end = total
 	}
 
-	body := numberedSlice(lines, start, end)
+	if start >= total && int(p.Offset) > 1 {
+		return "", nil, fmt.Errorf("offset %d is out of range — the file has only %d lines", p.Offset, total)
+	}
+	body := autoOutlinePrefix + numberedSlice(lines, start, end)
 	truncated := overCap || end < total || start > 0
 	if truncated {
 		note := fmt.Sprintf("\n[showing lines %d-%d of %d", start+1, end, total)
@@ -644,6 +671,8 @@ func (m *Module) readBody(ctx context.Context, rel string, p readParams) (string
 			note += fmt.Sprintf("; pass offset=%d to continue", end+1)
 		}
 		body += note + "]"
+	} else {
+		body += fmt.Sprintf("\n\n(End of file - total %d lines)", total)
 	}
 	return body, nil, nil
 }
@@ -749,6 +778,12 @@ func (m *Module) write(ctx context.Context, raw json.RawMessage) (tool.Result, e
 	if existed {
 		action = "overwrote"
 	}
+	// Emit event for the background service
+	emitFileEvent(ctx, "file."+action, p.Path, map[string]any{
+		"bytes":   len(string(p.Content)),
+		"action":  action,
+		"existed": existed,
+	})
 	return tool.Result{
 		Success: true,
 		Data:    map[string]any{"path": p.Path, "bytes": len(string(p.Content)), "action": action},
@@ -940,6 +975,13 @@ func (m *Module) edit(ctx context.Context, raw json.RawMessage) (tool.Result, er
 	sindexes.markDirty(abs)
 	repomap.MarkDirty(abs)
 	notifyFileChange(ctx) // live workspace push (non-blocking, best-effort)
+	// Emit event for the background service
+	emitFileEvent(ctx, "file.modified", p.Path, map[string]any{
+		"replacements": count,
+		"strategy":     strategy,
+		"additions":    d.Added,
+		"deletions":    d.Removed,
+	})
 	return tool.Result{Success: true, Data: data, Diff: diffView(p.Path, content, updated)}, nil
 }
 
@@ -1036,6 +1078,13 @@ func (m *Module) multiEdit(ctx context.Context, raw json.RawMessage) (tool.Resul
 	sindexes.markDirty(abs)
 	repomap.MarkDirty(abs)
 	notifyFileChange(ctx) // live workspace push (non-blocking, best-effort)
+	// Emit event for the background service
+	emitFileEvent(ctx, "file.modified", p.Path, map[string]any{
+		"replacements": total,
+		"edits":        len(p.Edits),
+		"additions":    d.Added,
+		"deletions":    d.Removed,
+	})
 	return tool.Result{Success: true, Data: map[string]any{
 		"path": p.Path, "edits": applied, "replacements": total,
 		"additions": d.Added, "deletions": d.Removed,
@@ -1084,6 +1133,8 @@ func (m *Module) delete(ctx context.Context, raw json.RawMessage) (tool.Result, 
 	}
 	tindexes.markDirty(abs)
 	notifyFileChange(ctx) // live workspace push (non-blocking, best-effort)
+	// Emit event for the background service
+	emitFileEvent(ctx, "file.deleted", p.Path, nil)
 	return tool.Result{Success: true, Data: map[string]any{"path": p.Path, "deleted": true}}, nil
 }
 
@@ -1597,4 +1648,54 @@ func errResult(err error) tool.Result {
 // Never returns an error : a failed live push must never affect the write.
 func notifyFileChange(ctx context.Context) {
 	workdir.NotifyFileChange(ctx)
+}
+
+// ── EventEmitter implementation ────────────────────────────────────────────
+
+// DeclaredEvents returns the list of event topics this module may emit.
+// Implements domainmodule.EventEmitter.
+func (m *Module) DeclaredEvents() []map[string]string {
+	return []map[string]string{
+		{"topic": "filesystem.file.created", "type": "file.created"},
+		{"topic": "filesystem.file.modified", "type": "file.modified"},
+		{"topic": "filesystem.file.deleted", "type": "file.deleted"},
+	}
+}
+
+// emitFileEvent publishes a file system event on the EventBus if available.
+// Non-blocking and best-effort: a missing bus or failed publish never affects
+// the tool call. The event is published with the caller's identity metadata.
+func emitFileEvent(ctx context.Context, eventType, path string, extra map[string]any) {
+	busRaw, ok := tool.EventBusFromContext(ctx)
+	if !ok || busRaw == nil {
+		return
+	}
+	bus, ok := busRaw.(ports.EventBus)
+	if !ok || bus == nil {
+		return
+	}
+	id, _ := tool.IdentityFromContext(ctx)
+	evt := ports.Event{
+		Topic:  "filesystem." + eventType,
+		Type:   eventType,
+		Source: id.AppID,
+		Data: map[string]any{
+			"path": path,
+		},
+		Metadata: map[string]any{
+			"session_id": id.SessionID,
+			"user_id":    id.UserID,
+			"agent_id":   id.AgentID,
+			"module_id":  "filesystem",
+		},
+	}
+	if len(extra) > 0 {
+		data, ok := evt.Data.(map[string]any)
+		if ok {
+			for k, v := range extra {
+				data[k] = v
+			}
+		}
+	}
+	_ = bus.Publish(ctx, evt)
 }

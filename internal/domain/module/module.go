@@ -97,3 +97,20 @@ type PromptContributor interface {
 type LiveTooler interface {
 	LiveTools(ctx context.Context) []tool.Spec
 }
+
+// EventEmitter is the OPTIONAL interface a module implements to publish events
+// on the EventBus. Modules that emit events (e.g. audio detecting an incoming
+// call, clipboard detecting a change) implement this to push events that other
+// components (background service, hooks) can subscribe to.
+type EventEmitter interface {
+	// EmitEvent publishes an event on the EventBus attached to ctx.
+	// The event parameter is typed as interface{} to avoid import cycles;
+	// the concrete type is ports.Event. Returns an error if the bus is
+	// unavailable or closed.
+	EmitEvent(ctx context.Context, event interface{}) error
+
+	// DeclaredEvents returns the list of event topics this module may emit.
+	// Used by discovery to wire subscribers. Each entry is a map with
+	// "topic", "type", and optional "source" keys.
+	DeclaredEvents() []map[string]string
+}

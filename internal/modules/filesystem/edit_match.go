@@ -45,6 +45,9 @@ func locateFuzzy(content, old string) ([]matchSpan, string) {
 			return spans, st.name
 		}
 	}
+	if spans := matchBlockAnchors(content, old); len(spans) > 0 {
+		return spans, "block-anchor"
+	}
 	return nil, ""
 }
 
@@ -156,6 +159,110 @@ func closestMatches(content, old string, n int) []suggestion {
 		all = all[:n]
 	}
 	return all
+}
+
+// matchBlockAnchors locates old_string by anchoring on its first and last
+// trimmed lines, then checking the middle lines by Levenshtein similarity.
+// This handles the multi-edit-without-re-read case: even if middle lines
+// shifted or changed, the anchors are still valid.
+// Requires >= 3 lines to have meaningful anchors. Returns spans over the
+// EXACT original bytes of matched content lines.
+func matchBlockAnchors(content, old string) []matchSpan {
+	oldLines := splitLogicalLines(old)
+	if len(oldLines) < 3 {
+		return nil
+	}
+	lines, spans := splitLinesWithSpans(content)
+	if len(lines) < 3 {
+		return nil
+	}
+
+	firstAnchor := strings.TrimSpace(oldLines[0])
+	lastAnchor := strings.TrimSpace(oldLines[len(oldLines)-1])
+	middleCount := len(oldLines) - 2
+
+	var out []matchSpan
+	for i := 0; i < len(lines); i++ {
+		if strings.TrimSpace(lines[i]) != firstAnchor {
+			continue
+		}
+		for j := i + 2; j < len(lines); j++ {
+			if strings.TrimSpace(lines[j]) != lastAnchor {
+				continue
+			}
+			blockSize := j - i + 1
+			if blockSize != len(oldLines) {
+				continue
+			}
+			linesToCheck := middleCount
+			if linesToCheck <= 0 {
+				out = append(out, matchSpan{start: spans[i].start, end: spans[j].end})
+				break
+			}
+			sim := 0.0
+			for k := 1; k <= middleCount; k++ {
+				origLine := strings.TrimSpace(lines[i+k])
+				findLine := strings.TrimSpace(oldLines[k])
+				maxLen := len(origLine)
+				if len(findLine) > maxLen {
+					maxLen = len(findLine)
+				}
+				if maxLen == 0 {
+					sim += 1.0
+					continue
+				}
+				dist := levenshtein(origLine, findLine)
+				sim += 1.0 - float64(dist)/float64(maxLen)
+			}
+			sim /= float64(linesToCheck)
+			if sim >= 0.5 {
+				out = append(out, matchSpan{start: spans[i].start, end: spans[j].end})
+			}
+			break
+		}
+	}
+	return out
+}
+
+// levenshtein computes the edit distance between two strings.
+func levenshtein(a, b string) int {
+	la, lb := len(a), len(b)
+	if la == 0 {
+		return lb
+	}
+	if lb == 0 {
+		return la
+	}
+	prev := make([]int, lb+1)
+	curr := make([]int, lb+1)
+	for j := 0; j <= lb; j++ {
+		prev[j] = j
+	}
+	for i := 1; i <= la; i++ {
+		curr[0] = i
+		for j := 1; j <= lb; j++ {
+			cost := 1
+			if a[i-1] == b[j-1] {
+				cost = 0
+			}
+			curr[j] = min(curr[j-1]+1, prev[j]+1, prev[j-1]+cost)
+		}
+		prev, curr = curr, prev
+	}
+	return prev[lb]
+}
+
+func min(a, b, c int) int {
+	if a < b {
+		if a < c {
+			return a
+		}
+		return c
+	}
+	if b < c {
+		return b
+	}
+	return c
 }
 
 // --- small helpers -------------------------------------------------------

@@ -22,13 +22,25 @@ agents:
       config:
         api_key: "{{env.OPENAI_API_KEY}}"
     system_prompt: |
-      You are an email assistant. When you receive a new email notification,
-      summarize it and highlight any action items.
+      You are an email assistant. When you receive a new email:
+      1. Read and understand the content
+      2. Reply using ap_gmail__reply_to_email with the email ID provided, writing a concise and helpful response
+      3. Always reply in the same language as the original email
+
+      Use the email id from the message to identify which email to reply to.
 
 tools:
   modules:
     context_builder: {}
     web: {}
+    pieces:
+      config:
+        static_auth:
+          gmail:
+            type: oauth2
+            accessToken: "{{env.GMAIL_ACCESS_TOKEN}}"
+            refreshToken: "{{env.GMAIL_REFRESH_TOKEN}}"
+            tokenType: Bearer
     # The channels block is read by the background service to arm the Gmail trigger.
     channels:
       config:
@@ -43,14 +55,18 @@ tools:
               auth:
                 type: oauth2
                 accessToken: "{{env.GMAIL_ACCESS_TOKEN}}"
+                refreshToken: "{{env.GMAIL_REFRESH_TOKEN}}"
                 tokenType: Bearer
               props: {}
             activation:
               message: |
-                New email:
+                New email received:
+                ID: {{event.payload.id}}
                 Subject: {{event.payload.subject}}
                 From: {{event.payload.from}}
-                Snippet: {{event.payload.snippet}}
+                Body: {{event.payload.snippet}}
+
+                Reply to this email using ap_gmail__reply_to_email with the ID above.
               session: per_event
               agent: main
               reply: none
@@ -59,3 +75,5 @@ tools:
     grant:
       - module: context_builder
         tools: [search_tools, get_tool, background_run]
+      - module: pieces
+        tools: ["*"]

@@ -130,6 +130,28 @@ func (f *Float64) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+type StringSlice []string
+
+func (f *StringSlice) UnmarshalJSON(b []byte) error {
+	s := strings.TrimSpace(string(b))
+	if s == "" || s == "null" {
+		*f = nil
+		return nil
+	}
+	var arr []string
+	if err := json.Unmarshal(b, &arr); err == nil {
+		*f = arr
+		return nil
+	}
+	var single string
+	if err := json.Unmarshal(b, &single); err == nil && single != "" {
+		*f = []string{single}
+		return nil
+	}
+	*f = nil
+	return nil
+}
+
 var (
 	arrayObjectKeys  = []string{"text", "content", "line", "value", "code", "source", "snippet"}
 	objectStringKeys = []string{"content", "text", "body", "code", "source"}

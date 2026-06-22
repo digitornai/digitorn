@@ -8,6 +8,7 @@ package discovery
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -21,6 +22,7 @@ import (
 	"github.com/mbathepaul/digitorn/internal/background/adapter/cron"
 	"github.com/mbathepaul/digitorn/internal/background/adapter/discord"
 	"github.com/mbathepaul/digitorn/internal/background/adapter/pieces"
+	"github.com/mbathepaul/digitorn/internal/background/adapter/primitives"
 	"github.com/mbathepaul/digitorn/internal/background/adapter/rss"
 	"github.com/mbathepaul/digitorn/internal/background/adapter/telegram"
 	"github.com/mbathepaul/digitorn/internal/background/adapter/webhook"
@@ -139,11 +141,14 @@ func BuildPlan(apps []AppChannels, env func(string) string) Plan {
 				p.WhatsApps = append(p.WhatsApps, whatsappProvider(name, pc.Config, env))
 			case "discord":
 				p.Discords = append(p.Discords, discordProvider(name, pc.Config, env))
-			case "pieces":
-				if pp, ok := piecesProvider(app.AppID, name, pc.Config, env, &p); ok {
-					p.Pieces = append(p.Pieces, pp)
-				}
-			default:
+		case "pieces":
+			if pp, ok := piecesProvider(app.AppID, name, pc.Config, env, &p); ok {
+				p.Pieces = append(p.Pieces, pp)
+			}
+		case "primitives":
+			// Primitives adapter is registered separately in Arm() — no provider config needed.
+			// The adapter polls the daemon's /api/events/recent endpoint for module events.
+		default:
 				p.Warnings = append(p.Warnings, "provider "+name+": adapter "+pc.Adapter+" not wired (V1: webhook|cron|rss|telegram|whatsapp|discord|pieces)")
 			}
 			p.Triggers = append(p.Triggers, spec)
@@ -223,11 +228,37 @@ func piecesProvider(appID, name string, cfg map[string]any, env func(string) str
 		TriggerURL: triggerURL,
 		Piece:      piece,
 		Trigger:    trigger,
-		Auth:       cfg["auth"],
+		Auth:       resolveAuth(cfg["auth"], env),
 		Props:      cfgMap(cfg, "props"),
 		CursorKey:  processor.TriggerID(appID, name),
 		Interval:   time.Duration(sec) * time.Second,
 	}, true
+}
+
+// resolveAuth walks the auth map and resolves {{env.X}} placeholders in string values.
+func resolveAuth(raw any, env func(string) string) any {
+	if env == nil {
+		return raw
+	}
+	m, ok := raw.(map[string]any)
+	if !ok {
+		return raw
+	}
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		if s, ok := v.(string); ok {
+			out[k] = placeholderRe.ReplaceAllStringFunc(s, func(match string) string {
+				g := placeholderRe.FindStringSubmatch(match)
+				if g[1] == "secret" {
+					return env("DIGITORN_BG_SECRET_" + g[2])
+				}
+				return env(g[2])
+			})
+		} else {
+			out[k] = v
+		}
+	}
+	return out
 }
 
 func cfgMap(cfg map[string]any, key string) map[string]any {
@@ -278,8 +309,9 @@ func (c storeCursors) SetCursor(ctx context.Context, key, value string) error {
 
 // Arm applies a plan: builds the webhook/cron adapters from the plan's providers,
 // registers them, and arms every trigger. Returns the manager + registry, ready
-// for the service to Start.
-func Arm(ctx context.Context, st *store.Store, plan Plan, log *slog.Logger) (*processor.Manager, *adapter.Registry, error) {
+// for the service to Start. daemonURL is used by the primitives adapter to poll
+// the daemon's /api/events/recent endpoint for module events.
+func Arm(ctx context.Context, st *store.Store, plan Plan, daemonURL string, log *slog.Logger) (*processor.Manager, *adapter.Registry, error) {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -305,6 +337,12 @@ func Arm(ctx context.Context, st *store.Store, plan Plan, log *slog.Logger) (*pr
 	if len(plan.Pieces) > 0 {
 		reg.Register(pieces.New(plan.Pieces, storeCursors{st: st}, log))
 	}
+	// Register the primitives adapter if daemonURL is provided.
+	// This adapter polls the daemon's /api/events/recent endpoint for
+	// module-level events (e.g. audio incoming call, screen change).
+	if daemonURL != "" {
+		reg.Register(primitives.New(daemonURL, log))
+	}
 	mgr := processor.NewManager(st, reg)
 	for _, t := range plan.Triggers {
 		if _, err := mgr.Arm(ctx, t); err != nil {
@@ -318,7 +356,8 @@ func Arm(ctx context.Context, st *store.Store, plan Plan, log *slog.Logger) (*pr
 		"apps_triggers", len(plan.Triggers), "webhooks", len(plan.Webhooks),
 		"crons", len(plan.Crons), "feeds", len(plan.Feeds),
 		"telegram", len(plan.Telegrams), "whatsapp", len(plan.WhatsApps),
-		"discord", len(plan.Discords), "pieces", len(plan.Pieces))
+		"discord", len(plan.Discords), "pieces", len(plan.Pieces),
+		"primitives", daemonURL != "")
 	return mgr, reg, nil
 }
 
@@ -380,6 +419,47 @@ func cfgInt(cfg map[string]any, key string) int64 {
 	default:
 		return 0
 	}
+}
+
+// NewPiecesAdapter creates a pieces adapter from pre-loaded providers.
+func NewPiecesAdapter(providers []pieces.Provider, st *store.Store, log *slog.Logger) *pieces.Adapter {
+	return pieces.New(providers, storeCursors{st: st}, log)
+}
+
+// NewBaseRegistry creates an adapter registry with cron and pieces pre-registered.
+func NewBaseRegistry(ca *cron.Adapter, pa *pieces.Adapter) *adapter.Registry {
+	reg := adapter.NewRegistry()
+	reg.Register(ca)
+	if pa != nil {
+		reg.Register(pa)
+	}
+	return reg
+}
+
+// ArmFromDB reads all enabled triggers from the DB and arms them in the manager.
+// This replaces ScanApps for the push-based architecture where the daemon
+// registers triggers via POST /ops/triggers on app install.
+func ArmFromDB(ctx context.Context, st *store.Store, reg *adapter.Registry, log *slog.Logger) (*processor.Manager, error) {
+	if log == nil {
+		log = slog.Default()
+	}
+	mgr := processor.NewManager(st, reg)
+	triggers, err := st.AllTriggers(ctx, "", true)
+	if err != nil {
+		return nil, fmt.Errorf("background: load triggers from DB: %w", err)
+	}
+	for _, t := range triggers {
+		spec := processor.TriggerSpec{
+			AppID:    t.AppID,
+			Provider: t.Provider,
+			Adapter:  t.Adapter,
+		}
+		if _, err := mgr.Arm(ctx, spec); err != nil {
+			log.Warn("background: arm from DB failed", "trigger", t.ID, "err", err.Error())
+		}
+	}
+	log.Info("background: armed from DB", "triggers", len(triggers))
+	return mgr, nil
 }
 
 func sortedKeys[T any](m map[string]T) []string {

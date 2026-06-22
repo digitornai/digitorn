@@ -59,7 +59,7 @@ const (
 	// every key symbol so it can jump directly with Read(path, offset=N) and
 	// Edit without grep/glob. At ~4 chars/token this costs ~10k tokens in the
 	// system prompt — well within 128k+ context windows.
-	budgetChars = 40000
+	budgetChars = 3000
 )
 
 // ── PageRank ────────────────────────────────────────────────────────────────
@@ -104,15 +104,23 @@ func pagerank(adj [][]int, iters int, damp float64) []float64 {
 // ── Render ──────────────────────────────────────────────────────────────────
 
 // Render turns a Graph into a rich LLM-readable codebase map ranked by
-// PageRank centrality.
+// Render builds a two-phase codebase map within budget bytes.
 //
-// Format (per file, sorted by aggregate score):
+// Phase 1 — file index: one line per file (always complete, never truncated).
+// Phase 2 — symbols: top files by PageRank score, each capped so no single
+// file monopolises the budget. Result: the agent always sees the full file
+// tree and detailed symbols for the most important files.
 //
-//	## internal/runtime/engine.go  [runtime]
-//	  func (e *Engine) Run(ctx context.Context, in TurnInput) (*TurnResult, error)  ⬆12
-//	  type Engine struct
-//	    Apps AppLookup
-//	    Sessions SessionAccess
+// Format:
+//
+//	# 47 files · 892 symbols
+//	internal/runtime/engine.go [runtime]
+//	internal/server/bootstrap.go [server]
+//	...
+//
+//	## internal/runtime/engine.go
+//	  L1562        func (e *Engine) freshContextView(...)
+//	  L1853-L1899  func (e *Engine) guardContextPressure(...)
 func Render(g Graph, budget int) string {
 	n := len(g.Syms)
 	if n == 0 {
@@ -122,7 +130,7 @@ func Render(g Graph, budget int) string {
 		budget = budgetChars
 	}
 
-	// Build adjacency for PageRank (callee edges) and reverse for caller counts.
+	// Build adjacency for PageRank.
 	byKey := make(map[string]int, n)
 	byName := make(map[string][]int, n)
 	for i, s := range g.Syms {
@@ -130,7 +138,6 @@ func Render(g Graph, budget int) string {
 		byName[s.Name] = append(byName[s.Name], i)
 	}
 	adj := make([][]int, n)
-	inCount := make([]int, n) // how many symbols call this one
 	for i, s := range g.Syms {
 		seen := map[int]bool{}
 		for _, callee := range g.Calls[s.Key] {
@@ -138,24 +145,11 @@ func Render(g Graph, budget int) string {
 				if j != i && !seen[j] {
 					seen[j] = true
 					adj[i] = append(adj[i], j)
-					inCount[j]++
 				}
 			}
 		}
 	}
 	rank := pagerank(adj, 20, 0.85)
-
-	// Determine "hot" threshold: top-20% by inCount.
-	maxIn := 0
-	for _, c := range inCount {
-		if c > maxIn {
-			maxIn = c
-		}
-	}
-	hotThreshold := 1
-	if maxIn > 4 {
-		hotThreshold = maxIn / 5
-	}
 
 	// Group symbols by file, accumulate file score.
 	type fileEntry struct {
@@ -177,6 +171,14 @@ func Render(g Graph, budget int) string {
 		files[fi].symIdxs = append(files[fi].symIdxs, i)
 	}
 
+	// Sort files by score desc, path asc.
+	sort.SliceStable(files, func(a, b int) bool {
+		if files[a].score != files[b].score {
+			return files[a].score > files[b].score
+		}
+		return files[a].file < files[b].file
+	})
+
 	// Sort symbols within each file by rank desc, then line asc.
 	for fi := range files {
 		idxs := files[fi].symIdxs
@@ -188,78 +190,78 @@ func Render(g Graph, budget int) string {
 			return g.Syms[ia].Line < g.Syms[ib].Line
 		})
 	}
-	// Sort files by score desc, then path asc.
-	sort.SliceStable(files, func(a, b int) bool {
-		if files[a].score != files[b].score {
-			return files[a].score > files[b].score
-		}
-		return files[a].file < files[b].file
-	})
 
-	// Render.
 	var b strings.Builder
-	header := fmt.Sprintf(
-		"# CODEBASE INDEX — %d files · %d symbols\n"+
-			"# Each symbol shows its line number: Read(path, offset=N) jumps directly. No grep needed.\n"+
-			"# ⬆N = called by N other symbols (centrality). Ranked: most important files first.\n",
-		len(files), n)
-	b.WriteString(header)
+
+	// ── Phase 1: compact file index (always complete) ────────────────────────
+	b.WriteString(fmt.Sprintf("# %d files · %d symbols\n", len(files), n))
+	for _, fe := range files {
+		line := fe.file
+		if fe.pkg != "" {
+			line += " [" + fe.pkg + "]"
+		}
+		b.WriteString(line + "\n")
+	}
 	used := b.Len()
 
+	// ── Phase 2: symbols for top files ──────────────────────────────────────
+	// Per-file cap: at most 1/4 of the remaining symbol budget, so no single
+	// file can crowd out the rest. Floor: 300 chars (a few symbols minimum).
+	symBudget := budget - used
+	if symBudget <= 0 {
+		return strings.TrimRight(b.String(), "\n")
+	}
+	numFiles := len(files)
+	if numFiles == 0 {
+		numFiles = 1
+	}
+	perFileCap := symBudget / 4
+	if perFileCap < 300 {
+		perFileCap = 300
+	}
+
+	b.WriteString("\n")
+	used++
+
 	for _, fe := range files {
-		// File header: path + package name.
-		pkg := ""
-		if fe.pkg != "" {
-			pkg = "  [" + fe.pkg + "]"
+		if used >= budget {
+			break
 		}
-		fileHdr := "\n## " + fe.file + pkg + "\n"
+		fileHdr := "## " + fe.file + "\n"
 		if used+len(fileHdr) > budget {
 			break
 		}
-		b.WriteString(fileHdr)
-		used += len(fileHdr)
+
+		// Collect symbol lines for this file up to perFileCap.
+		var fileBuf strings.Builder
+		fileBuf.WriteString(fileHdr)
+		fileUsed := len(fileHdr)
 
 		for _, si := range fe.symIdxs {
 			s := &g.Syms[si]
 			if s.Sig == "" {
 				continue
 			}
-			// Caller count — suppress for generic names (appear in many files).
-			callerSuffix := ""
-			if inCount[si] >= hotThreshold && inCount[si] > 0 && inCount[si] <= n/2 {
-				callerSuffix = fmt.Sprintf("  ⬆%d", inCount[si])
-			}
-			// Line range prefix: L302-L450 for multi-line symbols, L302 for single-liners.
-			// The end line enables edit(start_line, end_line) without a prior read.
 			lineRef := fmt.Sprintf("L%d", s.Line)
 			if s.EndLine > s.Line {
 				lineRef = fmt.Sprintf("L%d-L%d", s.Line, s.EndLine)
 			}
-			sigLine := fmt.Sprintf("  %-12s %s%s\n", lineRef, s.Sig, callerSuffix)
-
-			// For struct/interface: show first 2-3 fields indented.
-			fieldLines := ""
-			if s.Fields != "" {
-				for _, fl := range strings.SplitN(s.Fields, "\n", 4) {
-					fl = strings.TrimSpace(fl)
-					if fl == "" || fl == "{" || fl == "}" {
-						continue
-					}
-					fieldLines += "         " + fl + "\n"
-				}
-			}
-
-			cost := len(sigLine) + len(fieldLines)
-			if used+cost > budget {
+			sigLine := fmt.Sprintf("  %-14s %s\n", lineRef, s.Sig)
+			if fileUsed+len(sigLine) > perFileCap {
 				break
 			}
-			b.WriteString(sigLine)
-			if fieldLines != "" {
-				b.WriteString(fieldLines)
-			}
-			used += cost
+			fileBuf.WriteString(sigLine)
+			fileUsed += len(sigLine)
 		}
+
+		chunk := fileBuf.String()
+		if used+len(chunk) > budget {
+			break
+		}
+		b.WriteString(chunk)
+		used += len(chunk)
 	}
+
 	return strings.TrimRight(b.String(), "\n")
 }
 

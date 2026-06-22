@@ -22,6 +22,7 @@ import (
 	"github.com/mbathepaul/digitorn/internal/compiler"
 	"github.com/mbathepaul/digitorn/internal/compiler/catalog"
 	"github.com/mbathepaul/digitorn/internal/config"
+	"github.com/mbathepaul/digitorn/internal/core/eventbus"
 	"github.com/mbathepaul/digitorn/internal/core/servicebus"
 	domainmodule "github.com/mbathepaul/digitorn/internal/domain/module"
 	"github.com/mbathepaul/digitorn/internal/embeddings"
@@ -89,6 +90,7 @@ type Daemon struct {
 	contextBG         atomic.Pointer[contextsvc.Background] // background EXACT context recompute (CTX-7)
 	summaryMaintainer *summaryMaintainer                    // background high-fidelity summary, off the loop (CTX-8); nil when flag off
 	contextTracker    *contextsvc.Tracker                   // freshest per-session context variable (engine + hooks read it)
+	compactor         *contextCompactor                     // shared compactor — also used for reactive compaction on model switch
 	ctxParts          sync.Map                              // sessionID -> ctxParts (build-time system+tools for the recount breakdown)
 	agents            *agent.Manager
 
@@ -107,6 +109,7 @@ type Daemon struct {
 	lifecycle        lifecycleFirer // fires session_end / pre_compact hooks outside the turn loop
 	approvalRegistry *approval.Registry
 	background       *background.Manager
+	eventBus         ports.EventBus
 
 	secretsOnce sync.Once
 	secrets     *secretStore
@@ -144,6 +147,7 @@ func Build(cfg *config.Config) (*Daemon, error) {
 	}
 
 	bus := servicebus.New()
+	evtBus := eventbus.New(logger)
 	mods := module.Default.WithBus(busAdapter{bus: bus})
 
 	httpSrv := http.New(http.Options{
@@ -254,6 +258,7 @@ func Build(cfg *config.Config) (*Daemon, error) {
 		httpSrv:         httpSrv,
 		rt:              siosrv,
 		bus:             bus,
+		eventBus:        evtBus,
 		modules:         mods,
 		gdb:             gdb,
 		sessionStore:    store,
@@ -277,6 +282,7 @@ func Build(cfg *config.Config) (*Daemon, error) {
 	// real context gauge on open (footer ctx used/window before any new turn).
 	bridge.BrainFor = d.brainFor
 	bridge.SessionWindowBrain = d.sessionWindowBrain
+	bridge.PreWarmContext = d.preWarmContext
 	d.MountAPI()
 	MountAuthProxy(httpSrv.Router(), cfg.Auth.ServiceURL)
 	return d, nil
@@ -367,6 +373,7 @@ func (d *Daemon) SessionPaths() sessionstore.Paths               { return d.sess
 func (d *Daemon) WorkerManager() *worker.Manager                 { return d.workerMgr }
 func (d *Daemon) LLM() *llm.Client                               { return d.llmClient }
 func (d *Daemon) Engine() runtime.Runner                         { return d.engine }
+func (d *Daemon) EventBus() ports.EventBus                       { return d.eventBus }
 
 // buildEngine wires the runtime once the LLM client is up. Skipped
 // silently when no LLM worker is configured ; chat endpoints then
@@ -404,6 +411,7 @@ func (d *Daemon) buildEngine() {
 	// worker starts ; until then (or if disabled) this is a no-op and the
 	// provider anchor keeps the gauge exact per turn.
 	eng.ContextTouch = d.touchContext
+	eng.ContextIncrement = d.touchContextIncrement
 	// CTX-7 breakdown : the engine reports the assembled system prompt + tool
 	// schemas at request-build so the background recount can attribute the
 	// system / tools / messages buckets. Non-blocking (a map store + a Touch).
@@ -534,6 +542,8 @@ func (d *Daemon) buildEngine() {
 	// each call so a shared (in-proc or worker) module reads its app-specific
 	// configuration. The worker proxy forwards it across the boundary.
 	busAdapter.ModuleConfigs = appModuleConfigSource{apps: d.appMgr}
+	// Wire the EventBus so modules that implement EventEmitter can publish events.
+	busAdapter.EventBus = d.eventBus
 	// In-proc embeddings/rerank : in-proc modules (filesystem code-grep) reach
 	// the embeddings client the same way worker modules reach the gateway. Lazy
 	// (reads d.embeddingsClient at call time — wired later in startWorkers).
@@ -699,20 +709,25 @@ func (d *Daemon) buildEngine() {
 	// uses (same security gates, same audit row, same
 	// canonicalisation).
 	compactor := newContextCompactor(d.sessionStore, d.appMgr, d.llmClient, d.logger)
-	compactor.touch = d.touchContext // recount the exact occupancy right after a compaction
-	// CTX-8 (feature-flagged, default OFF): take the summary LLM call OFF the turn
-	// loop. The maintainer keeps a high-fidelity summary prepared in the
-	// background; the compactor applies it instantly (else truncates). When the
-	// flag is off, none of this is wired → behaviour is exactly the legacy path.
-	if contextBGSummaryEnabled() {
+	compactor.touch = d.touchContext
+	compactor.touchSync = d.touchContextSync
+	d.compactor = compactor
+	// Background summary maintainer: keeps a high-fidelity LLM summary prepared
+	// off the turn loop so compaction is zero-latency (instant apply, no blocking
+	// LLM call). Uses delta-mode by default: only new messages since the last
+	// coverage are sent to the LLM, making it 5-10x cheaper for long sessions.
+	// Disable with DIGITORN_CONTEXT_BG_SUMMARY=0 to fall back to inline summarize.
+	if !contextBGSummaryDisabled() {
+		workers := 8
 		sm := newSummaryMaintainer(d.sessionStore, compactor, d.llmClient, d.logger)
-		sm.Start(2)
+		sm.Start(workers)
 		d.summaryMaintainer = sm
-		compactor.nonBlocking = true
+		compactor.nonBlocking = true  // apply prepared summary instantly; else truncate
 		compactor.prepare = sm.Touch
 		eng.PrepareSummary = sm.Touch
-		eng.MicroCompactView = true // Phase 2: elide stale bulky tool results in the view
-		d.logger.Info("context: background summary maintainer enabled (CTX-8)")
+		eng.MicroCompactView = true
+		d.logger.Info("context: background summary maintainer started",
+			slog.Int("workers", workers))
 	}
 	eng.Compactor = compactor // mid-turn emergency recovery on context overflow
 	eng.Hooks = newHookSource(d.appMgr, hooks.ActionDeps{
@@ -789,6 +804,9 @@ func (d *Daemon) Start(ctx context.Context) error {
 	}
 	d.startWorkers(ctx)
 	d.buildEngine()
+	// Subscribe to EventBus events and buffer them for the background service
+	// primitives adapter to poll via GET /api/events/recent.
+	d.subscribeToEventBus()
 	if d.agents != nil {
 		d.agents.Start(ctx) // background reaper for terminal sub-agents / empty roots
 	}
@@ -877,6 +895,9 @@ func (d *Daemon) Shutdown() error {
 		// Gateway after the workers that dial it are gone.
 		if d.serviceGateway != nil {
 			d.serviceGateway.Stop()
+		}
+		if d.eventBus != nil {
+			_ = d.eventBus.Close(ctx)
 		}
 		if d.jwks != nil {
 			_ = d.jwks.Stop(ctx)

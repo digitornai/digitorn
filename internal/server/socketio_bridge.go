@@ -66,6 +66,12 @@ type SocketIOBridge struct {
 	// matches the live recount. Set by bootstrap ; falls back to BrainFor when nil.
 	SessionWindowBrain func(snap sessionstore.SessionSnapshot) schema.Brain
 
+	// PreWarmContext triggers a synchronous context recount for a session when
+	// ctxParts (system prompt + tools) is not yet populated. Called from
+	// emitContextOnJoin so the gauge shows the real overhead before the first turn
+	// instead of 0 or a stale value. Wired by bootstrap; nil = no pre-warm.
+	PreWarmContext func(sessionID, appID string)
+
 	// Per-client state. Keyed by client.ID().
 	clients sync.Map
 
@@ -391,15 +397,18 @@ func (b *SocketIOBridge) emitContextOnJoin(c ports.RealtimeClient, sessionID, ap
 		return
 	}
 	snap := st.Snapshot()
+
+	// If the session has no recorded context yet, launch an async pre-warm so
+	// the gauge fills in quickly without blocking the join response.
+	if snap.ContextTokens == 0 && b.PreWarmContext != nil {
+		go b.PreWarmContext(sessionID, appID)
+	}
+
 	brain := b.BrainFor(appID)
 	if b.SessionWindowBrain != nil {
 		brain = b.SessionWindowBrain(snap)
 	}
 	view := contextsvc.Resolve(snap, brain)
-	// Emit as long as the REAL window is known (resolved from the brain), even
-	// when used==0 (a fresh session) — so the client shows the true denominator
-	// immediately instead of falling back to a guessed window. used==0 is honest
-	// (no context counted until the first turn) and corrects upward on turn 1.
 	if view.Window <= 0 {
 		return
 	}

@@ -86,6 +86,11 @@ type BusAdapter struct {
 	// unavailable (module degrades gracefully).
 	Embedder pkgmodule.Embedder
 	Reranker pkgmodule.Reranker
+
+	// EventBus is injected into every dispatch ctx so modules that implement
+	// EventEmitter can publish events. nil = no bus wired (modules skip
+	// event emission).
+	EventBus ports.EventBus
 }
 
 // ModuleConfigSource resolves the per-app config block for a module.
@@ -249,6 +254,12 @@ func (a *BusAdapter) Dispatch(ctx context.Context, call runtime.ToolInvocation) 
 	// change (filesystem emits directly — see notifyFileChange in the module).
 	if a.FileChangeNotifier != nil {
 		ctx = tool.WithFileChangeNotifier(ctx, a.FileChangeNotifier)
+	}
+
+	// Inject the EventBus so modules that implement EventEmitter can publish
+	// events. nil = no bus wired (modules skip event emission).
+	if a.EventBus != nil {
+		ctx = tool.WithEventBus(ctx, a.EventBus)
 	}
 
 	res, busErr := a.callBus(ctx, call.AppID, moduleID, actionName, raw)

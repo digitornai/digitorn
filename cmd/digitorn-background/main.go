@@ -12,6 +12,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -21,6 +22,7 @@ import (
 	"time"
 
 	"github.com/mbathepaul/digitorn/internal/background/adapter/cron"
+	"github.com/mbathepaul/digitorn/internal/background/adapter/pieces"
 	"github.com/mbathepaul/digitorn/internal/background/channels"
 	"github.com/mbathepaul/digitorn/internal/background/daemonclient"
 	"github.com/mbathepaul/digitorn/internal/background/discovery"
@@ -29,61 +31,185 @@ import (
 	"github.com/mbathepaul/digitorn/internal/background/store"
 )
 
-// inbound wraps the adapter manager with the periodic config re-scan so the
-// service can drive both through the single Inbound interface.
-type inbound struct {
-	mgr   *processor.Manager
-	dir   string
-	every time.Duration
-	log   *slog.Logger
-}
+type inbound struct{ mgr *processor.Manager }
 
-func (i *inbound) Handler() http.Handler { return i.mgr.Handler() }
+func (i *inbound) Handler() http.Handler         { return i.mgr.Handler() }
+func (i *inbound) Start(ctx context.Context) error { return i.mgr.Start(ctx) }
 
-func (i *inbound) Start(ctx context.Context) error {
-	go discovery.Rescan(ctx, i.mgr, i.dir, i.every, os.Getenv, i.log)
-	return i.mgr.Start(ctx)
-}
-
-// rearmFunc builds the POST /ops/triggers handler's hook: it programs a cron at
-// runtime by persisting + routing the trigger (mgr.Arm) and arming the live cron
-// adapter (cron.Adapter.Arm) — no restart. Only cron is live-armable; other
-// adapters are loop/handler-bound at boot and must go through the app YAML.
-func rearmFunc(st *store.Store, mgr *processor.Manager, ca *cron.Adapter) func(context.Context, service.CreateTriggerRequest) (store.Trigger, error) {
+func rearmFunc(st *store.Store, mgr *processor.Manager, ca *cron.Adapter, pa *pieces.Adapter) func(context.Context, service.CreateTriggerRequest) (store.Trigger, error) {
 	return func(ctx context.Context, req service.CreateTriggerRequest) (store.Trigger, error) {
-		if req.Adapter != "cron" {
-			return store.Trigger{}, fmt.Errorf("runtime arming supports only cron (got %q); add other adapters to the app YAML and restart", req.Adapter)
+		activation := channels.ActivationConfig{
+			Agent:       req.Agent,
+			Message:     req.Message,
+			Owner:       req.Owner,
+			Context:     req.Context,
+			Session:     orDefault(req.Session, channels.SessionPerEvent),
+			Reply:       orDefault(req.Reply, channels.ReplyAuto),
+			Reports:     req.Reports,
+			Attachments: req.Attachments,
 		}
-		sched, err := cron.Parse(req.Schedule)
-		if err != nil {
-			return store.Trigger{}, fmt.Errorf("invalid cron schedule %q: %w", req.Schedule, err)
+		if req.Activation != nil {
+			activation = *req.Activation
 		}
+
 		spec := processor.TriggerSpec{
-			AppID: req.AppID, Provider: req.Provider, Adapter: "cron",
+			AppID: req.AppID, Provider: req.Provider, Adapter: req.Adapter,
 			DefaultAgent: req.Agent, Schedule: req.Schedule,
-			Activation: channels.ActivationConfig{
-				Agent:   req.Agent,
-				Message: req.Message,
-				Owner:   req.Owner,   // the woken session runs AS this user
-				Context: req.Context, // injected into the agent at wake
-				Session:     orDefault(req.Session, channels.SessionPerEvent),
-				Reply:       orDefault(req.Reply, channels.ReplyAuto),
-				Reports:     req.Reports, // opt-in : dated downloadable output folder per fire
-				Attachments: req.Attachments, // input blobs (e.g. a CV) carried to every fire
-			},
+			Activation: activation,
 		}
-		// A schedule binds a specific session to wake; a plain trigger is a channel.
-		arm := mgr.Arm
-		if req.Kind == "schedule" {
-			arm = mgr.ArmSchedule
+
+		switch req.Adapter {
+		case "cron":
+			sched, err := cron.Parse(req.Schedule)
+			if err != nil {
+				return store.Trigger{}, fmt.Errorf("invalid cron schedule %q: %w", req.Schedule, err)
+			}
+			arm := mgr.Arm
+			if req.Kind == "schedule" {
+				arm = mgr.ArmSchedule
+			}
+			id, err := arm(ctx, spec)
+			if err != nil {
+				return store.Trigger{}, err
+			}
+			ca.Arm(cron.Provider{Name: req.Provider, Schedule: sched})
+			return st.GetTrigger(ctx, id)
+
+		case "pieces":
+			if pa == nil {
+				return store.Trigger{}, fmt.Errorf("pieces adapter not initialized")
+			}
+			p, err := piecesProviderFromConfig(req)
+			if err != nil {
+				return store.Trigger{}, err
+			}
+			id, err := mgr.Arm(ctx, spec)
+			if err != nil {
+				return store.Trigger{}, err
+			}
+			p.CursorKey = id
+			pa.Arm(p)
+			return st.GetTrigger(ctx, id)
+
+		default:
+			return store.Trigger{}, fmt.Errorf("adapter %q cannot be armed at runtime (supported: cron, pieces)", req.Adapter)
 		}
-		id, err := arm(ctx, spec) // persist (with schedule) + register the provider→trigger route
-		if err != nil {
-			return store.Trigger{}, err
-		}
-		ca.Arm(cron.Provider{Name: req.Provider, Schedule: sched}) // fire live, no restart
-		return st.GetTrigger(ctx, id)
 	}
+}
+
+func piecesProviderFromConfig(req service.CreateTriggerRequest) (pieces.Provider, error) {
+	cfg := req.Config
+	if cfg == nil {
+		return pieces.Provider{}, fmt.Errorf("pieces trigger requires config")
+	}
+	piece, _ := cfg["piece"].(string)
+	trigger, _ := cfg["trigger"].(string)
+	if piece == "" || trigger == "" {
+		return pieces.Provider{}, fmt.Errorf("pieces config requires 'piece' and 'trigger'")
+	}
+	url, _ := cfg["trigger_url"].(string)
+	if url == "" {
+		url = "http://127.0.0.1:9234"
+	}
+	interval := 60 * time.Second
+	if sec, ok := cfg["interval"].(float64); ok && sec > 0 {
+		interval = time.Duration(sec) * time.Second
+	}
+
+	// Serialize auth back to map for the provider.
+	var auth any
+	if a, ok := cfg["auth"]; ok {
+		// Re-resolve env placeholders if auth is a string map.
+		if am, ok := a.(map[string]any); ok {
+			resolved := make(map[string]any, len(am))
+			for k, v := range am {
+				if s, ok := v.(string); ok {
+					resolved[k] = os.ExpandEnv(s)
+				} else {
+					resolved[k] = v
+				}
+			}
+			auth = resolved
+		} else {
+			auth = a
+		}
+	}
+
+	var props map[string]any
+	if p, ok := cfg["props"].(map[string]any); ok {
+		props = p
+	}
+
+	return pieces.Provider{
+		Name:       req.Provider,
+		TriggerURL: url,
+		Piece:      piece,
+		Trigger:    trigger,
+		Auth:       auth,
+		Props:      props,
+		Interval:   interval,
+	}, nil
+}
+
+func loadPiecesFromDB(st *store.Store) ([]pieces.Provider, error) {
+	triggers, err := st.AllTriggers(context.Background(), "", true)
+	if err != nil {
+		return nil, err
+	}
+	var out []pieces.Provider
+	for _, t := range triggers {
+		if t.Adapter != "pieces" || t.ConfigJSON == "" {
+			continue
+		}
+		var cfg map[string]any
+		if err := json.Unmarshal([]byte(t.ConfigJSON), &cfg); err != nil {
+			continue
+		}
+		piece, _ := cfg["piece"].(string)
+		trigger, _ := cfg["trigger"].(string)
+		if piece == "" || trigger == "" {
+			continue
+		}
+		url, _ := cfg["trigger_url"].(string)
+		if url == "" {
+			url = "http://127.0.0.1:9234"
+		}
+		interval := 60 * time.Second
+		if sec, ok := cfg["interval"].(float64); ok && sec > 0 {
+			interval = time.Duration(sec) * time.Second
+		}
+		var auth any
+		if a, ok := cfg["auth"]; ok {
+			if am, ok := a.(map[string]any); ok {
+				resolved := make(map[string]any, len(am))
+				for k, v := range am {
+					if s, ok := v.(string); ok {
+						resolved[k] = os.ExpandEnv(s)
+					} else {
+						resolved[k] = v
+					}
+				}
+				auth = resolved
+			} else {
+				auth = a
+			}
+		}
+		var props map[string]any
+		if p, ok := cfg["props"].(map[string]any); ok {
+			props = p
+		}
+		out = append(out, pieces.Provider{
+			Name:       t.Provider,
+			TriggerURL: url,
+			Piece:      piece,
+			Trigger:    trigger,
+			Auth:       auth,
+			Props:      props,
+			CursorKey:  t.ID,
+			Interval:   interval,
+		})
+	}
+	return out, nil
 }
 
 func orDefault(v, def string) string {
@@ -110,29 +236,30 @@ func main() {
 		log.Warn("background: service JWT lacks the impersonation grant — wakes of user-owned sessions will be rejected (403). Use a dedicated SERVICE token (role \"service\" or permission \"sessions:impersonate\"), not a plain user token")
 	}
 
-	// Discover channel configs from the app bundles, arm triggers, build adapters,
-	// and wire the channel processor (which needs the adapter registry for reply
-	// delivery). All from the freshly-opened store.
 	build := func(st *store.Store) (service.Setup, error) {
-		apps, err := discovery.ScanApps(cfg.AppsDir)
+		// Boot from DB: reload pieces triggers persisted from previous runs.
+		// The daemon pushes triggers via POST /ops/triggers on app install —
+		// no filesystem scanning needed.
+		piecesProviders, err := loadPiecesFromDB(st)
 		if err != nil {
-			log.Warn("background: apps dir unreadable, no channels armed", "dir", cfg.AppsDir, "err", err.Error())
+			log.Warn("background: could not load pieces triggers from DB", "err", err.Error())
 		}
-		plan := discovery.BuildPlan(apps, os.Getenv)
-		mgr, reg, err := discovery.Arm(context.Background(), st, plan, log)
+
+		pa := discovery.NewPiecesAdapter(piecesProviders, st, log)
+		ca := cron.New(nil)
+
+		reg := discovery.NewBaseRegistry(ca, pa)
+		mgr, err := discovery.ArmFromDB(context.Background(), st, reg, log)
 		if err != nil {
 			return service.Setup{}, err
 		}
-		// Ensure a cron adapter exists even when no app declares a cron, so the ops
-		// API can program one at runtime. Registered before Start, so the manager
-		// launches it. (No-op when discovery already registered one.)
-		if reg.Get("cron") == nil {
-			reg.Register(cron.New(nil))
-		}
-		ca, _ := reg.Get("cron").(*cron.Adapter)
+
 		proc := processor.New(st, client, reg, nil, log)
-		inb := &inbound{mgr: mgr, dir: cfg.AppsDir, every: time.Duration(cfg.RescanSec) * time.Second, log: log}
-		return service.Setup{Processor: proc, Inbound: inb, Rearm: rearmFunc(st, mgr, ca)}, nil
+		return service.Setup{
+			Processor: proc,
+			Inbound:   &inbound{mgr: mgr},
+			Rearm:     rearmFunc(st, mgr, ca, pa),
+		}, nil
 	}
 
 	svc, err := service.New(cfg, build, log)

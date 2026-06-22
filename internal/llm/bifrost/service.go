@@ -2,8 +2,10 @@ package bifrost
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
 	"time"
 
 	bifrost "github.com/maximhq/bifrost/core"
@@ -15,6 +17,56 @@ import (
 
 	"github.com/mbathepaul/digitorn/internal/llm"
 )
+
+// llmRequestLog is set once at startup. Set DIGITORN_LOG_LLM_REQUEST=1 to
+// dump every outgoing chat request (messages, tools, system) to stderr.
+var llmRequestLog = os.Getenv("DIGITORN_LOG_LLM_REQUEST") == "1"
+
+func logLLMRequest(req *llm.ChatRequest, _ *schemas.BifrostChatRequest) {
+	if !llmRequestLog {
+		return
+	}
+	type msgLine struct {
+		Role  string `json:"role"`
+		Chars int    `json:"chars"`
+		Snip  string `json:"snippet"`
+	}
+	var msgs []msgLine
+	totalChars := 0
+	for _, m := range req.Messages {
+		chars := len(m.Content)
+		totalChars += chars
+		snip := m.Content
+		if len(snip) > 120 {
+			snip = snip[:120] + "…"
+		}
+		msgs = append(msgs, msgLine{m.Role, chars, snip})
+	}
+	out := map[string]any{
+		"model":        req.Model,
+		"provider":     req.Provider,
+		"byok":         req.BYOK,
+		"n_tools":      len(req.Tools),
+		"n_messages":   len(req.Messages),
+		"total_chars":  totalChars,
+		"approx_tokens": totalChars / 4,
+		"messages":     msgs,
+	}
+	if len(req.Tools) > 0 {
+		toolNames := make([]string, 0, len(req.Tools))
+		toolChars := 0
+		for _, t := range req.Tools {
+			toolNames = append(toolNames, t.Name)
+			b, _ := json.Marshal(t)
+			toolChars += len(b)
+		}
+		out["tool_names"] = toolNames
+		out["tools_chars"] = toolChars
+		out["tools_approx_tokens"] = toolChars / 4
+	}
+	b, _ := json.MarshalIndent(out, "", "  ")
+	fmt.Fprintf(os.Stderr, "\n[LLM_REQUEST]\n%s\n", b)
+}
 
 // Service implements llm.Service by delegating to a Bifrost client.
 type Service struct {
@@ -88,6 +140,7 @@ func (s *Service) Chat(ctx context.Context, req *llm.ChatRequest) (*llm.ChatResp
 	defer cancel()
 	defer releaseRouteInfo(route)
 	breq := s.buildChatRequest(req)
+	logLLMRequest(req, breq)
 	resp, berr := s.client.ChatCompletionRequest(bctx, breq)
 	if berr != nil {
 		ec := errCtxForChat(req)
@@ -108,6 +161,7 @@ func (s *Service) ChatStream(ctx context.Context, req *llm.ChatRequest, sink llm
 	defer bcancel()
 	defer releaseRouteInfo(route)
 	breq := s.buildChatRequest(req)
+	logLLMRequest(req, breq)
 	// Gateway TTFT : the worker side of the split. Compared with the engine-side
 	// provider_ttft this isolates the engine→worker gRPC IPC (their tiny
 	// difference) from the gateway+provider prefill (this number) — so "is it the
@@ -568,6 +622,20 @@ func (s *Service) buildChatRequest(req *llm.ChatRequest) *schemas.BifrostChatReq
 	}
 	if params != nil {
 		out.Params = params
+	}
+	// When streaming, request usage in the final chunk so the daemon always
+	// gets token counts. Without this, many providers omit usage from
+	// streaming responses, leaving the daemon with zero counts.
+	if req.Stream {
+		if out.Params == nil {
+			out.Params = &schemas.ChatParameters{}
+		}
+		if out.Params.ExtraParams == nil {
+			out.Params.ExtraParams = map[string]interface{}{}
+		}
+		out.Params.ExtraParams["stream_options"] = map[string]interface{}{
+			"include_usage": true,
+		}
 	}
 	// Note : Stream is not a field on BifrostChatRequest — instead Bifrost
 	// has ChatCompletionStreamRequest() that returns a chan. We dispatch

@@ -86,7 +86,7 @@ func (e *Engine) callLLM(
 	var (
 		contentBuilder   strings.Builder
 		reasoningBuilder strings.Builder
-		finalResp        = &llm.ChatResponse{}
+		finalResp        = &llm.ChatResponse{Model: req.Model}
 		seenError        string
 		liveOut          int  // running ~estimate of output tokens, for the live counter
 		ttftLogged       bool // logged the provider time-to-first-token yet

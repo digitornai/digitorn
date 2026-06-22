@@ -36,19 +36,24 @@ go.work.sum
 *.sqlite3
 
 # --- bin/ scratch ---------------------------------------------------------
-# All .exe are ignored globally (above). Also drop the binary backups that don't
-# end in .exe plus build scratch dirs. NOTE : already-committed binaries must be
-# untracked once (they stay ignored after) :  git rm -r --cached <those files>.
 bin/*.bak*
 bin/*.old*
 bin/*.preVoiceB
 bin/.vite/
 bin/_deleted-configs-bak/
+bin/digitorn
+bin/digitorn-ap-bridge
+bin/digitorn-worker
+bin/digitorn-worker-embeddings
+bin/digitorn-worker-llm
+bin/digitorn-worker-tokenizer
+bin/digitornd
+bin/pieces-bridge/
+bin/voice_reply.wav
 
 # Editor/IDE
 # .idea/
 # .vscode/
-clients/opencode-fork/bun.lock
 
 # --- vendored sub-projects (excluded from code index / repomap) -----------
 activepieces-main/
@@ -57,5 +62,44 @@ vendor-references/
 # GoReleaser build artifacts (TUI cross-compiled binaries)
 .goreleaser-tui/
 
-# Large vendored binary (exceeds GitHub 100 MB limit)
+# Large binaries (exceeds GitHub 100 MB limit)
 clients/cli/opencode
+clients/cli/digitorn
+
+# Linux cross-compiled binaries
+bin-linux/
+
+# Build output
+dist/
+
+# Misc heavy files
+METADISPATCHER_COMPLETE_REFERENCE.md
+digitorn
+digitornd
+digitorn-background
+digitorn-chat.sh
+
+# Digitorn internal bare-repo (git objects/index/refs — never in source control)
+.digitorn/git/objects/
+.digitorn/git/refs/
+.digitorn/git/info/
+.digitorn/git/HEAD
+.digitorn/git/index
+.digitorn/git/packed-refs
+.digitorn/git/logs/
+.digitorn/git/config
+.digitorn/git/description
+
+# All compiled binaries
+bin/digitorn-background
+bin/digitorn-voice
+bin/digitorn-worker-*
+bin/digitornd-*
+bin/digitorn-ap-bridge
+bin/*.cache.*
+bin/*.fix.*
+bin/*.prev.*
+digitorn-worker-llm.exe
+digitorn-worker-tokenizer.exe
+digitorn-background.exe
+digitorn-voice.exe

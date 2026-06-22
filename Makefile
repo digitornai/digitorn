@@ -1,5 +1,6 @@
 # Digitorn Go - Makefile
-# Cross-platform Windows/Linux/macOS
+# Local dev: build for the current platform only.
+# Cross-platform releases: use GoReleaser (goreleaser release).
 
 BINARY_DAEMON := digitornd
 BINARY_CLI    := digitorn
@@ -13,12 +14,16 @@ LDFLAGS       := -s -w \
 GOFLAGS       := -trimpath
 GO            := go
 
-# Detect OS for binary extension
 ifeq ($(OS),Windows_NT)
 	EXT := .exe
 else
 	EXT :=
 endif
+
+WORKERS  := digitorn-worker digitorn-worker-llm digitorn-worker-embeddings digitorn-worker-tokenizer
+SERVICES := digitorn-background digitorn-voice
+ALL_BINS := $(BINARY_DAEMON) $(BINARY_CLI) $(WORKERS) $(SERVICES)
+DIST     := dist/digitorn-$(VERSION)
 
 .PHONY: all
 all: tidy build
@@ -31,40 +36,40 @@ tidy:
 vendor:
 	$(GO) mod vendor
 
-WORKERS := digitorn-worker digitorn-worker-llm digitorn-worker-embeddings
-DIST    := dist/digitorn-$(VERSION)
-
 .PHONY: build
-build: build-daemon build-cli build-workers
+build: build-daemon build-cli build-workers build-services
 
 .PHONY: build-daemon
 build-daemon:
-	$(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o bin/$(BINARY_DAEMON)$(EXT) ./cmd/digitornd
+	$(GO) build $(GOFLAGS) -tags treesitter -ldflags "$(LDFLAGS)" -o bin/$(BINARY_DAEMON)$(EXT) ./cmd/digitornd
 
 .PHONY: build-cli
 build-cli:
-	$(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o bin/$(BINARY_CLI)$(EXT) ./cmd/digitorn
+	$(GO) build $(GOFLAGS) -ldflags "-s -w" -o bin/$(BINARY_CLI)$(EXT) ./cmd/digitorn
 
 .PHONY: build-workers
 build-workers:
 	@for w in $(WORKERS); do \
-		$(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o bin/$$w$(EXT) ./cmd/$$w || exit 1; \
+		$(GO) build $(GOFLAGS) -tags treesitter -ldflags "$(LDFLAGS)" -o bin/$$w$(EXT) ./cmd/$$w || exit 1; \
 	done
 
-# dist bundles the daemon, CLI and every worker into one folder so the
-# service can be installed from it — resolveWorkerBinary finds the workers
-# alongside the daemon executable. Deploy the whole folder.
+.PHONY: build-services
+build-services:
+	@for s in $(SERVICES); do \
+		$(GO) build $(GOFLAGS) -tags treesitter -ldflags "$(LDFLAGS)" -o bin/$$s$(EXT) ./cmd/$$s || exit 1; \
+	done
+
 .PHONY: dist
 dist: build
 	rm -rf $(DIST)
 	mkdir -p $(DIST)
-	cp bin/$(BINARY_DAEMON)$(EXT) bin/$(BINARY_CLI)$(EXT) $(DIST)/
-	for w in $(WORKERS); do cp bin/$$w$(EXT) $(DIST)/; done
-	cp config.example.yaml README.md $(DIST)/
+	@for w in $(WORKERS); do cp bin/$$w$(EXT) $(DIST)/; done
+	@for s in $(SERVICES); do cp bin/$$s$(EXT) $(DIST)/; done
+	cp .digitorn.yaml.example README.md LICENSE $(DIST)/
 	@echo "Bundle ready: $(DIST)/ — deploy this whole folder"
 
 .PHONY: run
-run: build-daemon build-workers
+run: build-daemon build-workers build-services
 	./bin/$(BINARY_DAEMON)$(EXT)
 
 .PHONY: test
@@ -105,11 +110,11 @@ docker-build:
 .PHONY: help
 help:
 	@echo "Available targets:"
-	@echo "  tidy           - Tidy go.mod"
-	@echo "  build          - Build daemon + CLI + workers"
+	@echo "  build          - Build daemon + CLI + workers + services (current platform)"
 	@echo "  build-daemon   - Build daemon only"
 	@echo "  build-cli      - Build CLI only"
 	@echo "  build-workers  - Build worker binaries"
+	@echo "  build-services - Build background + voice services"
 	@echo "  dist           - Bundle all binaries + config into dist/ for deployment"
 	@echo "  run            - Build and run daemon"
 	@echo "  test           - Run tests with race detector"

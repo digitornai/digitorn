@@ -13,6 +13,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/mbathepaul/digitorn/internal/llm"
+
 	"github.com/mbathepaul/digitorn/internal/compiler/schema"
 	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
 )
@@ -207,8 +209,9 @@ func (d *Daemon) putSessionModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Agent string `json:"agent"`
-		Model string `json:"model"`
+		Agent          string `json:"agent"`
+		Model          string `json:"model"`
+		MaxContextTokens int  `json:"max_ctx_tokens"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
@@ -266,12 +269,24 @@ func (d *Daemon) putSessionModel(w http.ResponseWriter, r *http.Request) {
 
 	ctxApp, cancel := appendCtx(r.Context())
 	defer cancel()
+	// Resolve max_context_tokens: client-provided > gateway cache > 0
+	if req.MaxContextTokens > 0 {
+		// Client sent it (e.g. TUI knows via ACP)
+	} else if bearer := extractBearer(r); bearer != "" {
+		// Try the gateway cache
+		_, _ = d.gatewayModelKinds(ctxApp, bearer)
+		req.MaxContextTokens = d.gatewayModelWindow(model)
+	} else {
+		// No bearer — try cached value from a previous GET
+		req.MaxContextTokens = d.gatewayModelWindow(model)
+	}
+	maxCtx := req.MaxContextTokens
 	if _, err := d.sessionStore.AppendDurable(ctxApp, sessionstore.Event{
 		Type:      sessionstore.EventModelChanged,
 		SessionID: sid,
 		AppID:     appID,
 		UserID:    userID,
-		Meta:      &sessionstore.MetaPayload{Model: model, AgentID: agentID},
+		Meta:      &sessionstore.MetaPayload{Model: model, AgentID: agentID, MaxContextTokens: maxCtx},
 	}); err != nil {
 		writeError(w, appendErrStatus(err), "append_failed", err.Error())
 		return
@@ -279,5 +294,34 @@ func (d *Daemon) putSessionModel(w http.ResponseWriter, r *http.Request) {
 	if err := d.sessionStore.SyncMetaToDisk(sid); err != nil {
 		d.logger.Warn("putSessionModel: sync meta failed", "sid", sid, "err", err.Error())
 	}
+
+	// Refresh the context tracker so the new model's window is reflected
+	// immediately (display + next-turn pressure check) without waiting for a
+	// background recount cycle.
+	d.touchContext(sid)
+
+	// Reactive compaction: if the session's current context already exceeds the
+	// new model's usable window, compact NOW rather than waiting for the next
+	// turn_start hook or per-round guard. This covers the common case where the
+	// user switches to a model with a smaller context window mid-session.
+	// We fire it in a detached goroutine so the PUT response returns immediately.
+	// The compactor resolves the proper strategy/keep_recent from the app config
+	// and is a no-op when there is nothing to drop (SafeSplitIndex == 0).
+	if maxCtx > 0 && d.compactor != nil {
+		if st, err := d.sessionStore.State(sid); err == nil && st != nil {
+			snap := st.Snapshot()
+			if snap.ContextTokens > maxCtx {
+				jwt := extractBearer(r)
+				go func() {
+					cctx := llm.WithUserJWT(context.Background(), jwt)
+					if cerr := d.compactor.CompactSession(cctx, sid, "", 0); cerr != nil {
+						d.logger.Warn("putSessionModel: reactive compaction failed",
+							"sid", sid, "err", cerr.Error())
+					}
+				}()
+			}
+		}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{"agent": agentID, "model": model})
 }

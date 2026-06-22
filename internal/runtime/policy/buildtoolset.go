@@ -36,6 +36,11 @@ type AvailableAction struct {
 	Module string
 	Action string
 	Spec   *tool.Spec
+	// DiscoveryOnly marks a tool as discoverable (search/get_tool) but never
+	// injected as a direct JSON schema. Use for large catalogs (pieces, MCP)
+	// when the app grants wildcard access — schemas would exceed the budget.
+	// Tools with explicit grants are indexed normally and subject to auto-switch.
+	DiscoveryOnly bool
 }
 
 // BuildAgentToolset returns the subset of `actions` the agent is

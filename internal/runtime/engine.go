@@ -146,6 +146,10 @@ type Engine struct {
 	// nil = no background recompute (the provider anchor still keeps the gauge
 	// exact per turn). MUST be non-blocking — it is called on the hot path.
 	ContextTouch func(sessionID string)
+	// ContextIncrement adds an incremental token estimate to the context gauge
+	// immediately after new content (tool results) lands — no tokenizer call,
+	// just chars/4. Gives real-time gauge updates between background recounts.
+	ContextIncrement func(sessionID string, deltaTokens int)
 	// ContextRecordParts reports the assembled system prompt + tool schemas at
 	// request-build so the background Context Service can split the EXACT
 	// occupancy into system / tools / messages (CTX-7). nil = no breakdown.
@@ -683,8 +687,17 @@ func (e *Engine) Run(ctx context.Context, in TurnInput) (*TurnResult, error) {
 	if ovr := e.modelOverrideFor(in.SessionID, agent.ID, preSnap.ModelOverrides); ovr != "" {
 		ag := *agent
 		ag.Brain.Model = ovr
+		// Clear the YAML's context.max_tokens so the window resolution falls through
+		// to the gateway lookup (the real model's window) instead of using the default
+		// model's 1M budget — which would mask the real window and prevent compaction.
+		if ag.Brain.Context != nil {
+			cc := *ag.Brain.Context
+			cc.MaxTokens = 0
+			ag.Brain.Context = &cc
+		}
 		agent = &ag
 	}
+
 
 	// 3. Recover any in-flight turn left over by a previous daemon
 	// crash. Idempotent : 0 stale turns = no-op.
@@ -1515,11 +1528,42 @@ func (e *Engine) runPhases(
 	return &TurnResult{Seq: lastSeq, Content: lastContent}, endMetrics, nil
 }
 
-// touchContext fires the non-blocking background recount signal, if wired.
 func (e *Engine) touchContext(sessionID string) {
 	if e.ContextTouch != nil {
 		e.ContextTouch(sessionID)
 	}
+}
+
+// PreWarmSession builds the system prompt for a session before the first turn
+// and records it via ContextRecordParts so the background recount can compute
+// the real overhead immediately on session open (eliminates the 0→Nk gap).
+func (e *Engine) PreWarmSession(sessionID, appID string) {
+	if e.Apps == nil || e.Context == nil || e.ContextRecordParts == nil {
+		return
+	}
+	app, err := e.Apps.Get(context.Background(), appID)
+	if err != nil || app == nil || app.Definition == nil || len(app.Definition.Agents) == 0 {
+		return
+	}
+	// Resolve the entry agent (same logic as the turn start).
+	agent := &app.Definition.Agents[0]
+	if app.Definition.Runtime != nil && app.Definition.Runtime.EntryAgent != "" {
+		for i := range app.Definition.Agents {
+			if app.Definition.Agents[i].ID == app.Definition.Runtime.EntryAgent {
+				agent = &app.Definition.Agents[i]
+				break
+			}
+		}
+	}
+	res, err := e.Context.BuildFor(context.Background(), ContextRequest{
+		App:     app,
+		Agent:   agent,
+		AppName: app.Definition.App.Name,
+	})
+	if err != nil || res.SystemPrompt == "" {
+		return
+	}
+	e.recordContextParts(sessionID, res.SystemPrompt, res.Tools)
 }
 
 // recordContextParts reports the assembled system prompt + tool schemas to the
@@ -1551,16 +1595,33 @@ func (e *Engine) recordContextParts(sessionID, systemPrompt string, tools []llm.
 // tracked yet. This is the value the per-round guard and the hook metrics read,
 // so pressure tracks the REAL context even mid-turn.
 func (e *Engine) freshContextView(sessionID string, snap sessionstore.SessionSnapshot, brain schema.Brain) contextsvc.ContextView {
+	// resolveGW returns the best-known context window for the current model:
+	// gateway cache first, then the durable EntryModelWindow persisted at
+	// model-switch time. EntryModelWindow is the same authoritative source the
+	// background recount uses, so the guard and the gauge always share the same
+	// denominator — even when the gateway cache has expired or was never populated
+	// (e.g. when the client sent max_ctx_tokens directly without a catalog lookup).
+	resolveGW := func() int {
+		if e.ModelWindowLookup != nil {
+			if gw := e.ModelWindowLookup(brain.Model); gw > 0 {
+				return gw
+			}
+		}
+		return snap.EntryModelWindow // 0 when not set; harmless fallback
+	}
 	if e.ContextLookup != nil {
 		if cv, ok := e.ContextLookup(sessionID); ok && cv.Used > 0 {
-			return cv
+			// Compute what the window SHOULD be for the current brain, and reject
+			// the cached view if it was built with a different limit (e.g. after a
+			// model switch that changed the context window). A mismatch means the
+			// pressure ratio is wrong — compaction would never fire or fire too early.
+			expected := contextsvc.ViewFromSnapshotWithRuntimeAndGateway(snap, brain, e.runtimeMaxTokens(snap.AppID), resolveGW())
+			if cv.Limit == expected.Limit {
+				return cv
+			}
 		}
 	}
-	gatewayWindow := 0
-	if e.ModelWindowLookup != nil {
-		gatewayWindow = e.ModelWindowLookup(brain.Model)
-	}
-	return contextsvc.ViewFromSnapshotWithRuntimeAndGateway(snap, brain, e.runtimeMaxTokens(snap.AppID), gatewayWindow)
+	return contextsvc.ViewFromSnapshotWithRuntimeAndGateway(snap, brain, e.runtimeMaxTokens(snap.AppID), resolveGW())
 }
 
 // runtimeMaxTokens returns the runtime.context.max_tokens for the given app,
@@ -1756,7 +1817,7 @@ type autoCompactPolicy struct {
 // runtime.context drives, brain.context fills gaps, doc defaults last. on=false
 // only when auto_compact is explicitly disabled.
 func resolveAutoCompact(rt *schema.RuntimeBlock, brainCtx *schema.ContextConfig) autoCompactPolicy {
-	p := autoCompactPolicy{on: true, strategy: contextcompact.StrategyTruncate}
+	p := autoCompactPolicy{on: true, strategy: contextcompact.StrategySummarize}
 	var rc *schema.ContextConfig
 	if rt != nil {
 		rc = rt.Context
@@ -1852,6 +1913,18 @@ func (e *Engine) guardContextPressure(
 	if used < compactionTriggerPoint(cv.Limit, pol.threshold) {
 		return false
 	}
+	// Save the last user message before compaction so we can replay it if
+	// compaction drops it (e.g. background-injected messages pushed it out of
+	// the kept tail). Same pattern as OpenCode's replay mechanism.
+	var replayMsg *sessionstore.Message
+	for i := len(snap.Messages) - 1; i >= 0; i-- {
+		if snap.Messages[i].Role == "user" {
+			m := snap.Messages[i]
+			replayMsg = &m
+			break
+		}
+	}
+
 	k := contextcompact.KeepRecentOrDefault(*keep)
 	if cerr := e.Compactor.CompactSession(ctx, in.SessionID, pol.strategy, k); cerr != nil {
 		e.Logger.Warn("runtime: per-round context guard compaction failed (non-fatal)",
@@ -1861,6 +1934,44 @@ func (e *Engine) guardContextPressure(
 	if st, serr := e.Sessions.State(in.SessionID); serr == nil && st != nil {
 		*snap = st.Snapshot()
 	}
+
+	// Replay: if the last user message was dropped by compaction, re-append it
+	// as a new event with a fresh Seq > CutoffSeq so the agent always sees it.
+	if replayMsg != nil && replayMsg.Seq > 0 && e.Sessions != nil {
+		found := false
+		for i := range snap.Messages {
+			if snap.Messages[i].Seq == replayMsg.Seq {
+				found = true
+				break
+			}
+		}
+		if !found {
+			ev := sessionstore.Event{
+				Type:      sessionstore.EventUserMessage,
+				SessionID: in.SessionID,
+				AppID:     in.AppID,
+				UserID:    in.UserID,
+				Message: &sessionstore.MessagePayload{
+					Role:  replayMsg.Role,
+					Parts: replayMsg.Parts,
+				},
+			}
+			if ev.Message.Parts == nil && replayMsg.Content != "" {
+				ev.Message.Parts = []sessionstore.MessagePart{
+					{Type: sessionstore.PartTypeText, Text: replayMsg.Content},
+				}
+			}
+			if _, rerr := e.Sessions.AppendDurable(ctx, ev); rerr == nil {
+				if st, serr := e.Sessions.State(in.SessionID); serr == nil && st != nil {
+					*snap = st.Snapshot()
+				}
+				e.Logger.Info("runtime: replayed user message after compaction dropped it",
+					slog.String("session_id", in.SessionID),
+					slog.Uint64("original_seq", replayMsg.Seq))
+			}
+		}
+	}
+
 	// Halve keep for the next fire so a still-over context drops more next round
 	// (truncate with the same keep is idempotent — it would re-keep the same
 	// tail). Floor at 2 so we never strand the conversation entirely.
@@ -2480,6 +2591,26 @@ func (e *Engine) dispatchToolsParallel(
 			}
 			if len(res.Injects) > 0 {
 				e.applyInjections(ctx, in, tr, res.Injects)
+			}
+			if e.ContextIncrement != nil {
+				delta := 0
+				for _, p := range outcomes[i].Parts {
+					delta += len(p.Text)
+				}
+				if delta > 0 {
+					e.ContextIncrement(in.SessionID, delta/4)
+				}
+			}
+			// Auto-fact: record write operations and significant commands
+			// into the lossless snap.Facts channel so they survive compaction.
+			if fact := AutoFact(tc.Name, tc.Arguments, outcomes[i].Status); fact != "" && e.Sessions != nil {
+				_, _ = e.Sessions.AppendDurable(ctx, sessionstore.Event{
+					Type:      sessionstore.EventMemoryFactAdded,
+					SessionID: in.SessionID,
+					AppID:     in.AppID,
+					UserID:    in.UserID,
+					Memory:    &sessionstore.MemoryPayload{Fact: fact},
+				})
 			}
 		}(i, tc)
 	}
@@ -3170,10 +3301,6 @@ func (e *Engine) persistToolResults(
 			if _, err := batcher.AppendDurableBatch(ctx, evs); err != nil {
 				return fmt.Errorf("runtime: persist %d tool_results: %w", len(evs), err)
 			}
-			// Tool results changed the context : refresh the gauge NOW (per-session,
-			// non-blocking) instead of waiting for the next round's build. in.SessionID
-			// is this turn's own session — a sub-agent's sub-session is distinct, so
-			// this never touches another session.
 			e.touchContext(in.SessionID)
 			return nil
 		}
@@ -3183,7 +3310,7 @@ func (e *Engine) persistToolResults(
 			return fmt.Errorf("runtime: persist tool_result %q: %w", calls[i].ID, err)
 		}
 	}
-	e.touchContext(in.SessionID) // tool results landed → refresh the gauge now (per-session)
+	e.touchContext(in.SessionID)
 	return nil
 }
 

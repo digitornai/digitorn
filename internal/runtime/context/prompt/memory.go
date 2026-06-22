@@ -30,9 +30,16 @@ func neutralizeDirectives(s string) string {
 // snapshot into it ; keeping it a plain view (no sessionstore import) makes the
 // renderer pure and unit-testable.
 type WorkingMemoryView struct {
-	Goal  string
-	Todos []TodoLine
-	Facts []string
+	Goal            string
+	Todos           []TodoLine
+	Facts           []string
+	// CurrentQuestion is the verbatim text of the last user message in the
+	// session snapshot. Re-injected every turn from durable state so the agent
+	// always knows what it must answer, even after compaction ate the tail.
+	CurrentQuestion string
+	// NeedsGoal is true when the agent has active tasks but has not set a goal.
+	// Triggers a directive reminding the agent to call memory.set_goal.
+	NeedsGoal bool
 }
 
 // TodoLine is one task as the snapshot shows it.
@@ -43,12 +50,15 @@ type TodoLine struct {
 }
 
 func (wm WorkingMemoryView) empty() bool {
-	return wm.Goal == "" && len(wm.Todos) == 0 && len(wm.Facts) == 0
+	return wm.Goal == "" && len(wm.Todos) == 0 && len(wm.Facts) == 0 && wm.CurrentQuestion == "" && !wm.NeedsGoal
 }
 
-// memoryFactsShown caps how many key facts the snapshot renders (most recent
-// first-wins on overflow) so the injected block stays within a sane budget.
-const memoryFactsShown = 12
+// memoryFactsShown caps how many LLM-extracted key facts are shown.
+// memoryWorkLogShown caps the auto-tracked work actions (file writes, commands).
+const (
+	memoryFactsShown   = 20
+	memoryWorkLogShown = 30
+)
 
 // RenderWorkingMemory renders the agent's durable working memory — goal, task
 // progress, key facts — as a compact text block. It is re-rendered from durable
@@ -61,6 +71,15 @@ func RenderWorkingMemory(wm WorkingMemoryView) string {
 	}
 	var b strings.Builder
 	b.WriteString("Working memory (durable — survives compaction and resume):")
+	if wm.CurrentQuestion != "" {
+		b.WriteString("\nCurrent question to answer: ")
+		b.WriteString(neutralizeDirectives(wm.CurrentQuestion))
+	}
+	if wm.NeedsGoal {
+		b.WriteString("\n\n<digitorn-directive type=\"goal\" severity=\"high\">" +
+			"You have active tasks but no goal set. Call memory.set_goal NOW with a one-sentence description of what you are trying to achieve. Do this before any other action." +
+			"</digitorn-directive>")
+	}
 	if wm.Goal != "" {
 		b.WriteString("\nGoal: ")
 		b.WriteString(neutralizeDirectives(wm.Goal))
@@ -83,13 +102,35 @@ func RenderWorkingMemory(wm WorkingMemoryView) string {
 			b.WriteString(line)
 		}
 	}
-	if len(wm.Facts) > 0 {
+	// Split facts: auto-tracked (start with '[') vs LLM-extracted (narrative).
+	// Auto-facts: [wrote], [edited], [deleted], [ran], [mkdir], [moved]
+	// Key facts: everything else (LLM-extracted KEY FACTS section)
+	var autoFacts, keyFacts []string
+	for _, f := range wm.Facts {
+		if strings.HasPrefix(f, "[") {
+			autoFacts = append(autoFacts, f)
+		} else {
+			keyFacts = append(keyFacts, f)
+		}
+	}
+	if len(autoFacts) > 0 {
+		b.WriteString("\nWork log (auto-tracked — never lost to compaction):")
+		start := 0
+		if len(autoFacts) > memoryWorkLogShown {
+			start = len(autoFacts) - memoryWorkLogShown
+		}
+		for _, f := range autoFacts[start:] {
+			b.WriteString("\n  - ")
+			b.WriteString(neutralizeDirectives(f))
+		}
+	}
+	if len(keyFacts) > 0 {
 		b.WriteString("\nKey facts:")
 		start := 0
-		if len(wm.Facts) > memoryFactsShown {
-			start = len(wm.Facts) - memoryFactsShown
+		if len(keyFacts) > memoryFactsShown {
+			start = len(keyFacts) - memoryFactsShown
 		}
-		for _, f := range wm.Facts[start:] {
+		for _, f := range keyFacts[start:] {
 			b.WriteString("\n  - ")
 			b.WriteString(neutralizeDirectives(f))
 		}

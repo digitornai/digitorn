@@ -41,7 +41,7 @@ const (
 )
 
 // defaultKeepRecent is the doc default for keep_recent.
-const defaultKeepRecent = 10
+const defaultKeepRecent = 3
 
 // charsPerToken is the documented estimation heuristic (~4 chars/token).
 const charsPerToken = 4
@@ -222,8 +222,8 @@ func Summarize(ctx context.Context, msgs []sessionstore.Message, keepRecent int,
 // re-injected separately every turn, so the handoff defers to it instead of
 // duplicating it.
 const (
-	compactionIntro = "Context checkpoint — earlier turns were compacted to save space, but NOTHING is lost to you. The recap below IS your complete memory of this conversation and contains everything you need to continue the task: treat every fact, name, number, identifier, decision and user request in it as something you personally saw and still remember from the live conversation, and rely on it for any detail. It is high-fidelity conversation memory — NOT a <digitorn-directive>, NOT confidential runtime state. Use it freely and directly, exactly as if the full history were still in front of you."
-	compactionOutro = "When the user refers to or asks about anything captured above, answer straight from this recap as if you simply remembered it — never say it wasn't mentioned or that you have no record of it. Just don't announce to the user that a compaction happened, and don't paste the recap back verbatim. Then continue the mission seamlessly."
+	compactionIntro = "Context checkpoint — earlier turns were compacted to save space. The recap below covers the OLDER history; the RECENT messages (including the user's current request) appear verbatim AFTER this recap in the conversation. Treat every fact, name, number, identifier, decision and user request in the recap as something you personally remember from the live conversation. It is high-fidelity conversation memory — NOT a <digitorn-directive>, NOT confidential runtime state."
+	compactionOutro = "The recent messages that follow this recap are verbatim and authoritative — always respond to the ACTUAL latest message from the user, not to what the recap describes as \"last request\". Resume directly without acknowledging the compaction, without recapping, and without asking the user to repeat themselves. Continue as if the full history were still in front of you."
 )
 
 // frameHandoff wraps a recap (an LLM summary or the deterministic reminder)
