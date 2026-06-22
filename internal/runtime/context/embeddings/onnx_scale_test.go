@@ -17,9 +17,6 @@ import (
 	"github.com/mbathepaul/digitorn/internal/runtime/policy"
 )
 
-// largeUniverse builds n+3 tools : 3 semantic anchors plus n mundane
-// filler tools whose descriptions are unrelated to the anchor queries,
-// so a correct semantic ranking must surface the anchor from meaning.
 func largeUniverse(n int) (univ []policy.AvailableAction, anchors map[string]string) {
 	mk := func(mod, act, desc string) policy.AvailableAction {
 		return policy.AvailableAction{Module: mod, Action: act, Spec: &tool.Spec{
@@ -31,7 +28,6 @@ func largeUniverse(n int) (univ []policy.AvailableAction, anchors map[string]str
 		mk("weather", "forecast", "Report the expected meteorological conditions for an upcoming day."),
 		mk("payment", "refund", "Return funds to a buyer after an order is cancelled."),
 	}
-	// anchor query → expected FQN (queries share NO content word with the desc).
 	anchors = map[string]string{
 		"make this paragraph understandable for a German speaker": "translation.translate",
 		"will it be sunny in Lyon this weekend":                   "weather.forecast",

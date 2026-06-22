@@ -8,12 +8,8 @@ import (
 	"github.com/mbathepaul/digitorn/internal/runtime/context/repomap"
 )
 
-// Builtin renders a ready-made section body from the turn data. Returns "" to skip
-// (e.g. no data to show).
 type Builtin func(d Data) string
 
-// builtins are the pre-configured, ready-to-use sections an app references by name
-// (`builtin: datetime`). Domain-agnostic — they draw only from the generic data bag.
 var builtins = map[string]Builtin{
 	"datetime":     biDatetime,
 	"date":         biDatetime,
@@ -26,7 +22,6 @@ var builtins = map[string]Builtin{
 	"memory_index": biMemoryIndex,
 }
 
-// BuiltinNames lists the available builtins (for validation / docs).
 func BuiltinNames() []string {
 	return []string{"datetime", "user", "session", "identity", "environment", "code_index", "memory_index"}
 }
@@ -39,9 +34,6 @@ func biCodeIndex(d Data) string {
 	return repomap.Get(root)
 }
 
-// biMemoryIndex loads the project's working memory from .digitorn/memory/ and
-// always emits the writing directive so the agent knows how and when to persist
-// knowledge — even on the first turn when no files exist yet.
 func biMemoryIndex(d Data) string {
 	workdir := toString(d.Session["workdir"])
 	if workdir == "" {

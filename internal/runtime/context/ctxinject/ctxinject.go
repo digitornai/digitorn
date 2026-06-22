@@ -1,9 +1,3 @@
-// Package ctxinject renders the per-turn, YAML-declared context sections into the
-// system prompt. App authors declare sections (static text, {{placeholder}}
-// templates, or named builtins) in the manifest ; this builds the text from the
-// turn's data bag (user / app / agent / session / date). It is pure and
-// session-scoped, so it runs every turn and never leaks one user's data into
-// another's cached prompt.
 package ctxinject
 
 import (
@@ -19,8 +13,6 @@ import (
 	"github.com/mbathepaul/digitorn/internal/compiler/schema"
 )
 
-// Data is the turn's facts the sections draw from. Every field may be empty ; a
-// missing value renders as "" rather than an error.
 type Data struct {
 	User    map[string]any // id, name, email, region, locale, roles, + raw JWT claims
 	App     map[string]any // id, name, version
@@ -30,8 +22,6 @@ type Data struct {
 	Now     time.Time
 }
 
-// bag builds the dotted-path lookup tree (user.*, app.*, agent.*, session.*) plus
-// derived top-level date/time keys.
 func (d Data) bag() map[string]any {
 	b := map[string]any{
 		"user":    d.User,
@@ -79,11 +69,6 @@ func Merge(app, agent *schema.ContextBlock) []schema.ContextSection {
 	return out
 }
 
-// Render builds the injected context text. Each section's body is its builtin >
-// file/files/dir > template > text (first non-empty) ; a `when` path that resolves
-// empty/false drops it. File/dir sections are wrapped in <system-reminder> tags so
-// the model distinguishes externally loaded content from hardcoded instructions.
-// Output is priority-ordered (stable on ties), joined by blank lines.
 func Render(sections []schema.ContextSection, d Data) string {
 	if len(sections) == 0 {
 		return ""
@@ -127,8 +112,6 @@ func Render(sections []schema.ContextSection, d Data) string {
 	return strings.Join(parts, "\n\n")
 }
 
-// writableDirective returns a <digitorn-directive> telling the agent which
-// directory (or files) it may write back to for persistent memory.
 func writableDirective(s schema.ContextSection) string {
 	target := strings.TrimSpace(s.Dir)
 	if target == "" {
@@ -140,9 +123,6 @@ func writableDirective(s schema.ContextSection) string {
 	return fileMemoryDirectiveFor(target)
 }
 
-// isExternalSection reports whether a section loads content from the filesystem
-// (file/files/dir). These sections are wrapped in <system-reminder> tags so the
-// model can distinguish dynamically loaded memory from hardcoded instructions.
 func isExternalSection(s schema.ContextSection) bool {
 	return s.File != "" || len(s.Files) > 0 || s.Dir != ""
 }
@@ -208,14 +188,8 @@ func renderFiles(paths []string, optional bool, workdir string) string {
 	return strings.Join(parts, "\n\n")
 }
 
-// memoryDirBudget is the max chars injected per memory directory. MEMORY.md
-// (the index) is always included; individual files fill the remaining budget
-// ordered by type priority then recency. When the budget is exhausted a note
-// is appended so the agent knows more context exists in the directory.
 const memoryDirBudget = 4000
 
-// typePriority returns the injection priority for a memory file. Lower = higher
-// priority. feedback > project > user > reference > unknown.
 func typePriority(name string) int {
 	switch {
 	case strings.HasPrefix(name, "feedback_"):
@@ -231,9 +205,6 @@ func typePriority(name string) int {
 	}
 }
 
-// renderDirBudget renders a memory directory with a char budget. MEMORY.md is
-// always injected; other files are included by priority then recency until the
-// budget is exhausted. Use this instead of renderDir for memory sections.
 func renderDirBudget(dir string) string {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -267,7 +238,6 @@ func renderDirBudget(dir string) string {
 		return ""
 	}
 
-	// Sort: MEMORY.md first, then by type priority asc, then recency desc.
 	sort.SliceStable(files, func(i, j int) bool {
 		if files[i].isIndex != files[j].isIndex {
 			return files[i].isIndex
@@ -365,7 +335,6 @@ func readFile(path, workdir string) (string, error) {
 	return string(b), nil
 }
 
-// interp fills {{path}} placeholders from the bag ; an unknown path becomes "".
 func interp(tmpl string, bag map[string]any) string {
 	return placeholder.ReplaceAllStringFunc(tmpl, func(m string) string {
 		v, _ := resolve(bag, placeholder.FindStringSubmatch(m)[1])
@@ -409,10 +378,6 @@ func toString(v any) string {
 	}
 }
 
-// evalWhen evaluates a `when` expression. Supports:
-//   - plain path:              "session.workdir"      → truthy check
-//   - comparison:              "session.context_pct > 60"
-//   - operators: > >= < <= == !=   (numeric when both sides parse as numbers, string otherwise)
 func evalWhen(bag map[string]any, expr string) bool {
 	for _, op := range []string{">=", "<=", "!=", ">", "<", "=="} {
 		i := strings.Index(expr, op)
@@ -435,26 +400,37 @@ func compareValues(lhs, op, rhs string) bool {
 	rf, rerr := strconv.ParseFloat(rhs, 64)
 	if lerr == nil && rerr == nil {
 		switch op {
-		case ">":  return lf > rf
-		case ">=": return lf >= rf
-		case "<":  return lf < rf
-		case "<=": return lf <= rf
-		case "==": return lf == rf
-		case "!=": return lf != rf
+		case ">":
+			return lf > rf
+		case ">=":
+			return lf >= rf
+		case "<":
+			return lf < rf
+		case "<=":
+			return lf <= rf
+		case "==":
+			return lf == rf
+		case "!=":
+			return lf != rf
 		}
 	}
 	switch op {
-	case "==": return lhs == rhs
-	case "!=": return lhs != rhs
-	case ">":  return lhs > rhs
-	case ">=": return lhs >= rhs
-	case "<":  return lhs < rhs
-	case "<=": return lhs <= rhs
+	case "==":
+		return lhs == rhs
+	case "!=":
+		return lhs != rhs
+	case ">":
+		return lhs > rhs
+	case ">=":
+		return lhs >= rhs
+	case "<":
+		return lhs < rhs
+	case "<=":
+		return lhs <= rhs
 	}
 	return false
 }
 
-// truthy decides whether a `when` path counts as present.
 func truthy(v any, ok bool) bool {
 	if !ok || v == nil {
 		return false
