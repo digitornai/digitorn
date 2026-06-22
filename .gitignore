@@ -74,9 +74,9 @@ dist/
 
 # Misc heavy files
 METADISPATCHER_COMPLETE_REFERENCE.md
-digitorn
-digitornd
-digitorn-background
+/digitorn
+/digitornd
+/digitorn-background
 digitorn-chat.sh
 
 # Digitorn internal bare-repo (git objects/index/refs — never in source control)

@@ -142,6 +142,9 @@ func chatCmd() *cobra.Command {
 			}
 			repoRoot := filepath.Join(filepath.Dir(exe), "..", "..")
 			pkg := filepath.Join(repoRoot, "clients", "opencode-fork", "packages", "opencode")
+			if _, err := os.Stat(pkg); err != nil {
+				pkg = filepath.Join(repoRoot, "..", "digitorn-tui", "packages", "opencode")
+			}
 
 			cwd, _ := os.Getwd()
 			env := append(os.Environ(),

@@ -6,7 +6,7 @@ set -euo pipefail
 
 VERSION="${1:-0.1.0}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-TUI_PKG="$ROOT/clients/opencode-fork/packages/opencode"
+TUI_PKG="${2:-$ROOT/clients/opencode-fork/packages/opencode}"
 OUT_DIR="$ROOT/.goreleaser-tui"
 
 # Install unzip + bun if not available (e.g. inside the goreleaser-cross Docker image)
