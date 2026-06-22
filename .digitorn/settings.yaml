@@ -1,4 +1,0 @@
-permissions:
-    allow:
-        - bash.run:ls /home/paul/.opencode/bin/digitorn 2>/dev/null && echo "ANCIEN BINAIRE TROUVÉ!" && file /home/paul/.opencode/bin/digitorn || echo "pas de binaire opencode"
-        - bash.run:/home/paul/codes/digitorn/clients/cli/digitorn list 2>&1

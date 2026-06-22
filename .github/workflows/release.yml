@@ -29,6 +29,7 @@ jobs:
         with:
           repository: mbathe/digitorn-tui
           path: digitorn-tui-src
+          token: ${{ secrets.TUI_TOKEN || secrets.GITHUB_TOKEN }}
 
       - uses: oven-sh/setup-bun@v2
         with:
