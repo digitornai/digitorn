@@ -273,6 +273,7 @@ type WorkspaceChangedFile struct {
 type BackgroundTaskPayload struct {
 	TaskID        string `json:"task_id"`
 	Tool          string `json:"tool"`
+	Label         string `json:"label,omitempty"`
 	State         string `json:"state"`
 	Error         string `json:"error,omitempty"`
 	ElapsedMs     int64  `json:"elapsed_ms,omitempty"`

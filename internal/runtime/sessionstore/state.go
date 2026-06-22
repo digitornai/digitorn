@@ -268,6 +268,7 @@ type ChildAgent struct {
 type BackgroundTaskState struct {
 	TaskID        string `json:"task_id"`
 	Tool          string `json:"tool,omitempty"`
+	Label         string `json:"label,omitempty"`
 	State         string `json:"state"` // running | completed | errored | cancelled | interrupted
 	Error         string `json:"error,omitempty"`
 	ElapsedMs     int64  `json:"elapsed_ms,omitempty"`

@@ -520,12 +520,40 @@ func (m *Manager) emit(t *task, state string, elapsedMs int64) {
 		Background: &sessionstore.BackgroundTaskPayload{
 			TaskID:        t.id,
 			Tool:          t.name,
+			Label:         taskLabel(t),
 			State:         state,
 			Error:         errMsg,
 			ElapsedMs:     elapsedMs,
 			StartedAtUnix: t.startedAt,
 		},
 	})
+}
+
+func taskLabel(t *task) string {
+	action := t.name
+	if idx := strings.LastIndex(action, "."); idx >= 0 {
+		action = action[idx+1:]
+	}
+	primaryKeys := []string{"command", "query", "url", "path", "file_path", "filePath", "pattern", "task", "prompt"}
+	for _, k := range primaryKeys {
+		if v, ok := t.args[k].(string); ok && v != "" {
+			short := strings.ReplaceAll(v, "\n", " ")
+			if len(short) > 80 {
+				short = short[:79] + "…"
+			}
+			return action + " › " + short
+		}
+	}
+	for _, v := range t.args {
+		if s, ok := v.(string); ok && s != "" {
+			short := strings.ReplaceAll(s, "\n", " ")
+			if len(short) > 80 {
+				short = short[:79] + "…"
+			}
+			return action + " › " + short
+		}
+	}
+	return action
 }
 
 // enqueueNotification appends a CompletionNotification to the

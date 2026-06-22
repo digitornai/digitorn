@@ -325,6 +325,9 @@ func applyLocked(s *SessionState, ev *Event) {
 				if bp.ElapsedMs > 0 {
 					s.BackgroundTasks[i].ElapsedMs = bp.ElapsedMs
 				}
+				if bp.Label != "" {
+					s.BackgroundTasks[i].Label = bp.Label
+				}
 				s.BackgroundTasks[i].UpdatedAtNano = ev.TsUnixNano
 				return
 			}
@@ -332,6 +335,7 @@ func applyLocked(s *SessionState, ev *Event) {
 		s.BackgroundTasks = append(s.BackgroundTasks, BackgroundTaskState{
 			TaskID:        bp.TaskID,
 			Tool:          bp.Tool,
+			Label:         bp.Label,
 			State:         orDefault(bp.State, "running"),
 			Error:         bp.Error,
 			ElapsedMs:     bp.ElapsedMs,
