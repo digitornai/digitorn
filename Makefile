@@ -63,9 +63,8 @@ build-services:
 dist: build
 	rm -rf $(DIST)
 	mkdir -p $(DIST)
-	@for w in $(WORKERS); do cp bin/$$w$(EXT) $(DIST)/; done
-	@for s in $(SERVICES); do cp bin/$$s$(EXT) $(DIST)/; done
-	cp .digitorn.yaml.example README.md LICENSE $(DIST)/
+	@for b in $(ALL_BINS); do cp bin/$$b$(EXT) $(DIST)/; done
+	cp config.example.yaml README.md LICENSE $(DIST)/
 	@echo "Bundle ready: $(DIST)/ — deploy this whole folder"
 
 .PHONY: run
