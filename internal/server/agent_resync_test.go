@@ -79,7 +79,7 @@ type resyncStubRunner struct {
 func (r resyncStubRunner) RunSubAgent(ctx context.Context, spec runtime.SubAgentSpec) (runtime.AgentResult, error) {
 	if rec := runtime.RecorderFromContext(ctx); rec != nil {
 		for i := 0; i < r.toolCalls; i++ {
-			rec.AddToolCall()
+			rec.AddToolCall("filesystem.read")
 		}
 		rec.AddLLMCall(r.tokensIn, r.tokensOut)
 	}
