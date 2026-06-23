@@ -295,9 +295,16 @@ func (b *SocketIOBridge) handleJoinSession(ctx context.Context, c ports.Realtime
 		return err
 	}
 
-	for _, r := range c.Rooms() {
-		if strings.HasPrefix(r, "session:") && r != "session:"+sessionID {
-			_ = c.Leave(r)
+	// When joining a child (sub-agent) session, keep the root session room so
+	// the client continues to receive agent_result / agent_progress events that
+	// are routed to the root session. Only leave other session rooms when
+	// switching between root sessions.
+	_, _, isSubSession := sessionstore.SubAgentSession(sessionID)
+	if !isSubSession {
+		for _, r := range c.Rooms() {
+			if strings.HasPrefix(r, "session:") && r != "session:"+sessionID {
+				_ = c.Leave(r)
+			}
 		}
 	}
 
