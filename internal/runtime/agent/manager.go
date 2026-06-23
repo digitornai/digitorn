@@ -188,6 +188,7 @@ type agentState struct {
 	tokensOut   atomic.Int64
 	children    atomic.Int64
 	currentTool atomic.Value // string — last tool name dispatched
+	progressFn  func(currentTool string) // called on each tool dispatch for instant telemetry
 }
 
 // AddLLMCall / AddToolCall implement runtime.Recorder — the real-time, lock-free
@@ -202,6 +203,11 @@ func (a *agentState) AddToolCall(toolName string) {
 	a.toolCalls.Add(1)
 	if toolName != "" {
 		a.currentTool.Store(toolName)
+	}
+	// Emit immediately so the client sees the current tool in real time,
+	// not just on the 5s ticker.
+	if a.progressFn != nil {
+		a.progressFn(toolName)
 	}
 }
 
@@ -473,6 +479,7 @@ func (m *Manager) runAgent(a *agentState, req SpawnRequest) {
 
 	// Attach this agent as the telemetry recorder so the engine updates its
 	// counters in real time while the sub-turn runs.
+	a.progressFn = func(currentTool string) { m.emitProgress(a, currentTool) }
 	ctx := runtime.WithRecorder(a.ctx, a)
 	res, err := m.runner.RunSubAgent(ctx, runtime.SubAgentSpec{
 		AppID: req.AppID, ParentSession: req.RootSession, UserID: req.UserID, UserJWT: req.UserJWT,
