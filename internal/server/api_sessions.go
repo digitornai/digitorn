@@ -288,6 +288,9 @@ func (d *Daemon) getSession(w http.ResponseWriter, r *http.Request) {
 	}
 	state.RLock()
 	defer state.RUnlock()
+
+	parentID, agentID, runID := parseSubSessionID(sid)
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"session_id":    state.SessionID,
 		"app_id":        state.AppID,
@@ -308,11 +311,33 @@ func (d *Daemon) getSession(w http.ResponseWriter, r *http.Request) {
 		"tokens_out":    state.TokensOut,
 		"usd_total":     state.UsdTotal,
 		"partial":       state.Partial,
-		// active_mode lets the composer's mode picker restore the session's
-		// last-active mode on reload instead of falling back to the app default.
-		"active_mode": state.ActiveMode,
-		"instance_id": d.envelopeBuilder.InstanceID,
+		"active_mode":   state.ActiveMode,
+		"instance_id":   d.envelopeBuilder.InstanceID,
+		"parent_id":     parentID,
+		"agent_id":      agentID,
+		"run_id":        runID,
+		"is_subagent":   parentID != "",
 	})
+}
+
+// parseSubSessionID extracts (parentID, agentID, runID) from a sub-session ID.
+// Sub-session IDs have the format: "{parentID}::agent::{agentID}#{runSuffix}"
+// Returns empty strings for top-level sessions.
+func parseSubSessionID(sid string) (parentID, agentID, runID string) {
+	const marker = "::agent::"
+	idx := strings.Index(sid, marker)
+	if idx < 0 {
+		return "", "", ""
+	}
+	parentID = sid[:idx]
+	rest := sid[idx+len(marker):]
+	if h := strings.Index(rest, "#"); h >= 0 {
+		agentID = rest[:h]
+		runID = rest[h+1:]
+	} else {
+		agentID = rest
+	}
+	return
 }
 
 func (d *Daemon) deleteSession(w http.ResponseWriter, r *http.Request) {
