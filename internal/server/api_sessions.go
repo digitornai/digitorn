@@ -771,8 +771,7 @@ func (d *Daemon) requireOwnedSession(ctx context.Context, sid string) (*sessions
 	owner := state.UserID
 	first := state.FirstSeq
 	state.RUnlock()
-	if first == 0 {
-		// Session never received any event — treat as not found.
+	if first == 0 && !strings.Contains(sid, "::agent::") {
 		return nil, errSessionNotFound
 	}
 	userID := userIDOf(ctx)

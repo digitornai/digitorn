@@ -16,8 +16,6 @@ import (
 	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
 )
 
-// AuthValidator resolves a handshake token into a user identity. T6 will
-// plug a JWKS-backed validator; V1 ships with NullAuth (accept-all dev mode).
 type AuthValidator interface {
 	Validate(ctx context.Context, token string, metadata map[string]any) (*AuthIdentity, error)
 }
@@ -28,8 +26,6 @@ type AuthIdentity struct {
 	Roles        []string
 }
 
-// NullAuth accepts every connection and derives the user_id from the token
-// (or `metadata["user_id"]`). Suitable for development only.
 type NullAuth struct{}
 
 func (NullAuth) Validate(_ context.Context, token string, metadata map[string]any) (*AuthIdentity, error) {
@@ -43,10 +39,6 @@ func (NullAuth) Validate(_ context.Context, token string, metadata map[string]an
 	return &AuthIdentity{UserID: uid}, nil
 }
 
-// SocketIOBridge wires the sessionstore.Bus to the Socket.IO realtime server.
-// Every event a client sees on `/events` flows through this bridge, with
-// strict per-session room routing via PrimaryRoomFor — no event can leak
-// outside its session's room.
 type SocketIOBridge struct {
 	rt      ports.RealtimeServer
 	bus     *sessionstore.Bus
@@ -55,30 +47,17 @@ type SocketIOBridge struct {
 	log     *slog.Logger
 	paths   sessionstore.Paths
 
-	// BrainFor resolves an app's entry-agent brain so the join handler can
-	// compute the context window for the "last context on open" gauge. Set by
-	// bootstrap after the daemon is assembled ; nil in tests (the join emit is
-	// then a no-op, never fatal).
 	BrainFor func(appID string) schema.Brain
 
-	// SessionWindowBrain resolves the window-bearing brain for a SESSION (entry
-	// agent + per-session selected model + gateway window), so the on-open gauge
-	// matches the live recount. Set by bootstrap ; falls back to BrainFor when nil.
 	SessionWindowBrain func(snap sessionstore.SessionSnapshot) schema.Brain
 
-	// PreWarmContext triggers a synchronous context recount for a session when
-	// ctxParts (system prompt + tools) is not yet populated. Called from
-	// emitContextOnJoin so the gauge shows the real overhead before the first turn
-	// instead of 0 or a stale value. Wired by bootstrap; nil = no pre-warm.
 	PreWarmContext func(sessionID, appID string)
 
-	// Per-client state. Keyed by client.ID().
 	clients sync.Map
 
 	sub        *sessionstore.Subscription
 	subStarted atomic.Bool
 
-	// Metrics
 	connectsTotal    atomic.Uint64
 	disconnectsTotal atomic.Uint64
 	authRejected     atomic.Uint64
@@ -89,8 +68,6 @@ type SocketIOBridge struct {
 	actionsRejected  atomic.Uint64
 }
 
-// clientState holds per-socket context. Mutex protects appID + sessionID
-// transitions which must be atomic with the underlying room changes.
 type clientState struct {
 	mu           sync.Mutex
 	userID       string
@@ -102,7 +79,6 @@ type clientState struct {
 
 const bridgeNamespace = "/events"
 
-// NewSocketIOBridge constructs the bridge. Call Start to begin forwarding.
 func NewSocketIOBridge(rt ports.RealtimeServer, bus *sessionstore.Bus, builder *sessionstore.EnvelopeBuilder, paths sessionstore.Paths, auth AuthValidator, log *slog.Logger) *SocketIOBridge {
 	if auth == nil {
 		auth = NullAuth{}
@@ -134,8 +110,6 @@ func NewSocketIOBridge(rt ports.RealtimeServer, bus *sessionstore.Bus, builder *
 	return b
 }
 
-// Start subscribes the bridge to the bus. From now on, every event the bus
-// emits is dispatched to the appropriate room via PrimaryRoomFor.
 func (b *SocketIOBridge) Start(ctx context.Context) error {
 	if !b.subStarted.CompareAndSwap(false, true) {
 		return nil
@@ -149,8 +123,6 @@ func (b *SocketIOBridge) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop cancels the bus subscription. Active connections remain open — call
-// realtime.Close to disconnect them.
 func (b *SocketIOBridge) Stop(ctx context.Context) error {
 	if b.sub != nil {
 		b.sub.Cancel()
@@ -159,11 +131,6 @@ func (b *SocketIOBridge) Stop(ctx context.Context) error {
 	return nil
 }
 
-// dispatchToRealtime forwards a single bus event to its destination room.
-// The strict-isolation invariant : if the event has a session_id, it is
-// routed ONLY to "session:<sid>" — never to the app or user room (which
-// would leak the event to all viewers of that app or that user's other
-// sessions). This is THE rule that prevents cross-session leaks.
 func (b *SocketIOBridge) dispatchToRealtime(ev sessionstore.Event) {
 	room := sessionstore.PrimaryRoomFor(&ev)
 	if room == "" {
@@ -176,21 +143,7 @@ func (b *SocketIOBridge) dispatchToRealtime(ev sessionstore.Event) {
 	env := b.builder.Build(&ev)
 	b.emitEnvelope(room, &ev, env)
 
-	// Agent fan-out : a delegated sub-agent runs in an ISOLATED sub-session
-	// (<root>::agent::<runID>) so its events never pollute the coordinator's
-	// session state or its LLM context. But a client watching the TOP-LEVEL
-	// session must still see the sub-agent work in real time. So we ALSO stream
-	// every sub-session event to the root session's room, tagged with the
-	// emitting agent's run id for client-side attribution. This is transport
-	// only — the durable event still lives in the sub-session (isolation
-	// intact) — and stays within the same session tree + same user, so it is
-	// NOT a cross-session / cross-user leak (the rule above still holds : we
-	// never route to an app or user room).
 	if _, runID, isSub := sessionstore.SubAgentSession(ev.SessionID); isSub {
-		// Fan to EVERY ancestor room (top root … immediate parent), each tagged
-		// with that ancestor as RootSessionID so a client joined to it (the top
-		// session, or one drilled into an intermediate sub-agent) matches its own
-		// fan-out guard. Depth-1 yields exactly the old single top-root emit.
 		for _, anc := range sessionstore.SubAgentAncestors(ev.SessionID) {
 			ancRoom := "session:" + anc
 			if ancRoom == room {
@@ -204,9 +157,6 @@ func (b *SocketIOBridge) dispatchToRealtime(ev sessionstore.Event) {
 	}
 }
 
-// emitEnvelope sends one already-built envelope to a room, counting the emit /
-// error metrics. Factored out so the agent fan-out reuses the exact same
-// emit-and-account path as the primary route.
 func (b *SocketIOBridge) emitEnvelope(room string, ev *sessionstore.Event, env sessionstore.SocketEnvelope) {
 	if err := b.rt.Emit(context.Background(), bridgeNamespace, room, "event", env); err != nil {
 		b.emitErrors.Add(1)
@@ -219,9 +169,6 @@ func (b *SocketIOBridge) emitEnvelope(room string, ev *sessionstore.Event, env s
 	b.emitsTotal.Add(1)
 }
 
-// handleAuth validates the handshake token. On success it stashes the
-// resolved AuthIdentity inside the handshake auth map so connection-time
-// handlers can read it back.
 func (b *SocketIOBridge) handleAuth(ctx context.Context, token string, metadata map[string]any) error {
 	id, err := b.auth.Validate(ctx, token, metadata)
 	if err != nil {
@@ -258,7 +205,6 @@ func (b *SocketIOBridge) handleConnect(ctx context.Context, c ports.RealtimeClie
 	b.clients.Store(c.ID(), state)
 	b.connectsTotal.Add(1)
 
-	// Auto-join user room — every user always sees their per-user events.
 	if err := c.Join("user:" + userID); err != nil {
 		b.log.Warn("bridge: join user room failed",
 			slog.String("client_id", c.ID()),
@@ -266,7 +212,6 @@ func (b *SocketIOBridge) handleConnect(ctx context.Context, c ports.RealtimeClie
 			slog.String("err", err.Error()))
 	}
 
-	// Echo a `connected` event to the client so it can confirm handshake.
 	connEnv := sessionstore.SocketEnvelope{
 		Type:       "connected",
 		Kind:       "system",
@@ -326,9 +271,6 @@ func (b *SocketIOBridge) handleLeaveApp(ctx context.Context, c ports.RealtimeCli
 	return nil
 }
 
-// handleJoinSession enforces the strict-isolation invariant : when a client
-// joins a session, it LEAVES every other session room atomically. This is
-// the rule that prevents tabs from leaking events across sessions.
 func (b *SocketIOBridge) handleJoinSession(ctx context.Context, c ports.RealtimeClient, data any) error {
 	b.actionsTotal.Add(1)
 	st := b.stateOf(c)
@@ -349,13 +291,10 @@ func (b *SocketIOBridge) handleJoinSession(ctx context.Context, c ports.Realtime
 			slog.String("user_id", st.userID),
 			slog.String("session_id", sessionID),
 			slog.String("err", err.Error()))
-		// A refused join would otherwise be SILENT — the client never gets the room,
-		// so it sees no turn, no error, no spinner. Push the reason straight to it.
 		b.emitJoinError(c, sessionID, appID, err)
 		return err
 	}
 
-	// LEAVE every other session room first.
 	for _, r := range c.Rooms() {
 		if strings.HasPrefix(r, "session:") && r != "session:"+sessionID {
 			_ = c.Leave(r)
@@ -373,21 +312,10 @@ func (b *SocketIOBridge) handleJoinSession(ctx context.Context, c ports.Realtime
 		b.actionsRejected.Add(1)
 		return err
 	}
-	// Push the last known context occupancy to THIS client so its footer shows the
-	// real "ctx used/window" on open — before any new turn. Done in a goroutine and
-	// emitted DIRECTLY to the joining client : it must never block the socket
-	// handler (a cold-session load can be heavy) and never race room membership
-	// (emitting to the room right after Join sometimes missed the client). The CLI
-	// already updates its footer on a context_tokens event. Best-effort.
 	go b.emitContextOnJoin(c, sessionID, appID)
 	return nil
 }
 
-// emitContextOnJoin re-sends the session's current context gauge straight to the
-// joining client so it sees the last real occupancy without waiting for the next
-// turn's context_tokens event. Off the socket loop (own goroutine) and direct to
-// the client (no room race). No-op when the window/brain or occupancy is unknown
-// (a fresh session that never ran a turn).
 func (b *SocketIOBridge) emitContextOnJoin(c ports.RealtimeClient, sessionID, appID string) {
 	if c == nil || b.BrainFor == nil || b.bus == nil || b.builder == nil {
 		return
@@ -398,8 +326,6 @@ func (b *SocketIOBridge) emitContextOnJoin(c ports.RealtimeClient, sessionID, ap
 	}
 	snap := st.Snapshot()
 
-	// If the session has no recorded context yet, launch an async pre-warm so
-	// the gauge fills in quickly without blocking the join response.
 	if snap.ContextTokens == 0 && b.PreWarmContext != nil {
 		go b.PreWarmContext(sessionID, appID)
 	}
@@ -429,10 +355,6 @@ func (b *SocketIOBridge) emitContextOnJoin(c ports.RealtimeClient, sessionID, ap
 	}
 }
 
-// emitJoinError pushes a client-facing error event STRAIGHT to the joining client
-// when a join is refused. Without it the refusal is silent — the client never gets
-// the room, so it shows no turn, no error, no spinner. Reuses the standard
-// DaemonError shape so the existing client error path renders it.
 func (b *SocketIOBridge) emitJoinError(c ports.RealtimeClient, sessionID, appID string, cause error) {
 	if c == nil || b.builder == nil || cause == nil {
 		return
@@ -475,7 +397,6 @@ func (b *SocketIOBridge) handleLeaveSession(ctx context.Context, c ports.Realtim
 	if sessionID != "" {
 		_ = c.Leave("session:" + sessionID)
 	}
-	// Make sure the client still sees its per-user events.
 	if st.userID != "" {
 		_ = c.Join("user:" + st.userID)
 	}
@@ -586,9 +507,6 @@ func (b *SocketIOBridge) handleResolveApproval(ctx context.Context, c ports.Real
 	return nil
 }
 
-// handleReplay returns events with seq > since for the requested session.
-// The user MUST be authorized for that session — replay returns nothing
-// for sessions the user doesn't own.
 func (b *SocketIOBridge) handleReplay(ctx context.Context, c ports.RealtimeClient, data any) error {
 	b.actionsTotal.Add(1)
 	st := b.stateOf(c)
@@ -606,11 +524,6 @@ func (b *SocketIOBridge) handleReplay(ctx context.Context, c ports.RealtimeClien
 		b.actionsRejected.Add(1)
 		return err
 	}
-	// Drain the write-behind queue to disk first : appends are buffered and
-	// flushed on a timer, so reading the file straight away would miss events
-	// already committed to memory but not yet flushed — exactly the events a
-	// just-reconnected client is replaying to catch up on. Without this, replay
-	// returns a stale snapshot and the client silently loses recent events.
 	if err := b.bus.FlushPending(ctx); err != nil {
 		b.log.Warn("replay: flush before read failed", slog.String("err", err.Error()))
 	}
@@ -624,7 +537,6 @@ func (b *SocketIOBridge) handleReplay(ctx context.Context, c ports.RealtimeClien
 		if ev.Seq <= since {
 			continue
 		}
-		// Strict isolation : double-check the session_id on the event itself.
 		if ev.SessionID != sessionID {
 			continue
 		}
@@ -674,21 +586,6 @@ func (b *SocketIOBridge) handlePing(ctx context.Context, c ports.RealtimeClient,
 	return nil
 }
 
-// authorizeSession verifies that userID may access (appID, sessionID). It
-// mirrors the HTTP requireOwnedSession contract so the realtime surface can't
-// be used to bypass it :
-//
-//   - no user_id            → reject (must be authenticated ; the handshake
-//     auth validator already gates the connection, this is defence in depth).
-//   - session doesn't exist → reject as not-found. Critically this CLOSES the
-//     "session squatting" hole : the old code allowed joining a session whose
-//     owner was still "" (which, because State() cold-loads an empty state for
-//     any id, meant ANY not-yet-created id). A client could join a victim's
-//     future session id and then receive the real owner's events once it
-//     materialised. Existence is decided by FirstSeq != 0 — identical to the
-//     HTTP path's 404 rule.
-//   - owner mismatch        → reject. (Ownerless-but-existing sessions stay
-//     accessible — owner == "" with FirstSeq != 0 is a system/legacy session.)
 func (b *SocketIOBridge) authorizeSession(ctx context.Context, userID, appID, sessionID string) error {
 	if userID == "" {
 		return errors.New("unauthorized: no user_id")
@@ -701,9 +598,11 @@ func (b *SocketIOBridge) authorizeSession(ctx context.Context, userID, appID, se
 	owner := state.UserID
 	first := state.FirstSeq
 	state.RUnlock()
-	if first == 0 {
-		// Never received an event → does not exist. Reject rather than let a
-		// client squat the id before its real owner creates it.
+	// Sub-agent sessions (ID contains "::agent::") may have FirstSeq=0 when they
+	// are freshly spawned and their events haven't been committed yet. Allow the
+	// join so the client can receive live events as the agent produces them.
+	isSubAgent := strings.Contains(sessionID, "::agent::")
+	if first == 0 && !isSubAgent {
 		return errors.New("unauthorized: session not found")
 	}
 	if owner != "" && owner != userID {
@@ -716,13 +615,6 @@ func (b *SocketIOBridge) stateOf(c ports.RealtimeClient) *clientState {
 	if v, ok := b.clients.Load(c.ID()); ok {
 		return v.(*clientState)
 	}
-	// Heal a live socket whose per-connection state is missing — e.g. one
-	// restored by socket.io's connection-state-recovery WITHOUT re-firing the
-	// `connection` event, so handleConnect never ran. Rebuild from the handshake
-	// identity (still carried on the socket) instead of rejecting every
-	// join/replay/send on a connected-but-stateless socket. appID/sessionID are
-	// left empty on purpose : the client re-emits join_session on reconnect,
-	// which sets them. Returns nil only when there's genuinely no identity.
 	auth := c.Auth()
 	userID, _ := auth["__user_id"].(string)
 	if userID == "" {
@@ -732,13 +624,11 @@ func (b *SocketIOBridge) stateOf(c ports.RealtimeClient) *clientState {
 	fresh := &clientState{userID: userID, connectedAt: time.Now(), capabilities: caps}
 	actual, loaded := b.clients.LoadOrStore(c.ID(), fresh)
 	if !loaded {
-		_ = c.Join("user:" + userID) // restore the per-user room the lost connect would have joined
+		_ = c.Join("user:" + userID)
 	}
 	return actual.(*clientState)
 }
 
-// onDisconnect cleans up per-socket state. Called explicitly via the realtime
-// server's disconnect event when wired.
 func (b *SocketIOBridge) onDisconnect(clientID string) {
 	if _, ok := b.clients.LoadAndDelete(clientID); ok {
 		b.disconnectsTotal.Add(1)
