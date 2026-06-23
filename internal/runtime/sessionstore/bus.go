@@ -715,6 +715,21 @@ func (b *Bus) deliverToSubs(subs []*subscription, ev Event) {
 		if s.closed.Load() {
 			continue
 		}
+		// Critical lifecycle events must never be silently dropped — retry with
+		// brief backoff so a momentarily-full queue doesn't lose agent_spawn or
+		// agent_result events that the client needs to track sub-agents.
+		if isCriticalEvent(ev.Type) {
+			for attempt := 0; attempt < 5; attempt++ {
+				select {
+				case s.queue <- ev:
+					b.notifyTotal.Add(1)
+					goto delivered
+				default:
+					time.Sleep(time.Duration(attempt+1) * 2 * time.Millisecond)
+				}
+			}
+			// Still full after retries — fall through to normal drop handling
+		}
 		select {
 		case s.queue <- ev:
 			b.notifyTotal.Add(1)
@@ -730,7 +745,17 @@ func (b *Bus) deliverToSubs(subs []*subscription, ev Event) {
 				b.cancelSubscription(s)
 			}
 		}
+	delivered:
 	}
+}
+
+func isCriticalEvent(t EventType) bool {
+	switch t {
+	case EventAgentSpawn, EventAgentResult, EventAgentProgress,
+		EventBackgroundTask, EventTurnStarted, EventTurnEnded:
+		return true
+	}
+	return false
 }
 
 func (b *Bus) evictionLoop() {
