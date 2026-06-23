@@ -95,7 +95,7 @@ func (d *Daemon) baselineWorkspaceAsync(workdir string) {
 
 // GET …/workspace/changes — the agent's pending file changes since the baseline.
 func (d *Daemon) getWorkspaceChanges(w http.ResponseWriter, r *http.Request) {
-	sid := chi.URLParam(r, "session_id")
+	sid := sessionIDParam(r)
 	wd, err := d.sessionWorkdir(r.Context(), sid)
 	if err != nil {
 		writeError(w, errStatus(err), errCode(err), err.Error())
@@ -120,7 +120,7 @@ func (d *Daemon) getWorkspaceChanges(w http.ResponseWriter, r *http.Request) {
 
 // GET …/workspace/diff?path=… — unified diff + numstat for one changed file.
 func (d *Daemon) getWorkspaceDiff(w http.ResponseWriter, r *http.Request) {
-	sid := chi.URLParam(r, "session_id")
+	sid := sessionIDParam(r)
 	path := r.URL.Query().Get("path")
 	if path == "" {
 		writeError(w, http.StatusBadRequest, "missing_path", "query param `path` is required")
@@ -145,7 +145,7 @@ func (d *Daemon) getWorkspaceDiff(w http.ResponseWriter, r *http.Request) {
 
 // POST …/workspace/commit {message, paths?} — validate (commit) the changes.
 func (d *Daemon) postWorkspaceCommit(w http.ResponseWriter, r *http.Request) {
-	sid := chi.URLParam(r, "session_id")
+	sid := sessionIDParam(r)
 	wd, err := d.sessionWorkdir(r.Context(), sid)
 	if err != nil {
 		writeError(w, errStatus(err), errCode(err), err.Error())
@@ -187,7 +187,7 @@ func (d *Daemon) postWorkspaceCommit(w http.ResponseWriter, r *http.Request) {
 // dispatch the matching workspace action, then fire the live poke so the Changes
 // panel + gutter badges (approved=green / pending=orange) refresh.
 func (d *Daemon) workspaceFileAction(w http.ResponseWriter, r *http.Request, action string) {
-	sid := chi.URLParam(r, "session_id")
+	sid := sessionIDParam(r)
 	wd, err := d.sessionWorkdir(r.Context(), sid)
 	if err != nil {
 		writeError(w, errStatus(err), errCode(err), err.Error())
@@ -265,7 +265,7 @@ func (d *Daemon) postWorkspaceRejectHunks(w http.ResponseWriter, r *http.Request
 // to the workdir, dispatches the workspace action, then fires the live poke so
 // the Changes panel + diff refresh.
 func (d *Daemon) workspaceHunkAction(w http.ResponseWriter, r *http.Request, action string) {
-	sid := chi.URLParam(r, "session_id")
+	sid := sessionIDParam(r)
 	wd, err := d.sessionWorkdir(r.Context(), sid)
 	if err != nil {
 		writeError(w, errStatus(err), errCode(err), err.Error())
@@ -322,7 +322,7 @@ func (d *Daemon) workspaceHunkAction(w http.ResponseWriter, r *http.Request, act
 // appeared since the client last fetched /changes (no stale path list, no TOCTOU).
 // The .digitorn metadata and any user .git stay excluded, as at baseline.
 func (d *Daemon) postWorkspaceApproveAll(w http.ResponseWriter, r *http.Request) {
-	sid := chi.URLParam(r, "session_id")
+	sid := sessionIDParam(r)
 	wd, err := d.sessionWorkdir(r.Context(), sid)
 	if err != nil {
 		writeError(w, errStatus(err), errCode(err), err.Error())
@@ -366,7 +366,7 @@ const workspaceFileMaxBytes = 5 << 20
 // `..` escape, an absolute path outside the workdir, a planted symlink, or a
 // daemon-secret path is rejected — a session can only read its own files.
 func (d *Daemon) getWorkspaceFile(w http.ResponseWriter, r *http.Request) {
-	sid := chi.URLParam(r, "session_id")
+	sid := sessionIDParam(r)
 	rel := chi.URLParam(r, "*")
 	// The web client sends the path via encodeURIComponent, so a nested file
 	// arrives percent-encoded (frontend%2Fpackage.json) and chi does NOT decode
@@ -459,7 +459,7 @@ const workspaceSearchMaxHits = 2000
 // noise (node_modules, …) is skipped by grep. The match column/length are
 // computed server-side from the authoritative Go regexp.
 func (d *Daemon) getWorkspaceSearch(w http.ResponseWriter, r *http.Request) {
-	sid := chi.URLParam(r, "session_id")
+	sid := sessionIDParam(r)
 	q := r.URL.Query().Get("q")
 	if strings.TrimSpace(q) == "" {
 		writeJSON(w, http.StatusOK, map[string]any{"hits": []any{}, "truncated": false})
@@ -579,7 +579,7 @@ func (d *Daemon) getWorkspaceSearch(w http.ResponseWriter, r *http.Request) {
 // as the read route; a deleted file still has history (Enforce checks the path,
 // not existence).
 func (d *Daemon) getWorkspaceFileHistory(w http.ResponseWriter, r *http.Request) {
-	sid := chi.URLParam(r, "session_id")
+	sid := sessionIDParam(r)
 	rel := chi.URLParam(r, "filepath")
 	if dec, derr := url.PathUnescape(rel); derr == nil {
 		rel = dec
@@ -618,7 +618,7 @@ func (d *Daemon) getWorkspaceFileHistory(w http.ResponseWriter, r *http.Request)
 // revision as a PENDING change (history untouched; the user reviews then approves
 // or rejects). Confined to the session workdir; the shadow repo is refused.
 func (d *Daemon) postWorkspaceFileRevert(w http.ResponseWriter, r *http.Request) {
-	sid := chi.URLParam(r, "session_id")
+	sid := sessionIDParam(r)
 	rel := chi.URLParam(r, "filepath")
 	if dec, derr := url.PathUnescape(rel); derr == nil {
 		rel = dec
@@ -670,7 +670,7 @@ func (d *Daemon) postWorkspaceFileRevert(w http.ResponseWriter, r *http.Request)
 // GET …/workspace/history — the whole workspace history (every approval), newest
 // first, each commit carrying the files it changed.
 func (d *Daemon) getWorkspaceHistory(w http.ResponseWriter, r *http.Request) {
-	sid := chi.URLParam(r, "session_id")
+	sid := sessionIDParam(r)
 	wd, err := d.sessionWorkdir(r.Context(), sid)
 	if err != nil {
 		writeError(w, errStatus(err), errCode(err), err.Error())
@@ -692,7 +692,7 @@ func (d *Daemon) getWorkspaceHistory(w http.ResponseWriter, r *http.Request) {
 // past commit (all the commit's files, or the chosen subset) as a PENDING change
 // the user reviews. Every path is confined to the session workdir.
 func (d *Daemon) postWorkspaceRevert(w http.ResponseWriter, r *http.Request) {
-	sid := chi.URLParam(r, "session_id")
+	sid := sessionIDParam(r)
 	wd, err := d.sessionWorkdir(r.Context(), sid)
 	if err != nil {
 		writeError(w, errStatus(err), errCode(err), err.Error())
@@ -746,7 +746,7 @@ func (d *Daemon) postWorkspaceRevert(w http.ResponseWriter, r *http.Request) {
 // fired so the Changes panel + gutter badges update. The shadow repo (.digitorn)
 // is refused.
 func (d *Daemon) putWorkspaceFile(w http.ResponseWriter, r *http.Request) {
-	sid := chi.URLParam(r, "session_id")
+	sid := sessionIDParam(r)
 	rel := chi.URLParam(r, "*")
 	if dec, derr := url.PathUnescape(rel); derr == nil {
 		rel = dec
@@ -820,7 +820,7 @@ const workspaceTreeMaxPerLevel = 5000
 // workdir by the same PathPolicy the agent runs under (escape / shadow / secret
 // rejected); VCS/build/dependency noise (skipDirs, incl. .digitorn) is dropped.
 func (d *Daemon) getWorkspaceTree(w http.ResponseWriter, r *http.Request) {
-	sid := chi.URLParam(r, "session_id")
+	sid := sessionIDParam(r)
 	rel := strings.TrimSpace(r.URL.Query().Get("path"))
 	wd, err := d.sessionWorkdir(r.Context(), sid)
 	if err != nil {

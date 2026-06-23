@@ -67,7 +67,7 @@ func tuiBinary() (path string, isDir bool) {
 	}
 
 	// 2. Separate digitorn-tui repo, sibling of the digitorn directory.
-	if abs, err := filepath.Abs(filepath.Join(root, "..", "..", "..", "..", "digitorn-tui")); err == nil {
+	if abs, err := filepath.Abs(filepath.Join(root, "..", "..", "..", "digitorn-tui")); err == nil {
 		if fi, err := os.Stat(abs); err == nil && fi.IsDir() {
 			return abs, true
 		}

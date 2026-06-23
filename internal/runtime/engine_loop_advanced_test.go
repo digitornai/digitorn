@@ -110,6 +110,20 @@ func (r *recordingProjectingSessions) AppendDurable(ctx context.Context, ev sess
 	return r.projectingSessions.AppendDurable(ctx, ev)
 }
 
+func (r *recordingProjectingSessions) Append(ctx context.Context, ev sessionstore.Event) (uint64, error) {
+	return r.recordingProjectingSessionsAppend(ctx, ev)
+}
+
+func (r *recordingProjectingSessions) recordingProjectingSessionsAppend(ctx context.Context, ev sessionstore.Event) (uint64, error) {
+	if r.failOn != "" && ev.Type == r.failOn {
+		r.countSeen++
+		if r.countSeen > r.failOnCount {
+			return 0, r.failErr
+		}
+	}
+	return r.projectingSessions.Append(ctx, ev)
+}
+
 // ============================================================
 // I1 — Strict event ordering invariant per turn
 // ============================================================

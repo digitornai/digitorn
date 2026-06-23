@@ -16,6 +16,9 @@ func (taskIDFakeSessions) State(string) (*sessionstore.SessionState, error) { re
 func (taskIDFakeSessions) AppendDurable(context.Context, sessionstore.Event) (uint64, error) {
 	return 0, nil
 }
+func (taskIDFakeSessions) Append(context.Context, sessionstore.Event) (uint64, error) {
+	return 0, nil
+}
 
 // TestNextTaskID_UniqueUnderConcurrency reproduces the batch-collision bug : a
 // turn dispatches task_create calls IN PARALLEL, so deriving the next id from

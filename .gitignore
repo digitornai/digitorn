@@ -58,6 +58,7 @@ bin/voice_reply.wav
 # --- vendored sub-projects (excluded from code index / repomap) -----------
 activepieces-main/
 vendor-references/
+.digitorn/
 
 # GoReleaser build artifacts (TUI cross-compiled binaries)
 .goreleaser-tui/

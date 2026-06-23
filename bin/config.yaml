@@ -110,6 +110,9 @@ background:
   ops_url: http://127.0.0.1:8091
   # ops_token: set when the bg sets DIGITORN_BG_OPS_TOKEN
 
+runtime:
+  max_concurrent_llm_calls: 128
+
 logging:
   level: info
   format: tint

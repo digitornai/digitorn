@@ -36,7 +36,7 @@ const voiceSystemContext = "You are on a live voice call. Reply in one or two sh
 // Provider/model selection comes as query params (the adapter reads them from the
 // app's voice config): stt_model, tts_model, tts_voice, language, rate (call PCM rate).
 func (d *Daemon) voiceAudioWS(w http.ResponseWriter, r *http.Request) {
-	sid := chi.URLParam(r, "session_id")
+	sid := sessionIDParam(r)
 	appID := chi.URLParam(r, "app_id")
 	if _, err := d.requireOwnedSession(r.Context(), sid); err != nil {
 		writeError(w, errStatus(err), errCode(err), err.Error())

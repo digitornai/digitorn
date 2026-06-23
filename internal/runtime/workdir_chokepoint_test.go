@@ -21,6 +21,10 @@ func (wdNoSessions) AppendDurable(context.Context, sessionstore.Event) (uint64, 
 	return 0, nil
 }
 
+func (wdNoSessions) Append(context.Context, sessionstore.Event) (uint64, error) {
+	return 0, nil
+}
+
 func wdTestEngine() *Engine {
 	return &Engine{
 		Sessions:        wdNoSessions{},

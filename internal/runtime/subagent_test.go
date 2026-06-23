@@ -57,6 +57,10 @@ func (m *multiProjecting) AppendDurable(_ context.Context, ev sessionstore.Event
 	return ev.Seq, nil
 }
 
+func (m *multiProjecting) Append(ctx context.Context, ev sessionstore.Event) (uint64, error) {
+	return m.AppendDurable(ctx, ev)
+}
+
 // TestRunSubAgent_IsolatedFromParent : the headline property. A sub-agent runs
 // in a fresh sub-session seeded only with the memory seed + task ; it must
 // NEVER see the parent's conversation history.

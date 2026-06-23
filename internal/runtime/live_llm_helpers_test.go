@@ -252,6 +252,10 @@ func (p *liveSessions) AppendDurable(_ context.Context, ev sessionstore.Event) (
 	return p.seq, nil
 }
 
+func (p *liveSessions) Append(ctx context.Context, ev sessionstore.Event) (uint64, error) {
+	return p.AppendDurable(ctx, ev)
+}
+
 // Lock-safe accessors : the abort tests read the event log WHILE the engine
 // goroutine is still appending, so direct f.session.events iteration would race.
 

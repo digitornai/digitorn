@@ -163,6 +163,7 @@ func (m *gormManager) Reload(ctx context.Context, appID string) error {
 
 	// Refresh denormalized DB metadata.
 	row.Name = firstNonEmpty(result.Definition.App.Name, appID)
+	row.ShortName = result.Definition.App.ShortName
 	row.Version = result.Definition.App.Version
 	row.Description = result.Definition.App.Description
 	row.Category = string(result.Definition.App.Category)

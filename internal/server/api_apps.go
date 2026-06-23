@@ -290,18 +290,14 @@ func isImageRef(s string) bool {
 // by hand because the input length is tiny and we want to avoid
 // pulling in a templating engine for one string.
 func renderTextIconSVG(text, hexColor string) string {
-	bg := strings.TrimSpace(hexColor)
-	if bg == "" {
-		bg = "#6366F1"
+	fg := strings.TrimSpace(hexColor)
+	if fg == "" {
+		fg = "#6366F1"
 	}
-	// XML-escape the user-controlled text. The color is operator-
-	// controlled (came from app.yaml at install time, compiler-
-	// validated as a hex string) so we don't need to escape it.
 	return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">` +
-		`<rect width="64" height="64" rx="12" fill="` + bg + `"/>` +
 		`<text x="32" y="32" text-anchor="middle" dominant-baseline="central" ` +
-		`font-size="36" font-family="system-ui, -apple-system, &quot;Segoe UI&quot;, sans-serif" ` +
-		`fill="white">` + escapeXMLContent(text) + `</text></svg>`
+		`font-size="40" font-family="system-ui, -apple-system, &quot;Segoe UI&quot;, sans-serif" ` +
+		`fill="` + fg + `">` + escapeXMLContent(text) + `</text></svg>`
 }
 
 // escapeXMLContent escapes the 5 characters that need escaping in XML

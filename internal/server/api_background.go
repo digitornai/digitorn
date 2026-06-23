@@ -13,7 +13,7 @@ import (
 // separately via the background_task events on the Socket.IO bridge. The
 // session must be owned by the caller.
 func (d *Daemon) listBackgroundTasks(w http.ResponseWriter, r *http.Request) {
-	sid := chi.URLParam(r, "session_id")
+	sid := sessionIDParam(r)
 	state, err := d.requireOwnedSession(r.Context(), sid)
 	if err != nil {
 		writeError(w, errStatus(err), errCode(err), err.Error())
@@ -44,7 +44,7 @@ func (d *Daemon) listBackgroundTasks(w http.ResponseWriter, r *http.Request) {
 // already-finished task is a no-op signal. The session must be owned by
 // the caller, so one user can't cancel another's tasks.
 func (d *Daemon) cancelBackgroundTask(w http.ResponseWriter, r *http.Request) {
-	sid := chi.URLParam(r, "session_id")
+	sid := sessionIDParam(r)
 	taskID := chi.URLParam(r, "task_id")
 	if _, err := d.requireOwnedSession(r.Context(), sid); err != nil {
 		writeError(w, errStatus(err), errCode(err), err.Error())

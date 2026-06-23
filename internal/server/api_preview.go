@@ -284,7 +284,7 @@ func (d *Daemon) pushPreviewSource(ctx context.Context, root string) {
 // (or trailing slash / empty path) serves its index.html.
 func (d *Daemon) servePreviewFile(w http.ResponseWriter, r *http.Request) {
 	appID := chi.URLParam(r, "app_id")
-	sid := chi.URLParam(r, "session_id")
+	sid := sessionIDParam(r)
 	if !d.checkPreviewToken(appID, sid, r.URL.Query().Get("t")) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return

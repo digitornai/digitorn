@@ -26,6 +26,13 @@ func (c *capturingSessions) AppendDurable(_ context.Context, ev sessionstore.Eve
 	return uint64(len(c.events)), nil
 }
 
+func (c *capturingSessions) Append(_ context.Context, ev sessionstore.Event) (uint64, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.events = append(c.events, ev)
+	return uint64(len(c.events)), nil
+}
+
 // A streaming tool call must surface the tool NAME on the first fragment and a
 // token counter that GROWS as the arguments stream in — keyed by the SAME
 // call_id so the client updates one chip. This is what makes a long write

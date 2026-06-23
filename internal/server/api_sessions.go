@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -280,7 +281,7 @@ func (d *Daemon) resolveWorkdir(ctx context.Context, appID, userID, sid, userWor
 }
 
 func (d *Daemon) getSession(w http.ResponseWriter, r *http.Request) {
-	sid := chi.URLParam(r, "session_id")
+	sid := sessionIDParam(r)
 	state, err := d.requireOwnedSession(r.Context(), sid)
 	if err != nil {
 		writeError(w, errStatus(err), errCode(err), err.Error())
@@ -341,7 +342,7 @@ func parseSubSessionID(sid string) (parentID, agentID, runID string) {
 }
 
 func (d *Daemon) deleteSession(w http.ResponseWriter, r *http.Request) {
-	sid := chi.URLParam(r, "session_id")
+	sid := sessionIDParam(r)
 	state, err := d.requireOwnedSession(r.Context(), sid)
 	if err != nil {
 		writeError(w, errStatus(err), errCode(err), err.Error())
@@ -381,7 +382,7 @@ func (d *Daemon) deleteSession(w http.ResponseWriter, r *http.Request) {
 // ---------- history / events / state / memory ----------
 
 func (d *Daemon) getHistory(w http.ResponseWriter, r *http.Request) {
-	sid := chi.URLParam(r, "session_id")
+	sid := sessionIDParam(r)
 	state, err := d.requireOwnedSession(r.Context(), sid)
 	if err != nil {
 		writeError(w, errStatus(err), errCode(err), err.Error())
@@ -410,7 +411,7 @@ func (d *Daemon) getHistory(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d *Daemon) getEvents(w http.ResponseWriter, r *http.Request) {
-	sid := chi.URLParam(r, "session_id")
+	sid := sessionIDParam(r)
 	if _, err := d.requireOwnedSession(r.Context(), sid); err != nil {
 		writeError(w, errStatus(err), errCode(err), err.Error())
 		return
@@ -431,7 +432,7 @@ func (d *Daemon) getEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d *Daemon) getState(w http.ResponseWriter, r *http.Request) {
-	sid := chi.URLParam(r, "session_id")
+	sid := sessionIDParam(r)
 	state, err := d.requireOwnedSession(r.Context(), sid)
 	if err != nil {
 		writeError(w, errStatus(err), errCode(err), err.Error())
@@ -442,7 +443,7 @@ func (d *Daemon) getState(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d *Daemon) getMemory(w http.ResponseWriter, r *http.Request) {
-	sid := chi.URLParam(r, "session_id")
+	sid := sessionIDParam(r)
 	state, err := d.requireOwnedSession(r.Context(), sid)
 	if err != nil {
 		writeError(w, errStatus(err), errCode(err), err.Error())
@@ -465,7 +466,7 @@ func (d *Daemon) getMemory(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d *Daemon) getAgents(w http.ResponseWriter, r *http.Request) {
-	sid := chi.URLParam(r, "session_id")
+	sid := sessionIDParam(r)
 	state, err := d.requireOwnedSession(r.Context(), sid)
 	if err != nil {
 		writeError(w, errStatus(err), errCode(err), err.Error())
@@ -492,7 +493,7 @@ func (d *Daemon) getAgents(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d *Daemon) getQueue(w http.ResponseWriter, r *http.Request) {
-	sid := chi.URLParam(r, "session_id")
+	sid := sessionIDParam(r)
 	if _, err := d.requireOwnedSession(r.Context(), sid); err != nil {
 		writeError(w, errStatus(err), errCode(err), err.Error())
 		return
@@ -528,7 +529,7 @@ type postMessageRequest struct {
 }
 
 func (d *Daemon) postMessage(w http.ResponseWriter, r *http.Request) {
-	sid := chi.URLParam(r, "session_id")
+	sid := sessionIDParam(r)
 	appID := chi.URLParam(r, "app_id")
 	state, err := d.requireOwnedSession(r.Context(), sid)
 	if err != nil {
@@ -627,7 +628,7 @@ func (d *Daemon) runTurnAsync(_ context.Context, sid, appID, userID, userJWT, mo
 }
 
 func (d *Daemon) abortTurn(w http.ResponseWriter, r *http.Request) {
-	sid := chi.URLParam(r, "session_id")
+	sid := sessionIDParam(r)
 	appID := chi.URLParam(r, "app_id")
 	if _, err := d.requireOwnedSession(r.Context(), sid); err != nil {
 		writeError(w, errStatus(err), errCode(err), err.Error())
@@ -686,7 +687,7 @@ func (d *Daemon) abortSession(ctx context.Context, sid, appID, userID string) (u
 }
 
 func (d *Daemon) compactSession(w http.ResponseWriter, r *http.Request) {
-	sid := chi.URLParam(r, "session_id")
+	sid := sessionIDParam(r)
 	state, err := d.requireOwnedSession(r.Context(), sid)
 	if err != nil {
 		writeError(w, errStatus(err), errCode(err), err.Error())
@@ -753,6 +754,11 @@ func (d *Daemon) compactSession(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---------- helpers ----------
+
+func sessionIDParam(r *http.Request) string {
+	s, _ := url.PathUnescape(chi.URLParam(r, "session_id"))
+	return s
+}
 
 // requireOwnedSession loads the session and enforces user ownership.
 // Returns the SessionState if the requestor owns it.

@@ -141,7 +141,7 @@ func (d *Daemon) gatewayModelWindow(model string) int {
 // getSessionModel lists, per agent, the effective model + declared default /
 // alternatives / kind + current override, plus the routing mode (gateway/BYOK).
 func (d *Daemon) getSessionModel(w http.ResponseWriter, r *http.Request) {
-	sid := chi.URLParam(r, "session_id")
+	sid := sessionIDParam(r)
 	appID := chi.URLParam(r, "app_id")
 	state, err := d.requireOwnedSession(r.Context(), sid)
 	if err != nil {
@@ -200,7 +200,7 @@ func (d *Daemon) getSessionModel(w http.ResponseWriter, r *http.Request) {
 // putSessionModel sets (empty model clears) the override for one agent, defaulting
 // to the entry agent. The model is validated against that agent's brain.
 func (d *Daemon) putSessionModel(w http.ResponseWriter, r *http.Request) {
-	sid := chi.URLParam(r, "session_id")
+	sid := sessionIDParam(r)
 	appID := chi.URLParam(r, "app_id")
 	userID := userIDOf(r.Context())
 	state, err := d.requireOwnedSession(r.Context(), sid)

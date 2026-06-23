@@ -82,6 +82,10 @@ func (s *sharedSessions) AppendDurable(_ context.Context, ev sessionstore.Event)
 	return seq, nil
 }
 
+func (s *sharedSessions) Append(_ context.Context, ev sessionstore.Event) (uint64, error) {
+	return s.AppendDurable(context.Background(), ev)
+}
+
 func TestStress_10KConcurrentTurns(t *testing.T) {
 	if testing.Short() {
 		t.Skip("stress test slow under -short")

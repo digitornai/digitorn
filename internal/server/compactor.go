@@ -16,40 +16,19 @@ import (
 	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
 )
 
-// chatLLM is the slice of the LLM client the compactor needs for the
-// summarize strategy. *llm.Client satisfies it.
 type chatLLM interface {
 	Chat(ctx context.Context, req *llm.ChatRequest) (*llm.ChatResponse, error)
 }
 
-// contextCompactor is the production SessionCompactor wired into the
-// hook engine's ActionDeps. It turns a `compact_context` hook action
-// into a REAL LLM-context compaction : it reads the session's history,
-// resolves the app/agent ContextConfig (keep_recent / strategy /
-// summary_brain / summary_max_tokens), runs the contextcompact engine,
-// and emits a durable EventContextCompacted that the runtime applies to
-// every subsequent prompt.
-//
-// Reliability contract : the summarize path is best-effort — if the
-// summary brain is unreachable or returns nothing, contextcompact falls
-// back to truncate, so compaction ALWAYS makes progress. The on-disk
-// history is never modified ; only the model's view shrinks.
 type contextCompactor struct {
 	store  *sessionstore.Bus
 	apps   appmgr.Manager
 	llm    chatLLM
 	logger *slog.Logger
-	touch     func(sessionID string) // async recount (mid-turn updates)
-	touchSync func(sessionID string) // synchronous recount (post-compaction exact count)
+	touch     func(sessionID string)
+	touchSync func(sessionID string)
 
-	// nonBlocking (CTX-8 feature flag) makes the summarize strategy NEVER call the
-	// LLM on the turn loop: it applies a background-PREPARED summary when one is
-	// ready and advances the cutoff, else truncates instantly. false = legacy
-	// behaviour (inline LLM summarize, which can block the loop for seconds).
 	nonBlocking bool
-	// prepare nudges the background summary maintainer to (re)prepare a
-	// high-fidelity summary for the session, carrying the turn's user JWT for
-	// gateway-mode auth. nil = maintainer disabled (legacy path).
 	prepare func(sessionID, jwt string)
 }
 
@@ -57,10 +36,6 @@ func newContextCompactor(store *sessionstore.Bus, apps appmgr.Manager, client ch
 	return &contextCompactor{store: store, apps: apps, llm: client, logger: logger}
 }
 
-// CompactSession implements hooks.SessionCompactor. strategy + keepLast
-// come from the `compact_context` action params ; summary_brain /
-// summary_max_tokens come from the resolved ContextConfig. A no-op
-// (Dropped == 0) returns nil without emitting an event.
 func (c *contextCompactor) CompactSession(ctx context.Context, sessionID, strategy string, keepLast int) error {
 	if c == nil || c.store == nil || sessionID == "" {
 		return nil
@@ -79,9 +54,6 @@ func (c *contextCompactor) CompactSession(ctx context.Context, sessionID, strate
 	}
 	keepRecent = contextcompact.KeepRecentOrDefault(keepRecent)
 
-	// Always protect the last user message: it must never land in the dropped
-	// portion, even when system/tool notifications were injected after it.
-	// Find the last user message and extend keepRecent to include it.
 	for i := len(snap.Messages) - 1; i >= 0; i-- {
 		if snap.Messages[i].Role == "user" {
 			if minKeep := len(snap.Messages) - i; keepRecent < minKeep {
@@ -102,19 +74,8 @@ func (c *contextCompactor) CompactSession(ctx context.Context, sessionID, strate
 		summaryMax = cfg.SummaryMaxTokens
 	}
 
-	// Token budget for the kept conversation : the room left under the window
-	// after the FIXED overhead (system prompt + tool schemas, which compaction
-	// can't touch) plus a small recap margin. This is what lets truncate hold
-	// the window when recent tool results are individually large — a fixed
-	// keep_recent COUNT can't. The breakdown comes from the EXACT background
-	// recount ; 0 (no recount yet) widens the budget harmlessly.
 	msgBudget := contextMessageBudget(cfg, brain, snap)
 
-	// Pre-check the deterministic safe-split on the SAME snapshot the strategy
-	// will use. cut == 0 means there is nothing to compact this pass : we return
-	// WITHOUT emitting any event, so a client never sees a "compacting…" start
-	// with no matching end. The truncate path uses the token-budget split so a
-	// big-tool-result tail is dropped even when the message COUNT is small.
 	var cut int
 	if strategy == contextcompact.StrategySummarize {
 		cut = contextcompact.SafeSplitIndex(snap.Messages, keepRecent)
@@ -130,12 +91,6 @@ func (c *contextCompactor) CompactSession(ctx context.Context, sessionID, strate
 	}
 	tokensBefore := contextcompact.EstimateTokens(snap.Messages)
 
-	// START marker : emitted BEFORE the (possibly slow, LLM-backed) work so
-	// clients can show a "compacting…" indicator. It carries the cutoff +
-	// dropped count known up-front from the split, plus the REQUESTED
-	// strategy (the END marker reports what actually ran, which may differ
-	// when summarize falls back to truncate). Durable → its Seq is strictly
-	// below the END marker's, and the pair survives replay.
 	if _, err = c.store.AppendDurable(ctx, sessionstore.Event{
 		Type:      sessionstore.EventContextCompacting,
 		SessionID: sessionID,
@@ -155,11 +110,6 @@ func (c *contextCompactor) CompactSession(ctx context.Context, sessionID, strate
 	var res contextcompact.Result
 	switch strategy {
 	case contextcompact.StrategySummarize:
-		// Fast path : when the background maintainer already has a high-fidelity
-		// summary ready, apply it instantly (no LLM call this turn). Fidelity is
-		// never traded for it — when nothing is ready we summarise inline below,
-		// not truncate. Summarising blocks only THIS agent's turn goroutine (a
-		// snapshot copy, no shared lock), never the daemon or other sessions.
 		applied := false
 		if c.nonBlocking {
 			if r, ok := c.tryApplyPrepared(snap); ok {
@@ -178,10 +128,6 @@ func (c *contextCompactor) CompactSession(ctx context.Context, sessionID, strate
 		res = contextcompact.TruncateBudget(snap.Messages, keepRecent, msgBudget, snap.Goal)
 	}
 
-	// Abort cancels EVERYTHING, including an in-flight compaction. If the turn ctx
-	// Abort only when the context was cancelled AND no usable result was produced
-	// (res.Dropped == 0). If truncate already ran and produced a valid cutoff,
-	// apply it even if the LLM summarize was cancelled — the result is complete.
 	if ctx.Err() != nil && res.Dropped == 0 {
 		dctx, dcancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer dcancel()
@@ -204,21 +150,11 @@ func (c *contextCompactor) CompactSession(ctx context.Context, sessionID, strate
 		return ctx.Err()
 	}
 
-	// The EXACT new occupancy still lands via the tokenizer worker recompute
-	// (gauge). tokens_freed here is an INFORMATIONAL estimate of the CONVERSATION
-	// dropped (before − the kept view) for the client's "N tokens freed" summary
-	// — never the reported gauge.
 	postMessages := contextcompact.EstimateTokens(res.Messages)
 	tokensFreed := tokensBefore - postMessages
 	if tokensFreed < 0 {
 		tokensFreed = 0
 	}
-	// Full post-compaction occupancy = the FIXED overhead compaction never touches
-	// (system prompt + tool schemas, from the EXACT background recount) + the kept
-	// conversation. This is the number on the SAME scale as the window and the live
-	// gauge, so a client's "ctx used/window" after compaction isn't a misleadingly
-	// tiny messages-only figure. 0 system/tools (no recount yet) degrades it to the
-	// kept-messages estimate, matching the client's fallback.
 	newContextTokens := snap.ContextSystemTokens + snap.ContextToolsTokens + postMessages
 	_, err = c.store.AppendDurable(ctx, sessionstore.Event{
 		Type:      sessionstore.EventContextCompacted,
@@ -246,11 +182,6 @@ func (c *contextCompactor) CompactSession(ctx context.Context, sessionID, strate
 			slog.Int("dropped", res.Dropped),
 			slog.Uint64("cutoff_seq", res.CutoffSeq))
 	}
-	// Auto-promote the summary's KEY FACTS into the lossless, never-compacted
-	// working-memory channel (snap.Facts) so they survive verbatim across every
-	// future compaction — independent of the (faithful but lossy) recap and
-	// without the agent having to record them. Deduped against existing facts.
-	// Best-effort : a fact-promotion failure must never fail the compaction.
 	for _, fact := range contextcompact.ExtractNewKeyFacts(res.Summary, snap.Facts) {
 		if _, ferr := c.store.AppendDurable(ctx, sessionstore.Event{
 			Type:      sessionstore.EventMemoryFactAdded,
@@ -267,19 +198,12 @@ func (c *contextCompactor) CompactSession(ctx context.Context, sessionID, strate
 	if c.touch != nil {
 		c.touch(sessionID)
 	}
-	// CTX-8 : nudge the maintainer to prepare a fresh high-fidelity summary for
-	// the NEXT compaction (off the loop), carrying the turn's JWT for gateway auth.
 	if c.prepare != nil {
 		c.prepare(sessionID, llm.UserJWTFromContext(ctx))
 	}
 	return nil
 }
 
-// tryApplyPrepared is the CTX-8 fast path : when the background maintainer has a
-// high-fidelity summary ready that advances the cutoff AND is orphan-safe against
-// the live messages, apply it instantly (no LLM call this turn). Returns ok=false
-// when nothing usable is ready — the caller then summarises inline, never
-// truncates, so fidelity is preserved regardless of maintainer timing.
 func (c *contextCompactor) tryApplyPrepared(snap sessionstore.SessionSnapshot) (contextcompact.Result, bool) {
 	prep := snap.PreparedSummary
 	if prep == nil {
@@ -305,12 +229,6 @@ func (c *contextCompactor) tryApplyPrepared(snap sessionstore.SessionSnapshot) (
 	}, true
 }
 
-// contextMessageBudget is the token room left for the kept conversation : the
-// usable input budget (window − output_reserved) minus the FIXED overhead
-// (system prompt + tool schemas, from the EXACT recount) and a small recap
-// margin. truncate keeps recent messages within this, so total occupancy stays
-// under the window even when tool results are individually large. Floored at
-// 512 so a turn always keeps a little recent conversation.
 func contextMessageBudget(cfg *schema.ContextConfig, brain schema.Brain, snap sessionstore.SessionSnapshot) int {
 	window, reserved := 0, 0
 	if cfg != nil {
@@ -320,10 +238,6 @@ func contextMessageBudget(cfg *schema.ContextConfig, brain schema.Brain, snap se
 	if window <= 0 {
 		window = contextcompact.ContextWindowFor(brain.Provider, brain.Model)
 	}
-	// EntryModelWindow is the authoritative real window persisted at model-switch
-	// time. Use it when the resolved window is the generic ContextWindowFor
-	// fallback (i.e. model not in hardcoded table) so truncate targets the correct
-	// budget, not an 8k placeholder.
 	if snap.EntryModelWindow > 0 && window == contextcompact.ContextWindowFor(brain.Provider, brain.Model) {
 		window = snap.EntryModelWindow
 	}
@@ -341,12 +255,6 @@ func contextMessageBudget(cfg *schema.ContextConfig, brain schema.Brain, snap se
 	return budget
 }
 
-// resolveContextConfig returns the effective ContextConfig and the brain
-// to use for summarisation (summary_brain when set, else the agent's
-// main brain). Per-agent brain.context overrides app-level runtime.context
-// field-by-field (doc _resolve_context_config). nil cfg = no config.
-// When sessionID is provided, the agent's ModelOverride (from PUT /sessions/{id}/model)
-// is applied so the compactor uses the same model as the conversation.
 func (c *contextCompactor) resolveContextConfig(ctx context.Context, appID, sessionID string) (*schema.ContextConfig, schema.Brain, bool) {
 	var brain schema.Brain
 	if c.apps == nil || appID == "" {
@@ -356,11 +264,6 @@ func (c *contextCompactor) resolveContextConfig(ctx context.Context, appID, sess
 	if err != nil || app == nil || app.Definition == nil {
 		return nil, brain, false
 	}
-	// BYOK routing mirrors the main turn (engine.go) : when the app is NOT in
-	// BYOK mode, the summary call must NOT send the embedded sentinel key — it
-	// goes through the gateway with the user's token (carried on the turn ctx),
-	// exactly like the agent's own LLM calls. Sending BYOK with a placeholder key
-	// is what made summarize silently fall back to truncate in gateway mode.
 	byok := app.Meta != nil && app.Meta.BYOK
 	var appCfg *schema.ContextConfig
 	if app.Definition.Runtime != nil {
@@ -370,12 +273,9 @@ func (c *contextCompactor) resolveContextConfig(ctx context.Context, appID, sess
 		brain = app.Definition.Agents[0].Brain
 	}
 	eff := mergeContextConfig(appCfg, brain.Context)
-	// Summary brain : explicit summary_brain wins, else the main brain.
 	if eff != nil && eff.SummaryBrain != nil {
 		brain = *eff.SummaryBrain
 	}
-	// Apply per-session model override so compactor uses the same model
-	// the conversation is running on (respects PUT /sessions/{id}/model).
 	if sessionID != "" && brain.Model != "" {
 		if state, err := c.store.State(sessionID); err == nil && state != nil {
 			snap := state.Snapshot()
@@ -385,8 +285,6 @@ func (c *contextCompactor) resolveContextConfig(ctx context.Context, appID, sess
 			}
 			if ovr, ok := snap.ModelOverrides[agentID]; ok && ovr != "" {
 				brain.Model = ovr
-				// Clear the YAML's context.max_tokens so contextMessageBudget
-				// falls through to ContextWindowFor(ovr) — the real model's window.
 				if eff != nil {
 					eff.MaxTokens = 0
 				}
@@ -396,8 +294,6 @@ func (c *contextCompactor) resolveContextConfig(ctx context.Context, appID, sess
 	return eff, brain, byok
 }
 
-// mergeContextConfig overlays the per-agent config onto the app-level
-// one (agent non-zero fields win). Either may be nil.
 func mergeContextConfig(app, agent *schema.ContextConfig) *schema.ContextConfig {
 	if app == nil && agent == nil {
 		return nil
@@ -432,23 +328,7 @@ func mergeContextConfig(app, agent *schema.ContextConfig) *schema.ContextConfig 
 	return &out
 }
 
-// buildSummarizerPrompt drives the summary brain. The goal is a dense,
-// resumable HANDOFF — not a vague paragraph — so the agent can continue as if
-// the compaction never happened. The sections mirror what an agent needs to
-// pick the task back up: mission, plan, progress, files, open items, pitfalls.
-// "MERGE not append" keeps the structure stable across successive compactions
-// (the prior recap is fed back in as leading context).
-//
-// The word budget is BAKED INTO the prompt (derived from maxTokens) so the
-// model self-regulates and emits a COMPLETE handoff that fits — instead of
-// running freely and getting cut off mid-sentence by the MaxTokens cap, which
-// would eat the LAST sections (OPEN ITEMS / PITFALLS / next step), the very
-// ones the agent needs to resume. MaxTokens stays as a hard safety net ABOVE
-// this stated budget. The budget also keeps the single cumulative summary
-// bounded across successive compactions (it is re-summarised to the same size).
 func buildSummarizerPrompt(maxTokens int) string {
-	// ~0.7 words per token, floored, so the stated word budget sits comfortably
-	// under the token cap and the cap never truncates a well-behaved response.
 	words := maxTokens * 7 / 10
 	if words < 80 {
 		words = 80
@@ -473,28 +353,15 @@ LENGTH BUDGET: aim to keep the handoff under about %d words so it is COMPLETE an
 Preserve concrete specifics: names, paths, identifiers, numbers, exact user requirements and wording. Invent nothing that is not in the conversation. If the input begins with a prior recap, MERGE it with the newer messages into one up-to-date handoff — do not just append, and carry EVERY prior KEY FACT and open item forward UNCHANGED (re-summarising must never lose a fact an earlier pass kept). No preamble, no sign-off — output only the sections.`, words)
 }
 
-// llmSummarizer calls the summary brain to recap a dropped slice. It
-// flattens the slice to a plain-text transcript (no tool structure sent
-// to the model — avoids tool-pairing errors) and asks for a terse recap.
-// Any failure returns an error so the core falls back to truncate.
 type llmSummarizer struct {
 	client    chatLLM
 	brain     schema.Brain
 	sessionID string
-	// byok mirrors the app's BYOK routing : true → send the embedded key ;
-	// false (gateway mode) → send no key so the call uses the gateway with the
-	// user's token, exactly like the agent's own LLM calls.
 	byok bool
-	// userJWT is the gateway bearer (gateway mode) carried from the turn ctx ;
-	// without it the gateway call has no auth and bifrost mis-routes / rejects.
 	userJWT string
-	// logger surfaces WHY a summarize degraded to truncate. contextcompact
-	// swallows the error (it falls back so compaction always progresses), so
-	// without this a silent degradation is invisible in production.
 	logger *slog.Logger
 }
 
-// summarizeFailed logs the cause of a summarize→truncate degradation. Best-effort.
 func (s *llmSummarizer) summarizeFailed(err error) {
 	if s.logger == nil {
 		return
@@ -555,13 +422,7 @@ func (s *llmSummarizer) Summarize(ctx context.Context, dropped []sessionstore.Me
 	return resp.Content, nil
 }
 
-// renderTranscript flattens messages for the summary brain (CTX-8 Phase 3).
-// Beyond plain text it describes the actual WORK done — which tools were called
-// (name + arg summary) and what they returned (named via the call id, with any
-// error) — so the handoff captures decisions and outcomes, not just chatter.
-// Big tool outputs are clipped so the summariser input stays bounded.
 func renderTranscript(msgs []sessionstore.Message) string {
-	// call id → tool name, so a result can name the tool that produced it.
 	names := map[string]string{}
 	for i := range msgs {
 		for _, p := range msgs[i].Parts {
@@ -691,8 +552,6 @@ func plainText(m sessionstore.Message) string {
 	return strings.Join(parts, " ")
 }
 
-// embeddedBrainAuth pulls (apiKey, baseURL) from a brain's declarative
-// config — same shape extractEmbeddedAuth uses for agent brains.
 func embeddedBrainAuth(b schema.Brain) (apiKey, baseURL string) {
 	if s, ok := b.Config["api_key"].(string); ok && s != "" {
 		apiKey = s

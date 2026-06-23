@@ -97,6 +97,7 @@ func (m *gormManager) Install(ctx context.Context, source, userJWT string) (*App
 	row := models.App{
 		AppID:       appID,
 		Name:        firstNonEmpty(result.Definition.App.Name, appID),
+		ShortName:   result.Definition.App.ShortName,
 		Version:     result.Definition.App.Version,
 		Description: result.Definition.App.Description,
 		Category:    string(result.Definition.App.Category),
@@ -110,7 +111,7 @@ func (m *gormManager) Install(ctx context.Context, source, userJWT string) (*App
 	if err := m.cfg.DB.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "app_id"}},
 		DoUpdates: clause.AssignmentColumns([]string{
-			"name", "version", "description", "category", "author", "icon", "color",
+			"name", "short_name", "version", "description", "category", "author", "icon", "color",
 			"enabled", "updated_at",
 		}),
 	}).Create(&row).Error; err != nil {

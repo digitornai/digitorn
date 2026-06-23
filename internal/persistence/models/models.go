@@ -24,8 +24,9 @@ type App struct {
 	// bundle on every /api/apps call).
 	Category string `gorm:"size:64;index"`
 	Author   string `gorm:"size:128"`
-	Icon     string `gorm:"size:256"` // file path (icon.png) OR text/emoji (🧱)
-	Color    string `gorm:"size:16"`  // hex color, e.g. #14B8A6 — used when Icon is text/emoji
+	ShortName string `gorm:"size:64"`  // optional compact label (e.g. "Claude Pro")
+	Icon      string `gorm:"size:256"` // file path (icon.png) OR text/emoji (🧱)
+	Color     string `gorm:"size:16"`  // hex color, e.g. #14B8A6 — used when Icon is text/emoji
 
 	Enabled bool `gorm:"not null;default:true"`
 

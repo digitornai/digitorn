@@ -10,12 +10,6 @@ import (
 	"github.com/mbathepaul/digitorn/internal/modules/bash/goshell"
 )
 
-// backgroundAmpHint rejects a command whose last statement is a trailing `&`. A
-// trailing `&` detaches the process from the daemon as an UNTRACKED orphan: no
-// task_id, no captured logs, no signal when it dies, and it keeps holding its
-// port — so a server "started" this way silently leaks and the agent is never
-// told it crashed. The managed path (background_run) is the correct channel and
-// gives all of that back. Returns "" when the command is fine.
 func backgroundAmpHint(command string) string {
 	if !goshell.TrailingBackground(command) {
 		return ""
@@ -23,18 +17,10 @@ func backgroundAmpHint(command string) string {
 	return "don't background with a trailing `&` — it detaches the process as an untracked orphan: no task_id, no captured logs, no notification when it dies, and it keeps holding its port (so the next launch hits EADDRINUSE). To run a server or any long-living command in the background, call `background_run` with the command WITHOUT the `&`: you get a task_id, a start-up check that surfaces an immediate crash, captured output, and a notification when it finishes or fails."
 }
 
-// foregroundServerPatterns match commands that NEVER return on their own — dev
-// servers, preview servers, watchers. Run in the foreground they pin the turn
-// until the timeout (default 900s) and then report a bogus failure when the kill
-// finally lands; the cardinal rule is the loop is never blocked. They are
-// matched on a QUOTE-MASKED copy (so `echo "npm run dev"` / `bash -c "vite"` are
-// not flagged) and are deliberately conservative: nothing here matches a command
-// that terminates on its own (build / test / install / lint / tsc), so a false
-// positive never breaks a normal foreground step. `vite build` etc. stay allowed.
 var foregroundServerPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\b(npm|pnpm|yarn|bun)\s+(run\s+)?(dev|start|serve|preview|watch)\b`),
 	regexp.MustCompile(`(?i)\bvite\s+(dev|serve|preview)\b`),
-	regexp.MustCompile(`(?i)\bvite\s*($|[;&|])`), // bare `vite` / `npx vite` (defaults to the dev server)
+	regexp.MustCompile(`(?i)\bvite\s*($|[;&|])`),
 	regexp.MustCompile(`(?i)\b(next|nuxt|remix)\s+(dev|start)\b`),
 	regexp.MustCompile(`(?i)\bng\s+serve\b`),
 	regexp.MustCompile(`(?i)\b(vue-cli-service|react-scripts)\s+(serve|start)\b`),
@@ -50,12 +36,6 @@ var foregroundServerPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\btail\s+-f\b`),
 }
 
-// foregroundServerHint rejects a long-running server / watcher run in the
-// FOREGROUND (the caller skips this check when the dispatch is already a
-// background_run). It returns "" for anything that isn't an unambiguous server.
-// The message routes the agent to background_run AND states the fact that
-// settles most of these calls: previewing the workspace needs no server at all —
-// the build output is served automatically.
 func foregroundServerHint(command string) string {
 	masked := maskQuoted(command)
 	for _, re := range foregroundServerPatterns {
@@ -66,14 +46,6 @@ func foregroundServerHint(command string) string {
 	return ""
 }
 
-// dosCommandEquivalents maps Windows cmd.exe commands that DON'T exist on a
-// bash/sh shell to their bash equivalent. The model, seeing a Windows host,
-// sometimes reaches for cmd syntax (`dir`, `copy`, `del`) and gets a cryptic
-// "executable file not found" (exit 127) it then loops on. `dir` is included
-// even though some Linux coreutils ship it — the Windows Git-Bash this targets
-// has no `dir`, and a `dir` with cmd switches (`/B /S`) fails everywhere anyway.
-// `type` is deliberately ABSENT: it is a real bash builtin (a legitimate call),
-// so flagging it would block valid use.
 var dosCommandEquivalents = map[string]string{
 	"dir":     "ls (use `ls -R` to recurse, or `find . -type f` for a flat list)",
 	"cls":     "clear",
@@ -87,20 +59,10 @@ var dosCommandEquivalents = map[string]string{
 	"findstr": "grep",
 }
 
-// dosStatementSplit splits a command line into its top-level statements so the
-// command WORD of each is checked (catches `cd app && dir /B /S`, where the bare
-// command word is `cd`).
 var dosStatementSplit = regexp.MustCompile(`[;&|]+`)
 
-// dosCmdSwitch matches a cmd.exe-style single-letter switch token (`/B`, `/S`,
-// `/Q`). Bash never uses these (flags are `-x`), and a one-letter `/X` is not a
-// real path, so it is an unambiguous "the model thinks this is cmd.exe" signal.
 var dosCmdSwitch = regexp.MustCompile(`(^|\s)/[A-Za-z](\s|$)`)
 
-// dosHint returns a clear, actionable message when a command uses Windows
-// cmd.exe syntax on a bash/sh shell (the caller skips it for a PowerShell
-// target, which aliases dir/copy/del and has its own bashism translation).
-// Runs on a quote-masked copy so a quoted literal (`echo "dir /B"`) is ignored.
 func dosHint(command string) string {
 	masked := maskQuoted(command)
 	for _, seg := range dosStatementSplit.Split(masked, -1) {
@@ -118,34 +80,16 @@ func dosHint(command string) string {
 	return ""
 }
 
-// hardDeniedFallback is the regex-only last-resort check, used when the AST
-// parser cannot understand the input. The AST checker is always tried first
-// and is authoritative when it succeeds — it has accurate command/arg
-// boundaries, so it cannot be fooled by quoted flags or by `echo`-of-rm-
-// looking text. The regex only fires for syntactically degenerate inputs that
-// the parser rejects (e.g. a fork bomb whose `:(){…}` is not parseable as a
-// CallExpr).
 var hardDeniedFallback = []*regexp.Regexp{
-	regexp.MustCompile(`:\s*\(\s*\)\s*\{`), // fork bomb: function ":" with `:|:&` body
+	regexp.MustCompile(`:\s*\(\s*\)\s*\{`),
 	regexp.MustCompile(`(?i)>\s*/dev/(sd|hd|nvme|disk|vd|xvd|mmcblk|loop|mem|kmem|ram|fd)`),
 }
 
-// dangerousDevicePrefixes are device-name prefixes whose underlying block /
-// kernel devices a command MUST NOT overwrite. Union of common storage names
-// (sd, hd, nvme), macOS disks (disk), virtio-blk on KVM (vd), Xen / AWS EC2
-// (xvd), eMMC / SD cards on ARM boards (mmcblk), loop devices (loop), kernel
-// memory and main memory (mem, kmem, ram), and floppies (fd).
 var dangerousDevicePrefixes = []string{
 	"sd", "hd", "nvme", "disk", "vd", "xvd", "mmcblk", "loop",
 	"mem", "kmem", "ram", "fd",
 }
 
-// checkCommand is an advisory last line of defense. The real barrier is
-// workspace confinement plus the env allowlist; this layer refuses a small
-// set of unambiguously destructive shapes. The AST-based checker understands
-// shell quoting, long flags and command vs. literal boundaries — so it
-// cannot be fooled by `rm "-rf" /` (quoted flag) or trigger a false positive
-// on `echo "rm -rf /"` (echo, not rm).
 func checkCommand(command string) error {
 	if strings.TrimSpace(command) == "" {
 		return nil
@@ -154,7 +98,6 @@ func checkCommand(command string) error {
 	if perr == nil {
 		return walkCheckDestructive(file)
 	}
-	// AST parse failed → fall back to regex on the raw text.
 	for _, re := range hardDeniedFallback {
 		if re.MatchString(command) {
 			return fmt.Errorf("command refused by safety guard (matched a destructive pattern)")
@@ -163,14 +106,8 @@ func checkCommand(command string) error {
 	return nil
 }
 
-// walkCheckDestructive walks every CallExpr in the file (so nested commands
-// inside subshells, pipes, &&-chains and command substitutions are all
-// inspected), and refuses on the first destructive shape it sees.
 func walkCheckDestructive(file *syntax.File) error {
 	var refusal error
-	// Always check fork-bomb shape on the file's first statement structure —
-	// the parser turns `:(){:|:&};:` into a function declaration + recursion,
-	// which the per-call check below can't see.
 	if forkBombShape(file) {
 		return fmt.Errorf("command refused by safety guard (fork bomb)")
 	}
@@ -197,9 +134,6 @@ func walkCheckDestructive(file *syntax.File) error {
 	return refusal
 }
 
-// checkRedirs refuses output redirections that overwrite or append to a
-// dangerous device (`> /dev/sda`, `>> /dev/nvme0`). The target is taken
-// dequoted so `> "/dev/sda"` is caught too.
 func checkRedirs(redirs []*syntax.Redirect) error {
 	for _, r := range redirs {
 		if r == nil || r.Word == nil {
@@ -224,10 +158,6 @@ func checkRedirs(redirs []*syntax.Redirect) error {
 	return nil
 }
 
-// forkBombShape spots the classic `:(){ :|:& };:` pattern: a function whose
-// body calls itself recursively in a backgrounded pipe. Detection is structural
-// (function name == ":" or any single char, body contains a call to itself
-// piped and backgrounded) so quoting tricks cannot hide it.
 func forkBombShape(file *syntax.File) bool {
 	for _, stmt := range file.Stmts {
 		fn, ok := stmt.Cmd.(*syntax.FuncDecl)
@@ -235,10 +165,9 @@ func forkBombShape(file *syntax.File) bool {
 			continue
 		}
 		name := fn.Name.Value
-		if len(name) > 2 { // genuine fns have names; fork bombs use cryptic single chars
+		if len(name) > 2 {
 			continue
 		}
-		// Body containing both `|` (pipe) and `&` (background) calling the fn.
 		var body strings.Builder
 		_ = syntax.NewPrinter().Print(&body, fn.Body)
 		text := body.String()
@@ -262,15 +191,11 @@ func checkCallExpr(call *syntax.CallExpr) error {
 	case cmd == "dd":
 		return checkDdArgs(args)
 	case strings.HasPrefix(cmd, "mkfs"):
-		// `mkfs`, `mkfs.ext4`, `mkfs.xfs`, … all format a device.
 		return fmt.Errorf("command refused by safety guard (mkfs is destructive)")
 	}
 	return nil
 }
 
-// commandBase returns the basename of an invocation path, so `/bin/rm` and
-// `rm` and `\rm` (the backslash form used to bypass aliases) all resolve to
-// `rm`. Bash also accepts a leading `\` so we strip it before splitting.
 func commandBase(p string) string {
 	p = strings.TrimPrefix(p, `\`)
 	if i := strings.LastIndexAny(p, `/\`); i >= 0 {
@@ -279,11 +204,6 @@ func commandBase(p string) string {
 	return p
 }
 
-// dequote returns the string value of a parsed word, with single / double
-// quotes removed exactly the way bash treats them at expansion: `"-rf"` and
-// `'-rf'` both dequote to `-rf`. Complex words (parameter expansion, command
-// substitution, globs) fall back to the printer's verbatim text so the check
-// still has SOMETHING to match against.
 func dequote(w *syntax.Word) string {
 	var b strings.Builder
 	complex := false
@@ -313,10 +233,6 @@ func dequote(w *syntax.Word) string {
 	return b.String()
 }
 
-// checkRmArgs refuses `rm` invocations that combine "-r" (any spelling),
-// "-f" (any spelling), AND a root-targeting path. All three must be present —
-// `rm -rf ./build` keeps working, `rm -r ./testdata` keeps working, only the
-// root-deletion shape is refused.
 func checkRmArgs(args []string) error {
 	hasRecurse, hasForce, dangerousPath := false, false, false
 	for _, a := range args {
@@ -348,10 +264,6 @@ func checkRmArgs(args []string) error {
 	return nil
 }
 
-// isRootishPath identifies POSIX root path arguments (`/`, `/*`, `/.`, `/.*`)
-// and the bare-slash forms bash globbing expands into. NOT triggered by
-// `/etc/passwd` or any other deeper path: the user explicitly wants to be
-// able to delete inside the filesystem.
 func isRootishPath(a string) bool {
 	switch a {
 	case "/", "/*", "/.", "/.*", "//", "/**":
@@ -360,10 +272,6 @@ func isRootishPath(a string) bool {
 	return false
 }
 
-// checkDdArgs refuses dd writes to any block/kernel device whose prefix is
-// in dangerousDevicePrefixes. Allowed: writes to plain files (e.g. an ISO
-// build), and writes to harmless special files like `/dev/null` (which
-// matches none of the dangerous prefixes).
 func checkDdArgs(args []string) error {
 	for _, a := range args {
 		const ofPrefix = "of="
@@ -385,16 +293,7 @@ func checkDdArgs(args []string) error {
 	return nil
 }
 
-// ── PTY auto-detection ──────────────────────────────────────────────────────
 
-// needsPTY reports whether command requires a pseudo-terminal to work correctly.
-// These are commands where isatty() must return true — docker -it, ssh, and
-// interactive auth CLIs that open a browser or prompt. The check is deliberately
-// conservative: only unambiguous cases are auto-promoted so that a simple
-// `python script.py` never accidentally opens an interactive REPL.
-//
-// Works identically for bash and PowerShell command strings since the CLIs
-// (docker, ssh, winget, az, gh, gcloud, aws) use the same flags on all OS.
 func needsPTY(command string) bool {
 	masked := maskQuoted(command)
 	for _, re := range ptyAutoPatterns {
@@ -406,38 +305,25 @@ func needsPTY(command string) bool {
 }
 
 var ptyAutoPatterns = []*regexp.Regexp{
-	// docker run / docker exec with -t (tty) flag — alone, combined (-it/-ti), or --tty.
-	// We require the docker subcommand to come first so `echo "docker run -it"` is ignored.
 	regexp.MustCompile(`(?i)\bdocker\s+(?:run|exec)\b[^|&;]*(?:\s-[a-zA-Z]*t|-{1,2}tty)\b`),
 
-	// ssh to a remote host — needs PTY for interactive shell or -t flag forwarding.
-	// Matches any `ssh` invocation with at least one argument.
-	// (ssh -N port-forwarding with PTY is harmless: no interactive prompt, no hang.)
 	regexp.MustCompile(`(?i)(?:^|[|;&]\s*)\bssh\b\s+\S`),
 
-	// Windows: winget interactive commands (install/upgrade prompt for confirmation).
 	regexp.MustCompile(`(?i)\bwinget\s+(?:install|upgrade|import)\b`),
 
-	// Cloud / auth CLIs that open a browser or interactive prompt.
-	// az login, gcloud auth login, gh auth login, aws configure, aws sso login.
 	regexp.MustCompile(`(?i)\baz\s+login\b`),
 	regexp.MustCompile(`(?i)\bgcloud\s+auth\s+login\b`),
 	regexp.MustCompile(`(?i)\bgh\s+auth\s+login\b`),
 	regexp.MustCompile(`(?i)\baws\s+(?:configure|sso\s+login)\b`),
 
-	// sudo interactive shell switching — needs PTY for the target shell.
 	regexp.MustCompile(`(?i)\bsudo\s+(?:su\b|-[isSu]\b)`),
 }
 
-// bashismEntry is one pattern + its specific PowerShell fix.
 type bashismEntry struct {
 	re  *regexp.Regexp
 	msg string
 }
 
-// bashismChecks matches UNAMBIGUOUS bash syntax that won't run in PowerShell,
-// with a precise, actionable fix for each pattern. Checked AFTER psEnv translation
-// so a translated `export`/inline-env no longer trips them.
 var bashismChecks = []bashismEntry{
 	{
 		re: regexp.MustCompile(`(^|[;&|])\s*source\s`),
@@ -474,13 +360,6 @@ var bashismChecks = []bashismEntry{
 	},
 }
 
-// bashismHint returns a clear, actionable PowerShell-specific fix when the
-// command uses bash-only syntax. Each pattern gives its own precise guidance
-// so the agent can correct the command immediately. Returns "" when the command
-// is fine for PowerShell.
-//
-// Runs on a QUOTE-MASKED copy so bash syntax inside quoted strings
-// (e.g. `bash -c "for x; do …"`) is not flagged.
 func bashismHint(command string) string {
 	masked := maskQuoted(command)
 	for _, e := range bashismChecks {
@@ -493,8 +372,6 @@ func bashismHint(command string) string {
 	return ""
 }
 
-// maskQuoted blanks the contents of single/double-quoted spans (keeping the
-// quote chars and overall length) so pattern matching ignores quoted text.
 func maskQuoted(s string) string {
 	b := []byte(s)
 	var quote byte

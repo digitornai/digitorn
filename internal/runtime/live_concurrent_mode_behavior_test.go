@@ -74,6 +74,10 @@ func (m *multiSession) AppendDurable(_ context.Context, ev sessionstore.Event) (
 	return m.seq, nil
 }
 
+func (m *multiSession) Append(_ context.Context, ev sessionstore.Event) (uint64, error) {
+	return m.AppendDurable(context.Background(), ev)
+}
+
 func (m *multiSession) eventsFor(sid string) []sessionstore.Event {
 	m.mu.Lock()
 	defer m.mu.Unlock()

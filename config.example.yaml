@@ -63,7 +63,7 @@ runtime:
   # --- Multi-agent parallelism ---
   # 0 = unbounded: every sub-agent calls the LLM concurrently.
   # Set a positive value only to cap provider costs / rate-limit exposure.
-  max_concurrent_llm_calls: 0
+  max_concurrent_llm_calls: 128
 
   # Delegation tree caps (anti fork-bomb).
   max_agent_depth: 8

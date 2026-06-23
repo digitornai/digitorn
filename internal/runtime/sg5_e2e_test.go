@@ -49,6 +49,9 @@ func (r *realBusSessions) State(sid string) (*sessionstore.SessionState, error) 
 func (r *realBusSessions) AppendDurable(ctx context.Context, ev sessionstore.Event) (uint64, error) {
 	return r.bus.AppendDurable(ctx, ev)
 }
+func (r *realBusSessions) Append(ctx context.Context, ev sessionstore.Event) (uint64, error) {
+	return r.bus.Append(ctx, ev)
+}
 
 // buildE2EBus spins up an in-memory sessionstore.Bus suitable for
 // E2E runtime tests. Cleaned up by t.Cleanup.

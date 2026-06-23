@@ -65,6 +65,10 @@ func (p *projectingSessions) AppendDurable(_ context.Context, ev sessionstore.Ev
 	return p.appendSeq, nil
 }
 
+func (p *projectingSessions) Append(ctx context.Context, ev sessionstore.Event) (uint64, error) {
+	return p.AppendDurable(ctx, ev)
+}
+
 func (p *projectingSessions) count(t sessionstore.EventType) int {
 	p.mu.Lock()
 	defer p.mu.Unlock()

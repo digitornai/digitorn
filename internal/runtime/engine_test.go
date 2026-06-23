@@ -71,6 +71,10 @@ func (s *stubSessions) AppendDurable(_ context.Context, ev sessionstore.Event) (
 	return s.appendSeq, nil
 }
 
+func (s *stubSessions) Append(ctx context.Context, ev sessionstore.Event) (uint64, error) {
+	return s.AppendDurable(ctx, ev)
+}
+
 // findAppend returns a COPY of the first event of the given type, or nil
 // if none was appended. Returns a copy (not a pointer into the slice) so
 // the caller can read it without holding the lock while turns keep

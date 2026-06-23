@@ -20,6 +20,7 @@ import (
 type App struct {
 	AppID       string `json:"app_id"`
 	Name        string `json:"name"`
+	ShortName   string `json:"short_name,omitempty"`
 	Version     string `json:"version"`
 	Description string `json:"description,omitempty"`
 	Category    string `json:"category,omitempty"`
@@ -217,6 +218,7 @@ func metaFromRow(r *models.App) *App {
 	return &App{
 		AppID:       r.AppID,
 		Name:        r.Name,
+		ShortName:   r.ShortName,
 		Version:     r.Version,
 		Description: r.Description,
 		Category:    r.Category,

@@ -1,10 +1,3 @@
-// Package bash exposes a single command-execution tool. Every command runs as
-// its own one-shot process from the workspace root (no persistent REPL), so a
-// malformed command can't poison the next. On hosts without a real bash the
-// built-in mvdan/sh pure-Go interpreter is used — full POSIX + bash-compatible,
-// spawns real OS processes, identical on Windows/Linux/macOS, never PowerShell.
-// Output is bounded with a truncation marker, a timeout or cancel reaps the
-// whole process tree, and each result is enriched with cwd/duration/files-changed/git.
 package bash
 
 import (
@@ -35,10 +28,6 @@ type Config struct {
 	IdleSecs    int      `json:"idle_seconds" yaml:"idle_seconds"`
 	EnvAllow    []string `json:"env_allow" yaml:"env_allow"`
 
-	// PromptWaitSecs is the number of seconds to wait for output before assuming
-	// the command is waiting for interactive input (e.g. sudo password prompt).
-	// When triggered, the agent receives a WaitingForInput error and can retry
-	// with the `input` parameter. Set to 0 to disable (default: 15 seconds).
 	PromptWaitSecs int `json:"prompt_wait_secs" yaml:"prompt_wait_secs"`
 }
 
@@ -48,18 +37,10 @@ type Module struct {
 	kind string
 	path string
 
-	// useGoShell is set only when the user explicitly opts in via shell:"goshell".
-	// For all other no-bash cases, useMvdanSh is set instead.
 	useGoShell bool
 
-	// useMvdanSh is set when no real bash is available on the host (Windows by
-	// default, or any OS where bash is not on PATH). Commands then run through
-	// mvdan/sh: a full POSIX+bash interpreter that spawns real OS processes,
-	// works identically on every platform, and has none of the MSYS footguns.
 	useMvdanSh bool
 
-	// useWSL is set on Windows when WSL is available as the bash backend.
-	// path holds wsl.exe; commands are wrapped as: wsl.exe -e bash -c "...".
 	useWSL bool
 
 	mu     sync.Mutex
@@ -92,11 +73,6 @@ func New() *Module {
 }
 
 func (m *Module) registerRunTool() {
-	// Branch the tool description on the actual backend so the LLM is told the
-	// truth about its shell — bash idioms documented for a POSIX backend, native
-	// PowerShell idioms documented when PowerShell is live. Without this split
-	// the model writes bash-only syntax on Windows, trips the bashismHint, and
-	// loops re-writing the same command.
 	tail := runDescTail
 	prompt := runToolPrompt
 	if m.kind == "powershell" || m.kind == "pwsh" {
@@ -192,12 +168,6 @@ var runToolPrompt = "GOLDEN RULE: use dedicated tools for file operations — `r
 	"• Never exfiltrate secrets or pipe credentials to the network\n" +
 	"• Prefer explicit paths over relying on cwd drift between calls"
 
-// runToolPromptPowerShell is the Windows / PowerShell counterpart to
-// runToolPrompt. It states the truth — the shell IS PowerShell — and pushes
-// the agent toward native cmdlets and pipeline objects. The translation layer
-// (psChain/psEnv/psNulSink/warmupCmd) silently accepts the common bash idioms
-// the model knows from training, but the agent gets a real productivity bump
-// the moment it speaks PowerShell directly.
 var runToolPromptPowerShell = "GOLDEN RULE: use dedicated tools for file operations — `read` instead of cat/Get-Content, " +
 	"`grep` instead of grep/Select-String, `glob` instead of Get-ChildItem -Recurse, `edit`/`write` instead of Set-Content/Add-Content. " +
 	"They render better, integrate with the UI, and never corrupt files. " +
@@ -301,9 +271,6 @@ var runToolParams = []tool.ParamSpec{
 
 func (m *Module) HasShell() bool { return m.path != "" }
 
-// Kind returns the resolved shell kind ("bash" / "sh" / "powershell" / "pwsh"
-// / ""). Used by integration tests to pick a shell-appropriate command for
-// streaming proofs.
 func (m *Module) Kind() string { return m.kind }
 
 func (m *Module) Init(ctx context.Context, cfg map[string]any) error {
@@ -312,7 +279,7 @@ func (m *Module) Init(ctx context.Context, cfg map[string]any) error {
 		_ = json.Unmarshal(raw, &m.cfg)
 	}
 	if m.cfg.MaxOutput <= 0 {
-		m.cfg.MaxOutput = 100 << 10 // 100 KB, matches Claude Code/opencode
+		m.cfg.MaxOutput = 100 << 10
 	}
 	if m.cfg.TimeoutSecs <= 0 {
 		m.cfg.TimeoutSecs = 900
@@ -321,7 +288,7 @@ func (m *Module) Init(ctx context.Context, cfg map[string]any) error {
 		m.cfg.IdleSecs = 900
 	}
 	if m.cfg.PromptWaitSecs <= 0 {
-		m.cfg.PromptWaitSecs = 15 // 15 seconds default
+		m.cfg.PromptWaitSecs = 15
 	}
 
 	prefer := m.cfg.Shell
@@ -329,50 +296,37 @@ func (m *Module) Init(ctx context.Context, cfg map[string]any) error {
 		prefer = env
 	}
 
-	// Opt-in explicite goshell
 	if strings.EqualFold(prefer, "goshell") || strings.EqualFold(prefer, "go") {
 		m.useGoShell = true
 		m.finalizeInit()
 		return nil
 	}
 
-	// Opt-in explicite mvdan/sh
 	if strings.EqualFold(prefer, "mvdan") || strings.EqualFold(prefer, "mvdan/sh") {
 		m.useMvdanSh = true
 		m.finalizeInit()
 		return nil
 	}
 
-	// Opt-in explicite WSL (Windows Subsystem for Linux).
-	// Set shell:"wsl" or shell:"wsl-bash" in the module config to route commands
-	// through WSL's bash instead of PowerShell. PowerShell remains the default.
 	if strings.EqualFold(prefer, "wsl") || strings.EqualFold(prefer, "wsl-bash") {
 		if wslExe := detectWSLExe(); wslExe != "" {
-			m.kind = "bash" // bash semantics, no PS translation
+			m.kind = "bash"
 			m.path = wslExe
 			m.useWSL = true
 			m.finalizeInit()
 			return nil
 		}
-		// WSL not found — fall through to PowerShell
 	}
 
-	// Sur Windows sans préférence explicite → PowerShell directement.
-	// On ne cherche PAS Git Bash : son layer MSYS réécrit silencieusement
-	// les arguments natifs (taskkill /F → F:/, /c/Users → C:\Users) et
-	// n'est pas garanti présent. PowerShell est toujours là sur Windows 10+
-	// et l'agent a déjà toute la logique de traduction (psChain/psEnv/psNulSink).
 	if goruntime.GOOS == "windows" && prefer == "" {
 		kind, path, err := detectShell("powershell")
 		if err == nil {
 			m.kind, m.path = kind, path
 		} else {
-			// pwsh (PowerShell Core) en fallback
 			kind, path, err = detectShell("pwsh")
 			if err == nil {
 				m.kind, m.path = kind, path
 			} else {
-				// Dernier recours : mvdan/sh
 				m.useMvdanSh = true
 			}
 		}
@@ -380,11 +334,9 @@ func (m *Module) Init(ctx context.Context, cfg map[string]any) error {
 		return nil
 	}
 
-	// Linux / macOS : bash → sh → mvdan/sh
 	kind, path, err := detectShell(prefer)
 	if err == nil {
 		m.kind, m.path = kind, path
-		// WSL fallback on Windows: detectShell may return wsl.exe as the bash path.
 		if goruntime.GOOS == "windows" && m.kind == "bash" && strings.HasSuffix(strings.ToLower(path), "wsl.exe") {
 			m.useWSL = true
 		}
@@ -471,9 +423,6 @@ type runResult struct {
 	TimedOut  bool   `json:"timed_out,omitempty"`
 	Cancelled bool   `json:"cancelled,omitempty"`
 
-	// WaitingForInput indicates the command produced no output for a configurable
-	// period and is likely waiting for interactive input (e.g. sudo password prompt).
-	// The agent should retry with the `input` parameter to provide the answer.
 	WaitingForInput bool `json:"waiting_for_input,omitempty"`
 
 	DurationMs   int64    `json:"duration_ms,omitempty"`
@@ -482,8 +431,6 @@ type runResult struct {
 	Git          *gitInfo `json:"git,omitempty"`
 }
 
-// DeclaredEvents returns the list of event topics this module may emit.
-// Implements domainmodule.EventEmitter.
 func (m *Module) DeclaredEvents() []map[string]string {
 	return []map[string]string{
 		{"topic": "bash.command.executed", "type": "command.executed"},
@@ -512,24 +459,16 @@ func (m *Module) run(ctx context.Context, raw json.RawMessage) (tool.Result, err
 			return errResult(errors.New(msg)), nil
 		}
 	}
-	// DOS hint applies to mvdan/sh, goshell, and any non-powershell backend.
 	if m.useGoShell || m.useMvdanSh || m.kind != "powershell" {
 		if msg := dosHint(command); msg != "" {
 			return errResult(errors.New(msg)), nil
 		}
 	}
 
-	// PTY auto-detection: promote to PTY automatically when the command pattern
-	// unambiguously requires a real terminal (docker -it, ssh, winget install,
-	// az/gcloud/gh/aws auth, sudo su). Works on both bash and PowerShell.
 	if !p.PTY && p.Input == "" && m.path != "" {
 		p.PTY = flexjson.Bool(needsPTY(command))
 	}
 
-	// PTY path: spawn inside a pseudo-terminal for programs that require isatty().
-	// Bypasses session persistence — PTY processes are inherently one-shot.
-	// Ignored when no native shell is available (mvdan/sh can't use a PTY) or
-	// when input is supplied (PTY + pre-fed stdin is complex; use input= instead).
 	if p.PTY && m.path != "" && p.Input == "" {
 		root := m.cfg.Workdir
 		if pp, ok := workdir.PathPolicyFromContext(ctx); ok && pp.HasWorkdir() {
@@ -549,7 +488,6 @@ func (m *Module) run(ctx context.Context, raw json.RawMessage) (tool.Result, err
 		return m.result(command, res, nil, timeout), nil
 	}
 
-	// mvdan/sh path — default on Windows and any host without bash.
 	if m.useMvdanSh {
 		root := m.cfg.Workdir
 		if pp, ok := workdir.PathPolicyFromContext(ctx); ok && pp.HasWorkdir() {
@@ -569,7 +507,6 @@ func (m *Module) run(ctx context.Context, raw json.RawMessage) (tool.Result, err
 		return m.result(command, res, nil, timeout), nil
 	}
 
-	// Legacy goshell path — explicit opt-in only.
 	if m.useGoShell {
 		root := m.cfg.Workdir
 		if pp, ok := workdir.PathPolicyFromContext(ctx); ok && pp.HasWorkdir() {
@@ -589,8 +526,6 @@ func (m *Module) run(ctx context.Context, raw json.RawMessage) (tool.Result, err
 		return m.result(command, res, nil, timeout), nil
 	}
 
-	// Native bash/powershell subprocess path — persistent sessions so cd /
-	// source / export / venv persist across calls, exactly like a real terminal.
 	if m.path == "" {
 		return errResult(errors.New("no shell available: bash or sh must be on PATH")), nil
 	}
@@ -599,7 +534,6 @@ func (m *Module) run(ctx context.Context, raw json.RawMessage) (tool.Result, err
 		if msg := bashismHint(command); msg != "" {
 			return errResult(errors.New(msg)), nil
 		}
-		// warmupCmd is now baked into newShell once at session start, not per call.
 	}
 
 	root := m.cfg.Workdir
@@ -614,9 +548,6 @@ func (m *Module) run(ctx context.Context, raw json.RawMessage) (tool.Result, err
 		timeout = 0
 	}
 
-	// Session key: isolated per agent-session so two concurrent sessions on the
-	// same workdir never share shell state. Falls back to workdir when no session
-	// id is available (tests, dev tools).
 	sessionKey := root
 	if id, ok := tool.IdentityFromContext(ctx); ok && id.SessionID != "" {
 		sessionKey = id.SessionID + ":" + root
@@ -625,10 +556,6 @@ func (m *Module) run(ctx context.Context, raw json.RawMessage) (tool.Result, err
 	started := time.Now()
 	var res cmdResult
 	if p.Input != "" {
-		// stdin injection is architecturally incompatible with the persistent
-		// shell: the session protocol uses the same stdin pipe to send commands
-		// and read markers, so injecting data would corrupt it. Fall back to a
-		// fresh one-shot subprocess (runDetached) which sets cmd.Stdin cleanly.
 		var rerr error
 		res, rerr = runDetached(ctx, m.kind, m.path, command, root, buildEnv(m.cfg.EnvAllow), m.cfg.MaxOutput, p.Input, timeout, 0)
 		if rerr != nil && !errors.Is(rerr, errTimeout) && !errors.Is(rerr, errCancelled) && !errors.Is(rerr, errWaitingForInput) {
@@ -643,7 +570,6 @@ func (m *Module) run(ctx context.Context, raw json.RawMessage) (tool.Result, err
 	m.enrich(&res, root, started)
 	workdir.NotifyFileChange(ctx)
 
-	// Emit event based on command result
 	if res.TimedOut {
 		eventemitter.EmitWithModule(ctx, "bash", "bash.command.timed_out", map[string]any{
 			"command":    command,
@@ -666,32 +592,17 @@ func (m *Module) run(ctx context.Context, raw json.RawMessage) (tool.Result, err
 	return m.result(command, res, nil, timeout), nil
 }
 
-// wslQuotePath single-quotes a path for a WSL bash command line.
 func wslQuotePath(p string) string {
 	return "'" + strings.ReplaceAll(p, "'", `'\''`) + "'"
 }
 
-// runInSession runs command in the persistent shell for this session key,
-// creating one if needed. Falls back to runDetached transparently on any
-// session error so a crashed shell never blocks the agent.
-//
-// Background tasks always use runDetached so the background manager's LiveSink
-// gets real-time output streaming — the persistent shell doesn't tap LiveSink.
-// Persistent sessions are intended for interactive foreground use where cd/export/
-// source persist across calls.
 func (m *Module) runInSession(ctx context.Context, key, dir, command string, timeout time.Duration) cmdResult {
 	if m.useWSL {
-		// WSL path: wsl.exe -e bash -c "cd DIR && COMMAND"
-		// No persistent session — each call is one-shot inside WSL bash.
 		wrapped := "cd " + wslQuotePath(dir) + " && " + command
 		res, _ := runDetached(ctx, "bash", m.path, wrapped, dir, buildEnv(m.cfg.EnvAllow), m.cfg.MaxOutput, "", timeout, 0)
 		return res
 	}
 	if tool.IsBackground(ctx) {
-		// Background tasks need real-time LiveSink streaming for the background
-		// manager's live log. runDetached connects the LiveSink via io.MultiWriter;
-		// the persistent session does not. Each background task is isolated anyway,
-		// so losing session persistence here has no user-visible effect.
 		res, _ := runDetached(ctx, m.kind, m.path, command, dir, buildEnv(m.cfg.EnvAllow), m.cfg.MaxOutput, "", timeout, 0)
 		return res
 	}
@@ -705,8 +616,6 @@ func (m *Module) runInSession(ctx context.Context, key, dir, command string, tim
 		if errors.Is(err, errShellExited) {
 			m.dropShell(key, sh)
 		}
-		// Transparent fallback: if the session produced no usable output, retry
-		// one-shot so a transient shell death is invisible to the agent.
 		if res.Stdout == "" && res.Stderr == "" && res.ExitCode == 0 {
 			res2, _ := runDetached(ctx, m.kind, m.path, command, dir, buildEnv(m.cfg.EnvAllow), m.cfg.MaxOutput, "", timeout, time.Duration(m.cfg.PromptWaitSecs)*time.Second)
 			return res2
@@ -741,13 +650,6 @@ func (m *Module) shellName() string {
 }
 
 func (m *Module) result(command string, res cmdResult, err error, timeout time.Duration) tool.Result {
-	// Success = the TOOL ran the command. Only true tool failures set Success=false:
-	// timeout, cancellation, or shell death. A non-zero exit code is data (the
-	// command ran and reported its outcome) — not a tool failure. The agent reads
-	// exit_code + stderr/stdout to decide whether the result is what it wanted.
-	// Without this distinction "kill $PID" on a missing process (exit 1) or
-	// "pkill nginx" with no match (exit 1) look like tool failures and confuse the
-	// agent into retrying indefinitely.
 	toolFailed := res.TimedOut || res.Cancelled || errors.Is(err, errShellExited) || errors.Is(err, errWaitingForInput)
 	out := tool.Result{
 		Success: !toolFailed,
@@ -779,9 +681,6 @@ func (m *Module) result(command string, res cmdResult, err error, timeout time.D
 			out.Error = "command is waiting for interactive input (e.g. sudo password prompt). Retry with the `input` parameter to provide the answer."
 		}
 	}
-	// Non-zero exit codes are surfaced via exit_code in Data (always present).
-	// The agent reads exit_code to decide if the command succeeded semantically —
-	// exit 1 from "kill" / "pkill" / "grep" / "test" is often expected and fine.
 	return out
 }
 

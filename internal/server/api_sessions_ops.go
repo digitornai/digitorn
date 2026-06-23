@@ -19,7 +19,7 @@ import (
 // EventSessionRenamed that the projection applies — surviving replay/cold-load —
 // and sync the meta so the session list reflects it immediately.
 func (d *Daemon) renameSession(w http.ResponseWriter, r *http.Request) {
-	sid := chi.URLParam(r, "session_id")
+	sid := sessionIDParam(r)
 	appID := chi.URLParam(r, "app_id")
 	userID := userIDOf(r.Context())
 
@@ -84,7 +84,7 @@ func (d *Daemon) renameSession(w http.ResponseWriter, r *http.Request) {
 // disk (the rest lives in the snapshot), so the fork begins at that cutoff —
 // the response flags `partial_history` rather than silently dropping the head.
 func (d *Daemon) forkSession(w http.ResponseWriter, r *http.Request) {
-	srcSid := chi.URLParam(r, "session_id")
+	srcSid := sessionIDParam(r)
 	appID := chi.URLParam(r, "app_id")
 	userID := userIDOf(r.Context())
 
@@ -185,7 +185,7 @@ func (d *Daemon) forkSession(w http.ResponseWriter, r *http.Request) {
 // lossless one (snapshot + events), so a compacted session still exports its
 // whole history.
 func (d *Daemon) exportSession(w http.ResponseWriter, r *http.Request) {
-	sid := chi.URLParam(r, "session_id")
+	sid := sessionIDParam(r)
 	state, err := d.requireOwnedSession(r.Context(), sid)
 	if err != nil {
 		writeError(w, errStatus(err), errCode(err), err.Error())
