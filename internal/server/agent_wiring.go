@@ -56,6 +56,18 @@ func (a agentManagerAdapter) List(root string) []meta.AgentSnapshot {
 	return out
 }
 
+func (a agentManagerAdapter) SpawnBatch(ctx context.Context, reqs []meta.AgentSpawnRequest) ([]string, error) {
+	batch := make([]agent.SpawnRequest, len(reqs))
+	for i, r := range reqs {
+		batch[i] = agent.SpawnRequest{
+			AppID: r.AppID, RootSession: r.RootSession, UserID: r.UserID,
+			UserJWT: r.UserJWT, AgentID: r.AgentID, Task: r.Task,
+			MemorySeed: r.MemorySeed, ParentRunID: r.ParentRunID, ParentCallID: r.ParentCallID,
+		}
+	}
+	return a.m.SpawnBatch(ctx, batch)
+}
+
 func (a agentManagerAdapter) Cancel(root, runID string) error { return a.m.Cancel(root, runID) }
 
 func secsToDur(s float64) time.Duration {

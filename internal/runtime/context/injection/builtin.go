@@ -438,20 +438,53 @@ func MemoryToolSpecs() []llm.ToolSpec {
 func AgentToolSpec() []llm.ToolSpec {
 	specs := []llm.ToolSpec{
 		{
-			Name:        "agent_spawn.agent",
-			Description: "Delegate to a specialist sub-agent (coordinator role only).\n\n⚠️ CRITICAL RULE: when you need a sub-agent's result, ALWAYS use run_id+wait=true. NEVER poll with run_id alone — it wastes turns and burns context. Polling loop = bug.\n\nCORRECT pattern:\n  1. Spawn: agent(agent=<id>, task=...) → run_id   [do other work here or just proceed]\n  2. Collect: agent(run_id=..., wait=true) → blocks until done, returns result\n\nFAN-OUT pattern (parallel sub-agents):\n  - Emit ALL spawn calls in ONE step (they run concurrently)\n  - Then ONE collect: agent(run_ids=[r1,r2,...], wait=true)\n\nModes: (1) spawn: agent+task → run_id ; (2) status-only: run_id [AVOID — use wait=true instead] ; (3) collect: run_id/run_ids+wait=true ; (4) list: list=true ; (5) cancel: run_id+cancel=true.\nEach sub-agent runs in full isolation. run_ids are agent runs — NEVER use background_run to wait on them.",
+			Name: "agent_spawn.agent",
+			Description: "Delegate to specialist sub-agents (coordinator role only).\n\n" +
+				"MODES:\n" +
+				"  (1) spawn one:   agent(agent=<id>, task=...) → run_id\n" +
+				"  (2) spawn many:  agent(agents=[{agent,task}, ...]) → {run_ids, count}\n" +
+				"      Both modes are NON-BLOCKING by default. Add wait=true to block until done.\n" +
+				"  (3) collect one: agent(run_id=..., wait=true) → finished snapshot\n" +
+				"  (4) collect all: agent(run_ids=[...], wait=true) → {agents:[...]}\n" +
+				"  (5) status:      agent(run_id=...) — avoid, use wait=true instead\n" +
+				"  (6) list:        agent(list=true) → {agents:[...]}\n" +
+				"  (7) cancel:      agent(cancel=true, run_id=...)\n\n" +
+				"FAN-OUT (recommended for parallel work):\n" +
+				"  agent(agents=[{agent:\"x\",task:\"...\"},{agent:\"y\",task:\"...\"}]) → run_ids\n" +
+				"  agent(run_ids=[r1,r2], wait=true) → all results at once\n\n" +
+				"Each sub-agent runs in full isolation. run_ids are agent runs.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"agent":       map[string]any{"type": "string", "description": "Target specialist agent id to spawn (mode 1)."},
-					"task":        map[string]any{"type": "string", "description": "The instruction for the sub-agent (mode 1)."},
-					"memory_seed": map[string]any{"type": "string", "description": "Read-only context (goal/facts) to brief the sub-agent (mode 1)."},
-					"run_id":      map[string]any{"type": "string", "description": "Existing sub-agent run id (modes 2,3,5)."},
-					"run_ids":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Several run ids to wait on (mode 3)."},
-					"wait":        map[string]any{"type": "boolean", "description": "Block until the sub-agent(s) finish. Default false — spawning is non-blocking; prefer to spawn, keep working, then collect later with run_id/run_ids+wait=true (modes 1,3)."},
-					"timeout":     map[string]any{"type": "number", "description": "Wait timeout in seconds (mode 3)."},
-					"list":        map[string]any{"type": "boolean", "description": "List every sub-agent of this session (mode 4)."},
-					"cancel":      map[string]any{"type": "boolean", "description": "Cancel the sub-agent run_id and its subtree (mode 5)."},
+					"agent":       map[string]any{"type": "string", "description": "Target specialist agent id (mode 1)."},
+					"agents":      map[string]any{"type": "array", "description": "Batch spawn: [{agent,task,memory_seed?}, ...] (mode 2).", "items": map[string]any{"type": "object"}},
+					"task":        map[string]any{"type": "string", "description": "Instruction for the sub-agent (modes 1)."},
+					"memory_seed": map[string]any{"type": "string", "description": "Read-only context to brief the sub-agent (modes 1,2)."},
+					"run_id":      map[string]any{"type": "string", "description": "Existing sub-agent run id (modes 3,5,7)."},
+					"run_ids":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Multiple run ids to collect (mode 4)."},
+					"wait":        map[string]any{"type": "boolean", "description": "Block until sub-agent(s) finish. Default false."},
+					"timeout":     map[string]any{"type": "number", "description": "Wait timeout in seconds."},
+					"list":        map[string]any{"type": "boolean", "description": "List all sub-agents (mode 6)."},
+					"cancel":      map[string]any{"type": "boolean", "description": "Cancel run_id and its subtree (mode 7)."},
+				},
+			},
+		},
+		{
+			Name: "context_builder.kv",
+			Description: "Shared key-value store for all agents in the same session tree.\n\n" +
+				"Agents running in parallel can exchange discoveries without blocking each other.\n\n" +
+				"MODES:\n" +
+				"  write:  kv(key=\"x\", value=\"v\") → {written:true}\n" +
+				"  read:   kv(key=\"x\")            → {key,value,found}\n" +
+				"  delete: kv(key=\"x\", delete=true)\n" +
+				"  list:   kv(list=true)           → {entries:{key:value,...}}",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"key":    map[string]any{"type": "string", "description": "Key to read or write."},
+					"value":  map[string]any{"type": "string", "description": "Value to write (set mode)."},
+					"delete": map[string]any{"type": "boolean", "description": "Delete the key."},
+					"list":   map[string]any{"type": "boolean", "description": "Return all entries."},
 				},
 			},
 		},

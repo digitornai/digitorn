@@ -325,6 +325,68 @@ func (m *Manager) reapAll() {
 	})
 }
 
+// SpawnBatch atomically launches N agents and returns their run IDs in input
+// order. All agents start simultaneously — no agent waits for another to spawn.
+// Budget and depth are validated under a single lock so the batch either
+// succeeds entirely or fails before any goroutine launches.
+func (m *Manager) SpawnBatch(_ context.Context, reqs []SpawnRequest) ([]string, error) {
+	if len(reqs) == 0 {
+		return nil, nil
+	}
+	if m.runner == nil {
+		return nil, ErrNoRunner
+	}
+	root := reqs[0].RootSession
+	rt := m.lockRoot(root)
+
+	if len(rt.agents)+len(reqs) > m.maxAgents() {
+		rt.mu.Unlock()
+		return nil, fmt.Errorf("%w (%d)", ErrBudget, m.maxAgents())
+	}
+
+	runIDs := make([]string, len(reqs))
+	states := make([]*agentState, len(reqs))
+
+	for i, req := range reqs {
+		depth := 0
+		var parentCtx context.Context = context.Background()
+		if req.ParentRunID != "" {
+			if p := rt.agents[req.ParentRunID]; p != nil {
+				depth = p.depth + 1
+				parentCtx = p.ctx
+			}
+		}
+		if depth > m.maxDepth() {
+			rt.mu.Unlock()
+			return nil, fmt.Errorf("%w (%d)", ErrDepth, m.maxDepth())
+		}
+		runID := runtime.NewAgentRunID(req.AgentID)
+		actx, cancel := context.WithCancel(parentCtx)
+		a := &agentState{
+			runID: runID, agentID: req.AgentID, rootSession: req.RootSession,
+			parentRunID: req.ParentRunID, parentCallID: req.ParentCallID,
+			depth: depth, startedNano: m.clock().UnixNano(),
+			ctx: actx, cancel: cancel, done: make(chan struct{}),
+		}
+		a.status.Store("running")
+		rt.agents[runID] = a
+		if req.ParentRunID != "" {
+			if p := rt.agents[req.ParentRunID]; p != nil {
+				p.children.Add(1)
+			}
+		}
+		runIDs[i] = runID
+		states[i] = a
+	}
+	rt.mu.Unlock()
+
+	for i, a := range states {
+		m.emit(a, "running")
+		go m.runAgent(a, reqs[i])
+	}
+	return runIDs, nil
+}
+
 // Spawn launches a sub-agent and returns its distinct run id IMMEDIATELY. The
 // agent runs in its own goroutine ; the caller does not block. Enforces the
 // depth + budget guards.

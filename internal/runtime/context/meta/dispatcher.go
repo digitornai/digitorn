@@ -80,6 +80,10 @@ type MetaDispatcher struct {
 	// `agent` tool returns "not wired".
 	Agents AgentManager
 
+	// KV is the shared key-value store accessible to all agents of the same
+	// root session. nil = the kv tool returns "not wired".
+	KV AgentKVStore
+
 	// CoordinatorLookup reports whether (appID, agentID) is a coordinator —
 	// only coordinators may call the `agent` tool. nil = no role gate (the
 	// tool is open ; the daemon wires this from the app manager).
@@ -222,6 +226,9 @@ func (m *MetaDispatcher) Dispatch(ctx context.Context, call runtime.ToolInvocati
 	}
 	if IsAgentSpawnTool(canonical) {
 		return m.handleAgent(ctx, call)
+	}
+	if canonical == "kv" || strings.HasSuffix(canonical, ".kv") {
+		return m.handleKV(call)
 	}
 
 	// Domain tool : forward to inner dispatcher. Rewrite the call's

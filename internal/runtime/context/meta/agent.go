@@ -2,21 +2,27 @@ package meta
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/mbathepaul/digitorn/internal/runtime"
 )
 
-// AgentManager is the slice of the multi-agent orchestrator the `agent` tool
-// drives. The daemon wires an adapter over the concrete agent.Manager. Timeouts
-// are in seconds (the LLM passes floats).
 type AgentManager interface {
 	Spawn(ctx context.Context, req AgentSpawnRequest) (runID string, err error)
+	SpawnBatch(ctx context.Context, reqs []AgentSpawnRequest) ([]string, error)
 	Wait(ctx context.Context, rootSession, runID string, timeoutSecs float64) (AgentSnapshot, error)
 	WaitAll(ctx context.Context, rootSession string, runIDs []string, timeoutSecs float64) ([]AgentSnapshot, error)
 	Status(rootSession, runID string) (AgentSnapshot, error)
 	List(rootSession string) []AgentSnapshot
 	Cancel(rootSession, runID string) error
+}
+
+type AgentKVStore interface {
+	Set(root, key, value string)
+	Get(root, key string) (string, bool)
+	Delete(root, key string)
+	All(root string) map[string]string
 }
 
 // AgentSpawnRequest is one delegation issued by a coordinator.
@@ -96,6 +102,44 @@ func (m *MetaDispatcher) handleAgent(ctx context.Context, call runtime.ToolInvoc
 
 	wait, _ := call.Args["wait"].(bool)
 	timeout, _ := call.Args["timeout"].(float64)
+
+	// Batch spawn: agents=[{agent:"x",task:"..."}, ...] launches N agents atomically.
+	if raw, ok := call.Args["agents"]; ok {
+		items, _ := raw.([]any)
+		if len(items) == 0 {
+			return errored("agent batch: 'agents' must be a non-empty array of {agent, task}")
+		}
+		reqs := make([]AgentSpawnRequest, 0, len(items))
+		for i, item := range items {
+			m, _ := item.(map[string]any)
+			if m == nil {
+				return errored(fmt.Sprintf("agent batch: item %d is not an object", i))
+			}
+			target := firstString(m, "agent", "specialist")
+			task := firstString(m, "task", "prompt")
+			if target == "" || task == "" {
+				return errored(fmt.Sprintf("agent batch: item %d must have 'agent' and 'task'", i))
+			}
+			seed, _ := m["memory_seed"].(string)
+			reqs = append(reqs, AgentSpawnRequest{
+				AppID: call.AppID, RootSession: root, UserID: call.UserID,
+				UserJWT: call.UserJWT, AgentID: target, Task: task,
+				MemorySeed: seed, ParentRunID: call.AgentRunID, ParentCallID: call.CallID,
+			})
+		}
+		runIDs, err := m.Agents.SpawnBatch(ctx, reqs)
+		if err != nil {
+			return errored("agent batch: " + err.Error())
+		}
+		if !wait {
+			return jsonOutcome(map[string]any{"run_ids": runIDs, "count": len(runIDs), "status": "running"})
+		}
+		snaps, werr := m.Agents.WaitAll(ctx, root, runIDs, timeout)
+		if werr != nil {
+			return errored("agent batch wait: " + werr.Error())
+		}
+		return jsonOutcome(map[string]any{"agents": snaps})
+	}
 
 	// A delegation target selects spawn — optionally with an inline wait.
 	if target := firstString(call.Args, "agent", "specialist"); target != "" {
@@ -196,4 +240,38 @@ func agentSnapMap(s AgentSnapshot) map[string]any {
 		m["error"] = s.Error
 	}
 	return m
+}
+
+func (m *MetaDispatcher) handleKV(call runtime.ToolInvocation) runtime.ToolOutcome {
+	if m.KV == nil {
+		return errored("kv not wired")
+	}
+	root := rootSessionOf(m.SessionID(call))
+	key, _ := call.Args["key"].(string)
+
+	if del, _ := call.Args["delete"].(bool); del {
+		if key == "" {
+			return errored("kv delete: 'key' is required")
+		}
+		m.KV.Delete(root, key)
+		return jsonOutcome(map[string]any{"deleted": key})
+	}
+	if list, _ := call.Args["list"].(bool); list {
+		return jsonOutcome(map[string]any{"entries": m.KV.All(root)})
+	}
+	if value, ok := call.Args["value"].(string); ok {
+		if key == "" {
+			return errored("kv set: 'key' is required")
+		}
+		m.KV.Set(root, key, value)
+		return jsonOutcome(map[string]any{"key": key, "written": true})
+	}
+	if key == "" {
+		return errored("kv: 'key' is required for read/write")
+	}
+	v, found := m.KV.Get(root, key)
+	if !found {
+		return jsonOutcome(map[string]any{"key": key, "found": false})
+	}
+	return jsonOutcome(map[string]any{"key": key, "value": v, "found": true})
 }

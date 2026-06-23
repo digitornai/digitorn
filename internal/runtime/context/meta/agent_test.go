@@ -41,6 +41,18 @@ func (f *fakeAgents) Status(_, runID string) (meta.AgentSnapshot, error) {
 	return meta.AgentSnapshot{RunID: runID, Status: "running"}, nil
 }
 func (f *fakeAgents) List(_ string) []meta.AgentSnapshot { return f.listed }
+func (f *fakeAgents) SpawnBatch(ctx context.Context, reqs []meta.AgentSpawnRequest) ([]string, error) {
+	ids := make([]string, len(reqs))
+	for i, r := range reqs {
+		id, err := f.Spawn(ctx, r)
+		if err != nil {
+			return nil, err
+		}
+		ids[i] = id
+	}
+	return ids, nil
+}
+
 func (f *fakeAgents) Cancel(_, runID string) error {
 	f.cancelled = runID
 	return nil

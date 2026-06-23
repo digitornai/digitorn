@@ -32,7 +32,18 @@ func (c *countingAgents) Status(_, runID string) (meta.AgentSnapshot, error) {
 	return meta.AgentSnapshot{RunID: runID, Status: "running"}, nil
 }
 func (c *countingAgents) List(_ string) []meta.AgentSnapshot { return nil }
-func (c *countingAgents) Cancel(_, _ string) error          { return nil }
+func (c *countingAgents) Cancel(_, _ string) error           { return nil }
+func (c *countingAgents) SpawnBatch(ctx context.Context, reqs []meta.AgentSpawnRequest) ([]string, error) {
+	ids := make([]string, len(reqs))
+	for i, r := range reqs {
+		id, err := c.Spawn(ctx, r)
+		if err != nil {
+			return nil, err
+		}
+		ids[i] = id
+	}
+	return ids, nil
+}
 
 // TestBackgroundRun_AgentTarget_TransformsToDelegation : when background_run is
 // asked to launch the `agent` delegation tool, it must NOT wrap it in a

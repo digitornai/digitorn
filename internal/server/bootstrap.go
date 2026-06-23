@@ -627,6 +627,7 @@ func (d *Daemon) buildEngine() {
 	agentMgr := agent.New(d.logger)
 	agentMgr.AttachRunner(eng)
 	agentMgr.AttachSink(d.sessionStore)
+	agentKV := agent.NewKV()
 	agentMgr.MaxDepth = d.cfg.Runtime.MaxAgentDepth
 	agentMgr.MaxAgentsPerRoot = d.cfg.Runtime.MaxAgentsPerSession
 	d.agents = agentMgr
@@ -669,6 +670,7 @@ func (d *Daemon) buildEngine() {
 		SkillLoader: skillLoader,
 		// MA : the `agent` delegation tool, coordinator-gated.
 		Agents:            agentManagerAdapter{m: agentMgr},
+		KV:                agentKV,
 		CoordinatorLookup: newCoordinatorLookup(d.appMgr),
 		// MEM : the working-memory tools (set_goal / remember / task_create /
 		// task_update). The engine is the single durable home — one event per
