@@ -32,8 +32,8 @@ func TestSpawnWaitAndTelemetry(t *testing.T) {
 	m := newMgr(func(ctx context.Context, spec dgruntime.SubAgentSpec) (dgruntime.AgentResult, error) {
 		if r := dgruntime.RecorderFromContext(ctx); r != nil {
 			r.AddLLMCall(10, 5)
-			r.AddToolCall()
-			r.AddToolCall()
+			r.AddToolCall("")
+			r.AddToolCall("")
 		}
 		return dgruntime.AgentResult{RunID: spec.RunID, AgentID: spec.AgentID, Content: "answer:" + spec.Task, Status: "completed"}, nil
 	})

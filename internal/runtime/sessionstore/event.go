@@ -48,8 +48,9 @@ const (
 	// has no case for it (like tool_progress), so it can never reach durable
 	// state even if it ever flowed through the bus.
 	EventWorkspaceChanges EventType = "workspace_changes"
-	EventAgentSpawn       EventType = "agent_spawn"
-	EventAgentResult      EventType = "agent_result"
+	EventAgentSpawn    EventType = "agent_spawn"
+	EventAgentProgress EventType = "agent_progress"
+	EventAgentResult   EventType = "agent_result"
 	EventWidget           EventType = "widget"
 	EventPreview          EventType = "preview"
 	EventTodoAdded        EventType = "todo_added"
@@ -490,15 +491,16 @@ type AgentPayload struct {
 	ResultSummary  string `json:"result_summary,omitempty"`
 	Depth          int    `json:"depth,omitempty"`
 
-	// Final, terminal telemetry — carried on the agent_result event only, so a
-	// client reconstructing the tree from durable events alone (cold load after
-	// a daemon restart, when the live registry is gone) still sees each agent's
-	// final tool/LLM/token counts. Real-time deltas live in the registry.
-	ToolCalls  int64 `json:"tool_calls,omitempty"`
-	LLMCalls   int64 `json:"llm_calls,omitempty"`
-	TokensIn   int64 `json:"tokens_in,omitempty"`
-	TokensOut  int64 `json:"tokens_out,omitempty"`
-	DurationMs int64 `json:"duration_ms,omitempty"`
+	// Telemetry — present on agent_progress (live) and agent_result (terminal).
+	// Durable so a reconnecting client reconstructs the full agent tree from replay
+	// without hitting the live registry (which is gone after a daemon restart).
+	ToolCalls   int64  `json:"tool_calls,omitempty"`
+	LLMCalls    int64  `json:"llm_calls,omitempty"`
+	TokensIn    int64  `json:"tokens_in,omitempty"`
+	TokensOut   int64  `json:"tokens_out,omitempty"`
+	Children    int64  `json:"children,omitempty"`
+	DurationMs  int64  `json:"duration_ms,omitempty"`
+	CurrentTool string `json:"current_tool,omitempty"`
 }
 
 type WidgetPayload struct {

@@ -288,12 +288,51 @@ func applyLocked(s *SessionState, ev *Event) {
 		s.Children = append(s.Children, ChildAgent{
 			RunID:          ev.Agent.RunID,
 			ParentRunID:    ev.Agent.ParentRunID,
+			ParentCallID:   ev.Agent.ParentCallID,
 			Kind:           ev.Agent.Kind,
 			ChildSessionID: ev.Agent.ChildSessionID,
 			Status:         orDefault(ev.Agent.Status, "running"),
 			Depth:          ev.Agent.Depth,
 			SpawnedAt:      ev.TsUnixNano,
+			UpdatedAt:      ev.TsUnixNano,
 		})
+
+	case EventAgentProgress:
+		if ev.Agent == nil || ev.Agent.RunID == "" {
+			return
+		}
+		for i := range s.Children {
+			if s.Children[i].RunID != ev.Agent.RunID {
+				continue
+			}
+			c := &s.Children[i]
+			if ev.Agent.ToolCalls > 0 {
+				c.ToolCalls = ev.Agent.ToolCalls
+			}
+			if ev.Agent.LLMCalls > 0 {
+				c.LLMCalls = ev.Agent.LLMCalls
+			}
+			if ev.Agent.TokensIn > 0 {
+				c.TokensIn = ev.Agent.TokensIn
+			}
+			if ev.Agent.TokensOut > 0 {
+				c.TokensOut = ev.Agent.TokensOut
+			}
+			if ev.Agent.Children > 0 {
+				c.Children = ev.Agent.Children
+			}
+			if ev.Agent.DurationMs > 0 {
+				c.DurationMs = ev.Agent.DurationMs
+			}
+			if ev.Agent.CurrentTool != "" {
+				c.CurrentTool = ev.Agent.CurrentTool
+			}
+			if ev.Agent.Status != "" {
+				c.Status = ev.Agent.Status
+			}
+			c.UpdatedAt = ev.TsUnixNano
+			return
+		}
 
 	case EventAgentResult:
 		if ev.Agent == nil || ev.Agent.RunID == "" {
@@ -304,10 +343,13 @@ func applyLocked(s *SessionState, ev *Event) {
 				s.Children[i].Status = orDefault(ev.Agent.Status, "completed")
 				s.Children[i].ResultSummary = ev.Agent.ResultSummary
 				s.Children[i].CompletedAt = ev.TsUnixNano
+				s.Children[i].UpdatedAt = ev.TsUnixNano
+				s.Children[i].CurrentTool = ""
 				s.Children[i].ToolCalls = ev.Agent.ToolCalls
 				s.Children[i].LLMCalls = ev.Agent.LLMCalls
 				s.Children[i].TokensIn = ev.Agent.TokensIn
 				s.Children[i].TokensOut = ev.Agent.TokensOut
+				s.Children[i].Children = ev.Agent.Children
 				s.Children[i].DurationMs = ev.Agent.DurationMs
 				return
 			}

@@ -43,8 +43,8 @@ func (e *Engine) chatOrStream(
 	if err == nil && resp != nil {
 		if r := RecorderFromContext(ctx); r != nil {
 			r.AddLLMCall(resp.Usage.PromptTokens, resp.Usage.CompletionTokens)
-			for range resp.ToolCalls {
-				r.AddToolCall()
+			for _, tc := range resp.ToolCalls {
+				r.AddToolCall(tc.Name)
 			}
 		}
 	}
@@ -169,7 +169,7 @@ func (e *Engine) callLLM(
 						},
 					},
 				}
-				if _, err := e.Sessions.AppendDurable(ctx, deltaEv); err != nil {
+				if _, err := e.Sessions.Append(ctx, deltaEv); err != nil {
 					if e.Logger != nil {
 						e.Logger.Warn("runtime: stream delta append failed", "err", err.Error())
 					}
@@ -198,7 +198,7 @@ func (e *Engine) callLLM(
 						Reasoning: chunk.ReasoningDelta,
 					},
 				}
-				if _, err := e.Sessions.AppendDurable(ctx, rev); err != nil && e.Logger != nil {
+				if _, err := e.Sessions.Append(ctx, rev); err != nil && e.Logger != nil {
 					e.Logger.Warn("runtime: reasoning delta append failed", "err", err.Error())
 				}
 			}

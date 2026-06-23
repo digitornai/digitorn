@@ -182,11 +182,12 @@ type agentState struct {
 	result    atomic.Value // runtime.AgentResult
 	errMsg    atomic.Value // string
 
-	toolCalls atomic.Int64
-	llmCalls  atomic.Int64
-	tokensIn  atomic.Int64
-	tokensOut atomic.Int64
-	children  atomic.Int64
+	toolCalls   atomic.Int64
+	llmCalls    atomic.Int64
+	tokensIn    atomic.Int64
+	tokensOut   atomic.Int64
+	children    atomic.Int64
+	currentTool atomic.Value // string — last tool name dispatched
 }
 
 // AddLLMCall / AddToolCall implement runtime.Recorder — the real-time, lock-free
@@ -197,7 +198,12 @@ func (a *agentState) AddLLMCall(promptTokens, completionTokens int) {
 	a.tokensOut.Add(int64(completionTokens))
 }
 
-func (a *agentState) AddToolCall() { a.toolCalls.Add(1) }
+func (a *agentState) AddToolCall(toolName string) {
+	a.toolCalls.Add(1)
+	if toolName != "" {
+		a.currentTool.Store(toolName)
+	}
+}
 
 func (a *agentState) snapshot() Snapshot {
 	s := Snapshot{
@@ -385,6 +391,24 @@ func (m *Manager) runAgent(a *agentState, req SpawnRequest) {
 		}
 	}()
 
+	// Periodic progress ticker: emit durable telemetry every 5 s so reconnecting
+	// clients always see an up-to-date state, even for long-running agents.
+	tickStop := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				m.emitProgress(a, "")
+			case <-tickStop:
+				return
+			case <-a.ctx.Done():
+				return
+			}
+		}
+	}()
+
 	// Attach this agent as the telemetry recorder so the engine updates its
 	// counters in real time while the sub-turn runs.
 	ctx := runtime.WithRecorder(a.ctx, a)
@@ -393,6 +417,7 @@ func (m *Manager) runAgent(a *agentState, req SpawnRequest) {
 		AgentID: req.AgentID, RunID: a.runID, Task: req.Task, MemorySeed: req.MemorySeed, Depth: a.depth,
 	})
 
+	close(tickStop) // stop the telemetry ticker
 	a.endedNano.Store(m.clock().UnixNano())
 	a.result.Store(res)
 	status := "completed"
@@ -548,6 +573,51 @@ func (m *Manager) CancelAll(root string) int {
 // through the existing "since seq" path, so a reconnecting client reconstructs
 // the agent tree with no gaps. "running" → EventAgentSpawn ; any terminal
 // status → EventAgentResult. Best-effort : a sink error never blocks the agent.
+// emitProgress publishes a durable agent_progress snapshot so every client —
+// including those that reconnect after a network hiccup or a daemon restart —
+// can reconstruct the live agent tree from the event log without hitting the
+// in-memory registry. Called on every tool/LLM completion and every 5 s tick.
+func (m *Manager) emitProgress(a *agentState, currentTool string) {
+	if m.sink == nil {
+		return
+	}
+	durationMs := int64(0)
+	if end := a.endedNano.Load(); end > 0 {
+		durationMs = (end - a.startedNano) / int64(time.Millisecond)
+	} else {
+		durationMs = (time.Now().UnixNano() - a.startedNano) / int64(time.Millisecond)
+	}
+	status := "running"
+	if v, ok := a.status.Load().(string); ok && v != "" {
+		status = v
+	}
+	_, _ = m.sink.AppendDurable(context.Background(), sessionstore.Event{
+		Type:          sessionstore.EventAgentProgress,
+		SessionID:     a.rootSession,
+		CorrelationID: a.runID,
+		Agent: &sessionstore.AgentPayload{
+			RunID:       a.runID,
+			ParentRunID: a.parentRunID,
+			Kind:        a.agentID,
+			Status:      status,
+			Depth:       a.depth,
+			ToolCalls:   a.toolCalls.Load(),
+			LLMCalls:    a.llmCalls.Load(),
+			TokensIn:    a.tokensIn.Load(),
+			TokensOut:   a.tokensOut.Load(),
+			Children:    a.children.Load(),
+			DurationMs:  durationMs,
+			CurrentTool: func() string {
+				if currentTool != "" {
+					return currentTool
+				}
+				v, _ := a.currentTool.Load().(string)
+				return v
+			}(),
+		},
+	})
+}
+
 func (m *Manager) emit(a *agentState, status string) {
 	if m.sink == nil {
 		m.logger.Warn("agent_emit_skipped", slog.String("reason", "no sink attached"),

@@ -9,7 +9,10 @@ import "context"
 // sub-agent's turn context when it spawns it ; plain turns have none (nil).
 type Recorder interface {
 	AddLLMCall(promptTokens, completionTokens int)
-	AddToolCall()
+	// AddToolCall increments the tool-call counter. toolName is the canonical
+	// FQN of the tool being called (e.g. "filesystem.read") so live telemetry
+	// can surface the agent's current activity; pass "" when unknown.
+	AddToolCall(toolName string)
 }
 
 type recorderKey struct{}

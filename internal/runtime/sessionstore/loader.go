@@ -3,6 +3,7 @@ package sessionstore
 import (
 	"fmt"
 	"os"
+	"time"
 )
 
 type LoadOptions struct {
@@ -75,9 +76,15 @@ func Load(p Paths, sid string, opts LoadOptions) (*LoadResult, error) {
 	// so the resync view is honest (no eternal "running" zombies). If that agent
 	// is somehow still alive (rare evict-then-reload while up), its real
 	// agent_result later overwrites this through the normal projection.
+	now := int64(0)
 	for i := range state.Children {
 		if state.Children[i].Status == "running" {
 			state.Children[i].Status = "interrupted"
+			state.Children[i].CurrentTool = ""
+			if now == 0 {
+				now = time.Now().UnixNano()
+			}
+			state.Children[i].UpdatedAt = now
 		}
 	}
 	// Same reconciliation for background tasks : a task left "running" had its

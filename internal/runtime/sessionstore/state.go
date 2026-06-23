@@ -241,22 +241,25 @@ type Todo struct {
 type ChildAgent struct {
 	RunID          string `json:"run_id"`
 	ParentRunID    string `json:"parent_run_id,omitempty"`
+	ParentCallID   string `json:"parent_call_id,omitempty"`
 	Kind           string `json:"kind,omitempty"`
 	ChildSessionID string `json:"child_session_id,omitempty"`
-	Status         string `json:"status"`
+	Status         string `json:"status"` // running | completed | errored | cancelled | interrupted
 	ResultSummary  string `json:"result_summary,omitempty"`
 	Depth          int    `json:"depth,omitempty"`
 	SpawnedAt      int64  `json:"spawned_at"`
 	CompletedAt    int64  `json:"completed_at,omitempty"`
+	UpdatedAt      int64  `json:"updated_at,omitempty"`
 
-	// Final telemetry, set when the agent_result lands — lets a reconnecting or
-	// cold-loaded client show each agent's terminal tool/LLM/token usage with no
-	// live registry.
-	ToolCalls  int64 `json:"tool_calls,omitempty"`
-	LLMCalls   int64 `json:"llm_calls,omitempty"`
-	TokensIn   int64 `json:"tokens_in,omitempty"`
-	TokensOut  int64 `json:"tokens_out,omitempty"`
-	DurationMs int64 `json:"duration_ms,omitempty"`
+	// Live telemetry — updated on every agent_progress event so a reconnecting
+	// or cold-loaded client sees latest known state without hitting the registry.
+	ToolCalls   int64  `json:"tool_calls,omitempty"`
+	LLMCalls    int64  `json:"llm_calls,omitempty"`
+	TokensIn    int64  `json:"tokens_in,omitempty"`
+	TokensOut   int64  `json:"tokens_out,omitempty"`
+	Children    int64  `json:"children,omitempty"`
+	DurationMs  int64  `json:"duration_ms,omitempty"`
+	CurrentTool string `json:"current_tool,omitempty"`
 }
 
 // BackgroundTaskState is the DURABLE, projected view of one background_run task,
