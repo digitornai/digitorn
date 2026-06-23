@@ -70,17 +70,69 @@ type Bus struct {
 	stopped atomic.Bool
 }
 
+// unboundedQueue is a goroutine-safe FIFO with no capacity limit.
+// Events are never dropped — the worker processes them in order.
+type unboundedQueue struct {
+	mu     sync.Mutex
+	items  []Event
+	signal chan struct{} // 1-buffered: poke the worker when items are added
+	done   chan struct{} // closed to stop the worker
+}
+
+func newUnboundedQueue() *unboundedQueue {
+	return &unboundedQueue{
+		signal: make(chan struct{}, 1),
+		done:   make(chan struct{}),
+	}
+}
+
+func (q *unboundedQueue) push(ev Event) {
+	q.mu.Lock()
+	q.items = append(q.items, ev)
+	q.mu.Unlock()
+	select {
+	case q.signal <- struct{}{}:
+	default:
+	}
+}
+
+func (q *unboundedQueue) run(ctx context.Context, cb func(Event)) {
+	for {
+		select {
+		case <-q.done:
+			return
+		case <-ctx.Done():
+			return
+		case <-q.signal:
+			for {
+				q.mu.Lock()
+				if len(q.items) == 0 {
+					q.mu.Unlock()
+					break
+				}
+				ev := q.items[0]
+				q.items = q.items[1:]
+				q.mu.Unlock()
+				cb(ev)
+			}
+		}
+	}
+}
+
+func (q *unboundedQueue) stop() {
+	close(q.done)
+}
+
 type subscription struct {
 	bus   *Bus
 	id    int64
 	sid   string
 	cb    func(Event)
-	queue chan Event
+	uq    *unboundedQueue
 	done  chan struct{}
 
-	slowDrops atomic.Uint64
-	panics    atomic.Uint64
-	closed    atomic.Bool
+	panics atomic.Uint64
+	closed atomic.Bool
 }
 
 type Subscription struct {
@@ -99,7 +151,7 @@ func (s *Subscription) Stats() (drops, panics uint64) {
 	if s == nil || s.sub == nil {
 		return 0, 0
 	}
-	return s.sub.slowDrops.Load(), s.sub.panics.Load()
+	return 0, s.sub.panics.Load()
 }
 
 func NewBus(cfg BusConfig) (*Bus, error) {
@@ -603,13 +655,14 @@ func (b *Bus) SubscribeAll(cb func(Event)) (*Subscription, error) {
 }
 
 func (b *Bus) subscribe(sid string, cb func(Event)) *Subscription {
+	uq := newUnboundedQueue()
 	s := &subscription{
-		bus:   b,
-		id:    b.nextSubID.Add(1),
-		sid:   sid,
-		cb:    cb,
-		queue: make(chan Event, b.cfg.SubscriberQueueSize),
-		done:  make(chan struct{}),
+		bus:  b,
+		id:   b.nextSubID.Add(1),
+		sid:  sid,
+		cb:   cb,
+		uq:   uq,
+		done: make(chan struct{}),
 	}
 
 	b.subsMu.Lock()
@@ -630,29 +683,11 @@ func (b *Bus) subscribe(sid string, cb func(Event)) *Subscription {
 }
 
 func (s *subscription) run(ctx context.Context) {
-	for {
-		select {
-		case ev := <-s.queue:
-			s.deliver(ev)
-		case <-s.done:
-			s.drainRemaining()
-			return
-		case <-ctx.Done():
-			s.drainRemaining()
-			return
-		}
-	}
+	s.uq.run(ctx, s.deliver)
 }
 
 func (s *subscription) drainRemaining() {
-	for {
-		select {
-		case ev := <-s.queue:
-			s.deliver(ev)
-		default:
-			return
-		}
-	}
+	// Unbounded queue: drain happens in uq.run cleanup; nothing to do here.
 }
 
 func (s *subscription) deliver(ev Event) {
@@ -687,6 +722,7 @@ func (b *Bus) cancelSubscription(s *subscription) {
 		}
 	}
 	b.subsMu.Unlock()
+	s.uq.stop()
 	close(s.done)
 }
 
@@ -715,47 +751,9 @@ func (b *Bus) deliverToSubs(subs []*subscription, ev Event) {
 		if s.closed.Load() {
 			continue
 		}
-		// Critical lifecycle events must never be silently dropped — retry with
-		// brief backoff so a momentarily-full queue doesn't lose agent_spawn or
-		// agent_result events that the client needs to track sub-agents.
-		if isCriticalEvent(ev.Type) {
-			for attempt := 0; attempt < 5; attempt++ {
-				select {
-				case s.queue <- ev:
-					b.notifyTotal.Add(1)
-					goto delivered
-				default:
-					time.Sleep(time.Duration(attempt+1) * 2 * time.Millisecond)
-				}
-			}
-			// Still full after retries — fall through to normal drop handling
-		}
-		select {
-		case s.queue <- ev:
-			b.notifyTotal.Add(1)
-		default:
-			s.slowDrops.Add(1)
-			b.subscriberDrops.Add(1)
-			if s.slowDrops.Load() >= b.cfg.SubscriberMaxSlowDrops {
-				b.subscriberKicks.Add(1)
-				b.log.Warn("bus: subscriber kicked (too many slow drops)",
-					slog.Int64("id", s.id),
-					slog.String("sid", s.sid),
-					slog.Uint64("drops", s.slowDrops.Load()))
-				b.cancelSubscription(s)
-			}
-		}
-	delivered:
+		s.uq.push(ev)
+		b.notifyTotal.Add(1)
 	}
-}
-
-func isCriticalEvent(t EventType) bool {
-	switch t {
-	case EventAgentSpawn, EventAgentResult, EventAgentProgress,
-		EventBackgroundTask, EventTurnStarted, EventTurnEnded:
-		return true
-	}
-	return false
 }
 
 func (b *Bus) evictionLoop() {
