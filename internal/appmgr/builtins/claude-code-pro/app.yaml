@@ -3,6 +3,9 @@ schema_version: 2
 app:
   app_id: claude-code-pro
   name: Claude Code Pro
+  short_name: "Claude Pro"
+  icon: "🧠"
+  color: "#7C3AED"
   version: "0.1.0"
   description: "Claude Code style engineering agent on deepseek-v4-pro (reasoning model — exercises the thinking block): reads the codebase, edits files, runs commands, delegates broad search to sub-agents, and asks the user when a decision is genuinely theirs."
   author: "you@example.com"

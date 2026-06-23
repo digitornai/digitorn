@@ -3,6 +3,9 @@ schema_version: 2
 app:
   app_id: gmail-agent
   name: Gmail Agent
+  short_name: "Gmail"
+  icon: "📧"
+  color: "#EF4444"
   version: "0.1.0"
   description: "Agent triggered by Gmail — processes new emails automatically."
   category: "automation"

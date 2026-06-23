@@ -5,6 +5,9 @@ schema_version: 2
 app:
   app_id: chat
   name: Chat
+  short_name: "Chat"
+  icon: "💬"
+  color: "#6366F1"
   version: "0.1.0"
   description: "Minimal chat agent with filesystem read access."
   author: "you@example.com"
