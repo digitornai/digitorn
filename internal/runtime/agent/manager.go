@@ -605,6 +605,40 @@ func (m *Manager) Cancel(root, runID string) error {
 	return nil
 }
 
+func (m *Manager) CancelTree(root, runID string) int {
+	v, ok := m.roots.Load(root)
+	if !ok {
+		return 0
+	}
+	rt := v.(*rootTable)
+	rt.mu.Lock()
+	var cancels []context.CancelFunc
+	for _, a := range rt.agents {
+		if a.runID == runID || a.parentRunID == runID || isDescendant(rt.agents, a.runID, runID) {
+			cancels = append(cancels, a.cancel)
+		}
+	}
+	rt.mu.Unlock()
+	for _, c := range cancels {
+		c()
+	}
+	return len(cancels)
+}
+
+func isDescendant(agents map[string]*agentState, runID, ancestorID string) bool {
+	a, ok := agents[runID]
+	if !ok {
+		return false
+	}
+	if a.parentRunID == ancestorID {
+		return true
+	}
+	if a.parentRunID == "" {
+		return false
+	}
+	return isDescendant(agents, a.parentRunID, ancestorID)
+}
+
 // CancelAll stops EVERY agent under a root session — the whole delegated tree.
 // A user "stop" (session abort) must halt all delegated work, not just the
 // coordinator's turn : sub-agents run on independent contexts (so they never

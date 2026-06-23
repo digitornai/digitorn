@@ -16,6 +16,7 @@ type AgentManager interface {
 	Status(rootSession, runID string) (AgentSnapshot, error)
 	List(rootSession string) []AgentSnapshot
 	Cancel(rootSession, runID string) error
+	CancelTree(rootSession, runID string) int
 }
 
 type AgentKVStore interface {
@@ -93,6 +94,11 @@ func (m *MetaDispatcher) handleAgent(ctx context.Context, call runtime.ToolInvoc
 		runID, _ := call.Args["run_id"].(string)
 		if runID == "" {
 			return errored("agent cancel: 'run_id' is required")
+		}
+		tree, _ := call.Args["cancel_tree"].(bool)
+		if tree {
+			n := m.Agents.CancelTree(root, runID)
+			return jsonOutcome(map[string]any{"cancelled": runID, "cancelled_count": n})
 		}
 		if err := m.Agents.Cancel(root, runID); err != nil {
 			return errored("agent cancel: " + err.Error())

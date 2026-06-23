@@ -97,7 +97,7 @@ type Engine struct {
 
 	SubAgentPool *turn.Pool
 
-	LLMSem chan struct{}
+	LLMSem *PrioritySemaphore
 
 	IDGen  turn.IDGen
 	Logger *slog.Logger

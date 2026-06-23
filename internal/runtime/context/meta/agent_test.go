@@ -57,6 +57,7 @@ func (f *fakeAgents) Cancel(_, runID string) error {
 	f.cancelled = runID
 	return nil
 }
+func (f *fakeAgents) CancelTree(_, _ string) int { return 0 }
 
 func agentCall(args map[string]any, session, agentRunID string) runtime.ToolInvocation {
 	return runtime.ToolInvocation{

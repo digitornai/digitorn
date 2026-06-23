@@ -32,12 +32,14 @@ func (e *Engine) chatOrStream(
 	ctx context.Context, tr *turn.Turn, in TurnInput, req *llm.ChatRequest,
 ) (*llm.ChatResponse, error) {
 	if e.LLMSem != nil {
-		select {
-		case e.LLMSem <- struct{}{}:
-			defer func() { <-e.LLMSem }()
-		case <-ctx.Done():
-			return nil, ctx.Err()
+		p := PriorityNormal
+		if r := RecorderFromContext(ctx); r != nil {
+			p = PriorityHigh
 		}
+		if err := e.LLMSem.Acquire(ctx, p); err != nil {
+			return nil, err
+		}
+		defer e.LLMSem.Release()
 	}
 	resp, err := e.callLLM(ctx, tr, in, req)
 	if err == nil && resp != nil {

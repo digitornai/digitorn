@@ -632,7 +632,7 @@ func (d *Daemon) buildEngine() {
 	agentMgr.MaxAgentsPerRoot = d.cfg.Runtime.MaxAgentsPerSession
 	d.agents = agentMgr
 	if n := d.cfg.Runtime.MaxConcurrentLLMCalls; n > 0 {
-		eng.LLMSem = make(chan struct{}, n)
+		eng.LLMSem = runtime.NewPrioritySemaphore(n)
 	}
 
 	// P-1d : SkillLoader resolves use_skill /commands. Two layers in one

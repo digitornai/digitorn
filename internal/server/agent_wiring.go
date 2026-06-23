@@ -68,7 +68,8 @@ func (a agentManagerAdapter) SpawnBatch(ctx context.Context, reqs []meta.AgentSp
 	return a.m.SpawnBatch(ctx, batch)
 }
 
-func (a agentManagerAdapter) Cancel(root, runID string) error { return a.m.Cancel(root, runID) }
+func (a agentManagerAdapter) Cancel(root, runID string) error    { return a.m.Cancel(root, runID) }
+func (a agentManagerAdapter) CancelTree(root, runID string) int { return a.m.CancelTree(root, runID) }
 
 func secsToDur(s float64) time.Duration {
 	if s <= 0 {
