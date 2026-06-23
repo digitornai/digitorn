@@ -753,18 +753,24 @@ func (m *Manager) emit(a *agentState, status string) {
 			payload.DurationMs = (end - a.startedNano) / int64(time.Millisecond)
 		}
 	}
-	if _, err := m.sink.AppendDurable(context.Background(), sessionstore.Event{
+	ev := sessionstore.Event{
 		Type:          evType,
 		SessionID:     a.rootSession,
 		CorrelationID: a.runID,
 		Agent:         payload,
-	}); err != nil {
-		// Never silently lose a lifecycle event : a dropped agent_spawn /
-		// agent_result leaves clients blind to the sub-agent. Surface it.
-		m.logger.Warn("agent_emit_failed", slog.String("type", string(evType)),
-			slog.String("session", a.rootSession), slog.String("run_id", a.runID),
-			slog.Any("err", err))
 	}
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if _, err := m.sink.AppendDurable(context.Background(), ev); err == nil {
+			return
+		} else {
+			lastErr = err
+		}
+		time.Sleep(time.Duration(attempt+1) * 50 * time.Millisecond)
+	}
+	m.logger.Warn("agent_emit_failed", slog.String("type", string(evType)),
+		slog.String("session", a.rootSession), slog.String("run_id", a.runID),
+		slog.Any("err", lastErr))
 }
 
 func truncate(s string, n int) string {
