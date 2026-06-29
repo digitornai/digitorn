@@ -1,4 +1,5 @@
-# Minimal Digitorn app: one agent backed by Claude with read-only filesystem access.
+# Minimal Digitorn app: one agent backed by zen-mimo-v2.5-free via the gateway,
+# with read-only filesystem access.
 # Schema matches packages/digitorn/core/app/schema.py (AppDefinition v2).
 schema_version: 2
 
@@ -13,16 +14,25 @@ app:
   author: "you@example.com"
   category: "coding"
 
+ui:
+  workspace:
+    position: hidden
+
 agents:
   - id: main
     role: worker
     brain:
-      provider: anthropic
-      model: claude-sonnet-4-6
+      # zen-mimo-v2.5-free via the Digitorn gateway (provider
+      # opencode_zen_public). api_key + base_url are placeholders ignored
+      # on the gateway path for authenticated users.
+      provider: openai
+      backend: openai_compat
+      model: zen-mimo-v2.5-free
       temperature: 0.7
-      max_tokens: 4096
+      max_tokens: 8192
       config:
-        api_key: "{{env.ANTHROPIC_API_KEY}}"
+        api_key: placeholder
+        base_url: https://api.openai.com/v1
     system_prompt: |
       You are a helpful assistant with filesystem access.
       Use filesystem.read and filesystem.grep when you need to look at code.

@@ -958,6 +958,11 @@ tools:
   # routing topology). See the "When intent is unclear" section of
   # the system_prompt for the policy.
   capabilities:
+    # Lovable must run its own tooling (npm install / run dev / npx) which the
+    # risk gate classifies as ``high``. The shell module is already locked to
+    # [npm, npx, node, pnpm, yarn] (see tools.modules.shell.constraints), so
+    # raising the ceiling to ``high`` is safe — it can't run arbitrary bash.
+    max_risk_level: high
     grant:
       - module: context_builder
         actions: [ask_user]
