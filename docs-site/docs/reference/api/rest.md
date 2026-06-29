@@ -30,7 +30,7 @@ CLI, not the raw HTTP routes:
 | Task | Use this |
 |------|----------|
 | Build apps, manage sessions, send messages | Use the native CLI or the chat client |
-| Build a Lovable-style preview | [React Preview SDK](../../language/47-preview-sdk.md) |
+| Build a Lovable-style preview | React Preview SDK |
 | Subscribe to live events | [Socket.IO Protocol](socketio.md) |
 | Drive everything from a terminal | [CLI reference](../cli/) |
 | Authenticate against the daemon | The SDK / CLI handles tokens automatically |

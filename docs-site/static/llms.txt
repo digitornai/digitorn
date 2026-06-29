@@ -1,0 +1,153 @@
+# Digitorn
+
+> Declarative AI agent runtime. Build, run and ship AI agents in YAML: a powerful daemon runtime, a desktop app, a CLI and a Hub of ready-to-run agents, with access to frontier models through one gateway.
+
+## Getting started
+
+- [Digitorn Documentation](https://docs.digitorn.ai/docs): A declarative runtime for building AI agent applications.
+- [Install](https://docs.digitorn.ai/docs/install): Digitorn is a multi-process system: the daemon (digitornd) spawns separate worker executables as subprocesses.
+- [Versioning and stability](https://docs.digitorn.ai/docs/versioning): Digitorn ships under semantic versioning at the release level and an explicit YAML language version (schemaversion).
+
+## Tutorials
+
+- [2. Conversation with memory](https://docs.digitorn.ai/docs/tutorial/conversation-with-memory): In step 1 you deployed a stateless echo bot.
+- [3. Add a tool](https://docs.digitorn.ai/docs/tutorial/add-a-tool): In step 2 the agent had memory but no way to look at the world.
+- [4. Multi-agent team](https://docs.digitorn.ai/docs/tutorial/multi-agent): In step 3 a single agent did everything: think, call tools, reply.
+- [5. Background mode](https://docs.digitorn.ai/docs/tutorial/background-mode): The first four tutorials all ran in runtime.mode: conversation - the agent only thinks when a user types something.
+- [6. UI surfaces](https://docs.digitorn.ai/docs/tutorial/ui-surfaces): So far the agent has been a chat-only thing.
+- [7. Deploying](https://docs.digitorn.ai/docs/tutorial/deploying): The first six tutorials all stayed in dev mode: defaultpolicy: auto, every action available, broad timeouts, no behaviour rules.
+- [Advanced 1 - Sub-agent isolation](https://docs.digitorn.ai/docs/tutorial/advanced-01-sub-agent-isolation): In tutorial 4 you spawned specialists in parallel.
+- [Advanced 2 - Bundle namespaces and skills](https://docs.digitorn.ai/docs/tutorial/advanced-02-bundle-skills): The previous tutorials kept the entire app in one YAML.
+- [Advanced 3 - Discovery mode for large toolsets](https://docs.digitorn.ai/docs/tutorial/advanced-03-discovery): The earlier tutorials all ran in direct tool injection: every tool's full JSON schema was shipped to the model up front, in the system prompt's tool list.
+- [Advanced 4 - Behavior engine](https://docs.digitorn.ai/docs/tutorial/advanced-04-behavior): System prompts are guidelines.
+- [Advanced 5 - Middleware pipeline](https://docs.digitorn.ai/docs/tutorial/advanced-05-middleware): The capabilities gate decides which actions the agent can call.
+- [Advanced 6 - Brain fallback for billing failover](https://docs.digitorn.ai/docs/tutorial/advanced-06-brain-fallback): The most common reason a production agent app stops working mid-conversation isn't a bug - it's the LLM provider returning a 402 Insufficient Balance.
+- [Advanced 7 - Hooks pipe (tool chaining)](https://docs.digitorn.ai/docs/tutorial/advanced-07-hooks-pipe): The behaviour engine adds rules around tool calls; middleware wraps the LLM call.
+- [Advanced 8 - App composition with call_app](https://docs.digitorn.ai/docs/tutorial/advanced-08-composition): A multi-agent app fans work out across specialists inside one app.
+- [Advanced 9 - The background_run primitive](https://docs.digitorn.ai/docs/tutorial/advanced-09-background-run): A normal tool call blocks the agent loop.
+- [Advanced 10 - Parallel tool execution with run_parallel](https://docs.digitorn.ai/docs/tutorial/advanced-10-run-parallel): Tutorial 4 showed how to spawn parallel sub-agents.
+- [Advanced 11 - Session forking](https://docs.digitorn.ai/docs/tutorial/advanced-11-session-fork): A Digitorn session is a stateful conversation thread: turn history, memory, working facts, workspace contents.
+- [Advanced 12 - MCP server integration](https://docs.digitorn.ai/docs/tutorial/advanced-12-mcp-server): The Model Context Protocol (MCP) is Anthropic's open spec for "tool servers": small subprocesses that expose a typed catalogue of tools, resources, and prompts over a JSON-RPC stream.
+- [Advanced 13 - Locking down the toolset (3 mechanisms)](https://docs.digitorn.ai/docs/tutorial/advanced-13-locking-down-tools): You almost never want every loaded module's full action set exposed to the agent.
+- [Advanced 14 - Red-team report (5 attacks against the daemon)](https://docs.digitorn.ai/docs/tutorial/advanced-14-redteam): This page documents five concrete attacks against the daemon, with verbatim transcripts of what worked and what didn't.
+- [Advanced 15 - Coordinator + specialist sub-agents](https://docs.digitorn.ai/docs/tutorial/advanced-15-parallel-spawn): A coordinator agent fans a task out to several specialist sub-agents, then synthesises the collected results.
+- [Advanced 16 - Self-correction loop with built-in lint](https://docs.digitorn.ai/docs/tutorial/advanced-16-selfcorrect-builtin): The workspace module ships a small set of built-in content validators for the most common file formats.
+- [Advanced 17 - Block destructive commands with a custom behavior rule](https://docs.digitorn.ai/docs/tutorial/advanced-17-gate-destructive): The behavior engine intercepts every tool call before it executes and runs the app's rules against it.
+- [Advanced 18 - Composing hook primitives around a tool](https://docs.digitorn.ai/docs/tutorial/advanced-18-hook-chain): The Hooks V2 engine exposes a small set of primitive actions that compose into non-trivial workflows without writing any middleware.
+- [Advanced 19 - Slash commands: builtin dispatch and client templates](https://docs.digitorn.ai/docs/tutorial/advanced-19-slash-commands): Slash commands give the chat composer a /<word palette that fires either a builtin (dispatched server-side by the daemon, no LLM call) or a template (rendered client-side with variable substitution, s
+- [Advanced 20 - Multimodal image input](https://docs.digitorn.ai/docs/tutorial/advanced-20-multimodal-image): The chat API accepts image attachments on every user message.
+- [Advanced 21 - RAG knowledge base query](https://docs.digitorn.ai/docs/tutorial/advanced-21-rag-kb): The rag module ships a complete retrieval-augmented generation pipeline: pluggable vector backend (Qdrant, Chroma, LanceDB, Pinecone, pgvector, Elasticsearch), FastEmbed embeddings, hybrid search (sem
+- [Advanced 22 - MCP tool integration (Sequential Thinking)](https://docs.digitorn.ai/docs/tutorial/advanced-22-mcp): The mcp module connects an app to any Model Context Protocol server: official Anthropic servers (Sequential Thinking, Memory, Filesystem, Fetch), community catalog entries (GitHub, Notion, Slack), or 
+- [Advanced tutorials](https://docs.digitorn.ai/docs/tutorial/advanced-index): The first seven tutorials covered the basic shape of a Digitorn app: a YAML, a brain, a few tools, capabilities, deploy, chat.
+- [Tutorial](https://docs.digitorn.ai/docs/tutorial): A linear path from "hello world" to a production-shape multi-agent app.
+- [Security 1 - Human-in-the-loop approval](https://docs.digitorn.ai/docs/tutorial/security-01-approval): A capability grant says "the agent may call this without asking".
+- [Security 2 - The seven security gates](https://docs.digitorn.ai/docs/tutorial/security-02-gates): Every tool call in Digitorn passes through a sequence of seven in-order security gates.
+- [Security 3 - Custom behaviour rule that blocks](https://docs.digitorn.ai/docs/tutorial/security-03-custom-rule): Advanced 4 showed the behaviour profiles - bundles of rules tuned to a working style.
+- [Security 4 - Hidden actions vs deny](https://docs.digitorn.ai/docs/tutorial/security-04-hidden-vs-deny): Security 1 covered approve and Security 2 covered the gate sequence.
+- [Security 5 - Credentials vault and scopes](https://docs.digitorn.ai/docs/tutorial/security-05-credentials): API keys, OAuth tokens, mTLS pairs - every real Digitorn app needs at least one secret.
+- [Security 6 - OS sandbox profiles](https://docs.digitorn.ai/docs/tutorial/security-06-sandbox): The previous five security tutorials covered application-level defences: capabilities decide which actions the agent can call, the behaviour engine intercepts patterns of use, the credentials vault en
+- [Security 7 - Audit log and observability](https://docs.digitorn.ai/docs/tutorial/security-07-audit): The first six security tutorials all relied on the same daemon behaviour: when a gate or a behaviour rule rejects a tool call, the daemon writes a row that says what was attempted, by whom, when, and 
+- [Security tutorials](https://docs.digitorn.ai/docs/tutorial/security-index): The basic tutorials gave you an app that runs.
+
+## Language
+
+- [Digitorn App Language Reference](https://docs.digitorn.ai/docs/language): Digitorn apps are declared in a single YAML file.
+- [Getting Started](https://docs.digitorn.ai/docs/language/getting-started): The shortest path from a fresh install to a chat reply is roughly two minutes.
+- [App Configuration](https://docs.digitorn.ai/docs/language/app-config): The canonical reference for the Digitorn app YAML.
+- [Agents](https://docs.digitorn.ai/docs/language/agents): Each entry under the top-level agents: list is an AgentDefinition (strict schema, extra: forbid).
+- [Tools](https://docs.digitorn.ai/docs/language/tools): Digitorn agents call tools through a discovery architecture.
+- [Built-in Tools](https://docs.digitorn.ai/docs/language/04b-builtin-tools): Some tools are exposed to the agent without declaring a tools.modules entry - they're either always-available primitives provided by the contextbuilder module, or short-named aliases the runtime adds 
+- [Execution Primitives](https://docs.digitorn.ai/docs/language/04c-primitives): The contextbuilder module exposes a small set of primitives for parallel execution, background tasks, persistent monitoring, and time-based jobs.
+- [MCP - Model Context Protocol](https://docs.digitorn.ai/docs/language/04d-mcp): The mcp module connects external MCP servers to Digitorn agents.
+- [Output Channels (delivery side of the Channels module)](https://docs.digitorn.ai/docs/language/channels): You probably want Channels Module.
+- [Cognitive Memory](https://docs.digitorn.ai/docs/language/memory): The memory module gives an agent a small working brain: a goal, a todo list, persistent facts that survive context compaction, and a per-session/per-user store the runtime auto-injects into the system
+- [Context Management](https://docs.digitorn.ai/docs/language/context-management): LLM context windows are finite.
+- [Flows](https://docs.digitorn.ai/docs/language/flows): A flow is a declarative orchestration graph for an app: nodes (agents, tools, decisions, gates, ...) chained by conditional edges.
+- [Macros](https://docs.digitorn.ai/docs/language/macros): There is no macros: block in the canonical schema.
+- [Background Mode & Triggers](https://docs.digitorn.ai/docs/language/triggers): Background mode lets an app run autonomously - reacting to events instead of waiting for user input.
+- [Expressions](https://docs.digitorn.ai/docs/language/expressions): Digitorn's template syntax for dynamic values in YAML.
+- [Security Architecture](https://docs.digitorn.ai/docs/language/security): Digitorn's security model has three independent surfaces, each configured by its own block in the YAML and enforced at a different layer:
+- [Multi-Agent Systems](https://docs.digitorn.ai/docs/language/multi-agent): Multi-agent apps have a coordinator that spawns isolated sub-agents.
+- [API Integration](https://docs.digitorn.ai/docs/language/api-integration): The HTTP API surface, the OAuth flows for per-app integrations, and the credentials manifest endpoints are not part of the public documentation contract.
+- [Examples](https://docs.digitorn.ai/docs/language/examples): 14 complete app YAMLs covering the canonical 8-block structure: minimal chat, one-shot, context management, local LLMs, security, multi-agent, background mode, execution primitives, watchers + schedul
+- [Middleware Pipeline](https://docs.digitorn.ai/docs/language/middleware): Middleware sits between the agent loop and the data flowing through it - intercepting, transforming, masking, or even short-circuiting LLM calls and tool calls.
+- [Web Module](https://docs.digitorn.ai/docs/language/web): MODULEID = "web".
+- [Skills](https://docs.digitorn.ai/docs/language/skills): Skills are reusable workflow commands packaged as markdown files.
+- [Authentication](https://docs.digitorn.ai/docs/language/auth): The daemon's HTTP authentication surface (/auth/) and the JWT issuance / refresh / revocation flows are not part of the public documentation contract.
+- [App Composition](https://docs.digitorn.ai/docs/language/composition): Three ways to combine Digitorn apps.
+- [Daemon Configuration](https://docs.digitorn.ai/docs/language/configuration): The Digitorn daemon (digitorn start) is configured by the Settings model.
+- [Observability & Monitoring](https://docs.digitorn.ai/docs/language/observability): The Digitorn daemon exposes health probes, JSON metrics, and (when prometheusclient is installed) Prometheus-formatted metrics over HTTP.
+- [LSP - Real-Time Code Diagnostics](https://docs.digitorn.ai/docs/language/lsp): The lsp module ( MODULEID = "lsp") runs language servers (pyright, gopls, eslint, ruff, texlab, ...) as persistent subprocesses and exposes their diagnostics to the runtime.
+- [Hooks](https://docs.digitorn.ai/docs/language/tool-hooks): Hooks are declarative condition → action pairs that fire on runtime events (turn boundaries, tool calls, errors, agent spawns, ...).
+- [Project Memory](https://docs.digitorn.ai/docs/language/rules): Previously titled "Rules".
+- [Production Deployment](https://docs.digitorn.ai/docs/language/production): What changes when you take a Digitorn daemon out of digitorn start localhost mode and put it on the open internet.
+- [RAG Module](https://docs.digitorn.ai/docs/language/rag): Retrieval-Augmented Generation - knowledge bases, hybrid search, citations, semantic cache, Text2SQL.
+- [Background Sessions](https://docs.digitorn.ai/docs/language/background-sessions): Background apps don't wait for a user to type - they react to triggers (cron, file watch, HTTP webhook).
+- [Bundle namespaces - compile-time filesystem injection](https://docs.digitorn.ai/docs/language/bundle-namespaces): An app isn't just one YAML file - it's a bundle directory: the YAML plus a structured set of supporting files (prompts, skills, behavior profiles, assets, and YAML fragments).
+- [Channels Module](https://docs.digitorn.ai/docs/language/channels): The channels module is Digitorn's bidirectional I/O system.
+- [Behavior Engine](https://docs.digitorn.ai/docs/language/behavior): The behavior engine watches every tool call, tracks per-session state (sets, counters, flags), and acts when a declarative rule matches - block the call, inject a warning, or drop a post-tool reminder
+- [Client Manifest](https://docs.digitorn.ai/docs/language/client-manifest): The the chat client / web client reads the deployed app's YAML (through the daemon's app-detail surface) and uses the ui: block plus a handful of app: and runtime: fields to tailor its UI: which greet
+- [Multi-Tenant App Installs](https://docs.digitorn.ai/docs/language/multi-tenant): The same appid can be installed in two parallel scopes:
+- [App lifecycle & chat](https://docs.digitorn.ai/docs/language/dev-cli): The Go CLI provides commands for developing and testing apps.
+- [YAML grammar](https://docs.digitorn.ai/docs/language/grammar): The formal grammar of the schemaversion: 2 Digitorn YAML language.
+
+## Concepts
+
+- [Glossary](https://docs.digitorn.ai/docs/concepts/glossary): | Term | Definition | |------|-----------| | Action | A function exposed by a module that an agent can call.
+- [Concepts](https://docs.digitorn.ai/docs/concepts): The mental models behind Digitorn.
+
+## How-tos
+
+- [Attach files to a chat session](https://docs.digitorn.ai/docs/howtos/attach-files-to-chat): The chat composer ships with a paperclip menu that lets the user drag-drop or pick files for the current message.
+- [Build a RAG bot](https://docs.digitorn.ai/docs/howtos/build-a-rag-bot): A RAG bot answers questions from a folder of documents.
+- [How-tos](https://docs.digitorn.ai/docs/howtos): Task-oriented recipes.
+- [How to install an MCP server](https://docs.digitorn.ai/docs/howtos/install-an-mcp-server): Digitorn treats MCP servers like apps in an app store: the Hub curates a catalog of well-known servers, you click Install, fill any personal credential the server needs, and your agents can reference 
+
+## Reference
+
+- [HTTP API reference](https://docs.digitorn.ai/docs/reference/api): The daemon exposes its surface over three protocols, all on the same TCP port (default 8000):
+- [HTTP API](https://docs.digitorn.ai/docs/reference/api/rest): The daemon exposes its full surface over HTTP under /api/, plus an authentication surface under /auth/ and Kubernetes liveness probes ((health probe), (liveness probe), (readiness probe)).
+- [Socket.IO Protocol](https://docs.digitorn.ai/docs/reference/api/socketio): Digitorn streams all runtime events via Socket.IO.
+- [CLI reference](https://docs.digitorn.ai/docs/reference/cli): The digitorn command is the official native TUI/CLI client for the Digitorn daemon.
+- [Client SDKs](https://docs.digitorn.ai/docs/reference/client-sdks): | Client | Page | Use it for | |--------|------|-----------| | React preview SDK | preview-sdk.md | The @digitorn/preview-sdk npm package.
+- [Reference](https://docs.digitorn.ai/docs/reference): This section is the alphabetical, exhaustive surface of every API the daemon exposes.
+- [agent_spawn Module](https://docs.digitorn.ai/docs/reference/modules/agent_spawn): One Agent tool, eight modes - spawn, wait, status, cancel, reassign, list, multi-wait.
+- [behavior Module](https://docs.digitorn.ai/docs/reference/modules/behavior): Runtime behavioural enforcement.
+- [channels Module](https://docs.digitorn.ai/docs/reference/modules/channels): Bidirectional I/O - 11 adapters (webhooks, email, Slack, Telegram, Discord, voice, ...) + 11 LLM actions, full activation pipeline.
+- [context_builder Module](https://docs.digitorn.ai/docs/reference/modules/context_builder): Orchestration engine - tool indexing, system-prompt assembly, execution routing, primitives (parallel / background / watchers / ask_user / call_app / use_skill).
+- [cron_native Module](https://docs.digitorn.ai/docs/reference/modules/cron_native): Three actions to schedule, cancel, and remind - one-shot, recurring, natural-language delays.
+- [database Module](https://docs.digitorn.ai/docs/reference/modules/database): Multi-driver async SQL - 16 actions, named connections, schema introspection, transactions, replicas, FK relations.
+- [dev_tools Module](https://docs.digitorn.ai/docs/reference/modules/dev_tools): Three tools for testing and building Digitorn apps against a live daemon.
+- [filesystem Module](https://docs.digitorn.ai/docs/reference/modules/filesystem): Five agent-optimised filesystem actions - Read, Write, Edit, Glob, Grep. Same surface as Claude Code.
+- [http Module](https://docs.digitorn.ai/docs/reference/modules/http): HTTP client · REST verbs, file upload/download, SSRF-guarded.
+- [Module reference](https://docs.digitorn.ai/docs/reference/modules): The daemon ships 23 modules under Each module exposes a set of tool methods that agents call as tools.
+- [index Module](https://docs.digitorn.ai/docs/reference/modules/index_module): System module - unified knowledge index across data sources (filesystem, database, custom).
+- [llm_provider Module](https://docs.digitorn.ai/docs/reference/modules/llm_provider): System module - manages LLM provider connections, auto-configured from agent brains.
+- [lsp Module](https://docs.digitorn.ai/docs/reference/modules/lsp): Universal real-time language feedback - LSP servers, compilers, linters. Auto-detect, lazy startup, built-in fallback parsers.
+- [mcp Module](https://docs.digitorn.ai/docs/reference/modules/mcp): Model Context Protocol - connect to stdio / SSE / HTTP MCP servers, expose their tools as native tools.
+- [memory Module](https://docs.digitorn.ai/docs/reference/modules/memory): Cognitive memory - 4 LLM-exposed actions (TaskCreate, TaskUpdate, memory.set_goal, Remember) over 5 internal layers.
+- [preview Module](https://docs.digitorn.ai/docs/reference/modules/preview): Per-session live-canvas transport - state, named resources, ReactFlow nodes, events. All over Socket.IO.
+- [rag Module](https://docs.digitorn.ai/docs/reference/modules/rag): Production-grade RAG - 14 actions, 6 vector backends, hybrid retrieval, citations, semantic cache, Text2SQL, multi-query, CRAG.
+- [shell Module](https://docs.digitorn.ai/docs/reference/modules/shell): One Bash tool with five modes - sync, async, status, kill, stdin/wait/stream. Git Bash on Windows.
+- [web Module](https://docs.digitorn.ai/docs/reference/modules/web): Web search, fetch, extract, download - multi-backend, DuckDuckGo free default, SSRF-guarded.
+- [web_preview module](https://docs.digitorn.ai/docs/reference/modules/web_preview): Session-scoped iframe preview attachments.
+- [workspace Module](https://docs.digitorn.ai/docs/reference/modules/workspace): Six file actions for live-canvas apps - in-memory virtual FS streamed to the client over Socket.IO.
+- [Configuration Reference](https://docs.digitorn.ai/docs/reference/runtime/configuration): All ~100 configuration parameters across 17 sections.
+- [Credentials](https://docs.digitorn.ai/docs/reference/runtime/credentials): Centralised encrypted vault for all secrets.
+- [Hooks V2](https://docs.digitorn.ai/docs/reference/runtime/hooks): Condition-action hooks fired during the agent loop - 15 events, 14 conditions, 13 general actions + 5 builder-specific.
+- [Runtime reference](https://docs.digitorn.ai/docs/reference/runtime): Cross-cutting subsystems that touch every app at runtime, but aren't a single module.
+- [Middleware](https://docs.digitorn.ai/docs/reference/runtime/middleware): Pluggable middleware at three levels - App (LLM call), Module (action call), MCP (raw tool call).
+- [Image Support - Complete Specification](https://docs.digitorn.ai/docs/reference/runtime/multimodal): All core components implemented and tested:
+- [Tool Chaining - Runtime Primitive](https://docs.digitorn.ai/docs/reference/runtime/tool-chaining): Route the output of any tool (native module or MCP server) into any other tool.
+- [User Skills & `/use_skill`](https://docs.digitorn.ai/docs/reference/runtime/user-skills): User-authored skills, the `/use_skill` composer command, and the turn-scoped system-prompt injection that backs them.
+- [Voice transcription](https://docs.digitorn.ai/docs/reference/runtime/voice): The daemon ships a voice-transcription pipeline.
+- [Workdir Sandbox](https://docs.digitorn.ai/docs/reference/runtime/workdir-sandbox): Centralised path confinement for every agent-facing module - filesystem, workspace, shell, MCP. One PathPolicy, one rule.
+
+## Deployment
+
+- [Preview cloud deployment](https://docs.digitorn.ai/docs/deployment/cloud-preview): How to run webpreview in a multi-tenant cloud where the daemon sits on a server and users connect from their browsers somewhere else.
+- [Deployment](https://docs.digitorn.ai/docs/deployment): Operational documentation: how to run a Digitorn daemon as a service in a production environment, how to plan capacity, how to harden it against the public internet.
+
+## Examples
+
+- [Examples](https://docs.digitorn.ai/docs/examples): Working YAMLs.

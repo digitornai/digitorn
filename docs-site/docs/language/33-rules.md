@@ -62,7 +62,7 @@ runtime:
 | Order | Path | Notes |
 |-------|------|-------|
 | 1 | `.digitorn/apps/<app_id>/.digitorn.md` | App-specific. Always safe to auto-load - lives in a per-app namespaced directory. |
-| 2 | `<workspace>/.digitorn.md` | Project-wide memory. Explicitly namespaced for the framework. |
+| 2 | `<workspace>/.digitorn.md` | Project-wide memory. Explicitly namespaced for the runtime. |
 
 > **Security note.** `CLAUDE.md` and `README.md` in the workspace
 > root are **not** auto-loaded under `auto`

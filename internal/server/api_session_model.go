@@ -59,7 +59,9 @@ func agentBrainByID(def *schema.AppDefinition, id string) *schema.Brain {
 	return nil
 }
 
-// --- gateway model catalog (id → kind), cached briefly for switch validation ---
+// --- gateway model catalog (id → kind), cached for switch validation + window resolution ---
+const gwCatalogTTL = 15 * time.Minute
+
 var gwCatalog struct {
 	mu      sync.Mutex
 	at      time.Time
@@ -67,12 +69,15 @@ var gwCatalog struct {
 	windows map[string]int
 }
 
-// gatewayModelKinds fetches the gateway's /models and returns id→kind, cached 30s.
+// gatewayModelKinds fetches the gateway's /models and returns id→kind. The model
+// catalog (id → kind/window) is stable infrastructure, so it is cached for
+// gwCatalogTTL — long enough that a single warm (e.g. the client opening a
+// session) keeps the authoritative window available across a turn sequence.
 // Returns an error when the gateway is unreachable — the caller then stays lenient
 // (the gateway re-validates the model at turn time anyway).
 func (d *Daemon) gatewayModelKinds(ctx context.Context, bearer string) (map[string]string, error) {
 	gwCatalog.mu.Lock()
-	if gwCatalog.kinds != nil && time.Since(gwCatalog.at) < 30*time.Second {
+	if gwCatalog.kinds != nil && time.Since(gwCatalog.at) < gwCatalogTTL {
 		k := gwCatalog.kinds
 		gwCatalog.mu.Unlock()
 		return k, nil
@@ -86,7 +91,11 @@ func (d *Daemon) gatewayModelKinds(ctx context.Context, bearer string) (map[stri
 	if base == "" {
 		return nil, fmt.Errorf("no gateway url configured")
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/models", nil)
+	// The gateway's OpenAI-compatible catalog lives at /v1/models. The configured
+	// base may or may not already include /v1 (prod omits it, local includes it),
+	// so trim it first to never produce /v1/v1/models.
+	base = strings.TrimSuffix(base, "/v1")
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/v1/models", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -152,6 +161,9 @@ func (d *Daemon) getSessionModel(w http.ResponseWriter, r *http.Request) {
 	sessionEntry := state.EntryAgent
 	overrides := make(map[string]string, len(state.ModelOverrides))
 	maps.Copy(overrides, state.ModelOverrides)
+	effortOverrides := make(map[string]string, len(state.EffortOverrides))
+	maps.Copy(effortOverrides, state.EffortOverrides)
+	sessionEffort := state.ReasoningEffort
 	state.RUnlock()
 
 	// Warm the gateway window cache while we hold a user token, so the background
@@ -179,15 +191,22 @@ func (d *Daemon) getSessionModel(w http.ResponseWriter, r *http.Request) {
 		if ov != "" {
 			effective = ov
 		}
+		effOv := effortOverrides[a.ID]
+		effEffective := effOv
+		if effEffective == "" {
+			effEffective = sessionEffort
+		}
 		agents = append(agents, map[string]any{
-			"agent":    a.ID,
-			"role":     a.Role,
-			"entry":    a.ID == entryID,
-			"model":    effective,
-			"override": ov,
-			"default":  a.Brain.Model,
-			"declared": a.Brain.Models,
-			"kind":     a.Brain.Kind,
+			"agent":           a.ID,
+			"role":            a.Role,
+			"entry":           a.ID == entryID,
+			"model":           effective,
+			"override":        ov,
+			"default":         a.Brain.Model,
+			"declared":        a.Brain.Models,
+			"kind":            a.Brain.Kind,
+			"effort":          effEffective,
+			"effort_override": effOv,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -212,6 +231,7 @@ func (d *Daemon) putSessionModel(w http.ResponseWriter, r *http.Request) {
 		Agent          string `json:"agent"`
 		Model          string `json:"model"`
 		MaxContextTokens int  `json:"max_ctx_tokens"`
+		ReasoningEffort string `json:"reasoning_effort"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
@@ -286,7 +306,7 @@ func (d *Daemon) putSessionModel(w http.ResponseWriter, r *http.Request) {
 		SessionID: sid,
 		AppID:     appID,
 		UserID:    userID,
-		Meta:      &sessionstore.MetaPayload{Model: model, AgentID: agentID, MaxContextTokens: maxCtx},
+		Meta:      &sessionstore.MetaPayload{Model: model, AgentID: agentID, MaxContextTokens: maxCtx, ReasoningEffort: strings.TrimSpace(req.ReasoningEffort)},
 	}); err != nil {
 		writeError(w, appendErrStatus(err), "append_failed", err.Error())
 		return

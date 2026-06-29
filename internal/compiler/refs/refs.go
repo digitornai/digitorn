@@ -244,12 +244,30 @@ func (c *checker) checkFlow() {
 			}
 		}
 		for j, r := range node.Routes {
-			if r.To != "" && !c.hasFlowNode(r.To) {
+			if r.To != "" && !c.isFlowTarget(r.To) {
 				c.emit(diagnostic.CodeUnknownAgent, c.pos(fmt.Sprintf("%s.routes.%d.to", base, j)),
 					fmt.Sprintf("flow route points to unknown node %q", r.To), "")
 			}
 		}
+		for j, r := range node.OnError {
+			if r.To != "" && !c.isFlowTarget(r.To) {
+				c.emit(diagnostic.CodeUnknownAgent, c.pos(fmt.Sprintf("%s.on_error.%d.to", base, j)),
+					fmt.Sprintf("flow on_error route points to unknown node %q", r.To), "")
+			}
+		}
+		for j, b := range node.Branches {
+			if b.To != "" && !c.isFlowTarget(b.To) {
+				c.emit(diagnostic.CodeUnknownAgent, c.pos(fmt.Sprintf("%s.branches.%d.to", base, j)),
+					fmt.Sprintf("flow branch points to unknown node %q", b.To), "")
+			}
+		}
 	}
+}
+
+// isFlowTarget reports whether a route/branch target is valid: a declared node
+// or the literal "end" sentinel that terminates a path (per docs/language/07-flows).
+func (c *checker) isFlowTarget(id string) bool {
+	return id == "end" || c.hasFlowNode(id)
 }
 
 func (c *checker) hasFlowNode(id string) bool {

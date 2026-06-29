@@ -12,7 +12,7 @@ semantics and worked examples, follow the per-block links.
 > **Notation.** The blocks below use a record-style sugar built on
 > top of EBNF: `{ ... }` enumerates the *fields* of an object (not
 > "repetition" as in strict EBNF), and `[ ... ]` marks a field as
-> optional. Lists use `[Item, ...]`. This is intentional — the
+> optional. Lists use `[Item, ...]`. This is intentional · the
 > grammar describes YAML records, not a token stream.
 
 ## Top level
@@ -189,7 +189,7 @@ SecurityBlock ::= {
 ```
 
 Each sub-block has its own grammar covered in
-[Behavior Engine](43-behavior.md), [OS Sandbox](35-sandbox.md),
+[Behavior Engine](43-behavior.md), OS Sandbox,
 and [Credentials](../reference/runtime/credentials.md).
 
 ## `ui:` UIBlock

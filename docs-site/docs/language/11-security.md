@@ -345,7 +345,7 @@ supports. Use `audit: true` to capture the actual enforcement
 decisions per session.
 
 For the kernel-level details (seccomp profile, Landlock rules,
-seccomp-notify audit), see [OS Sandbox](35-sandbox.md).
+seccomp-notify audit), see OS Sandbox.
 
 ## Audit log
 
@@ -377,7 +377,7 @@ wildcard match, plus `actor_user_id`, `target_user_id`,
   - `tools.capabilities`, `security.behavior`, `security.sandbox`.
 - Behavioural rules deep dive: [Behavior Engine](43-behavior.md)
   - every built-in rule, classifier prompt, custom rule format.
-- OS sandbox details: [OS Sandbox](35-sandbox.md)
+- OS sandbox details: OS Sandbox
   - Landlock rules, seccomp profile, platform-specific behaviour.
 - Credentials vault (separate from the gate engine):
   [credentials.md](../reference/runtime/credentials.md).

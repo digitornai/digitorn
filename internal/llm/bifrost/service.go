@@ -2,10 +2,12 @@ package bifrost
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	bifrost "github.com/maximhq/bifrost/core"
@@ -466,7 +468,7 @@ func (s *Service) buildAudioContext(parent context.Context, r audioRoute) (*sche
 func (s *Service) buildContext(parent context.Context, req *llm.ChatRequest) (*schemas.BifrostContext, context.CancelFunc, *routeInfo) {
 	timeout := req.Timeout
 	if timeout <= 0 {
-		timeout = 60 * time.Second
+		timeout = 600 * time.Second
 	}
 	bc, cancel := schemas.NewBifrostContextWithTimeout(parent, timeout)
 	// Single ctx.Value entry : keeps the lookup chain at depth 1 inside
@@ -620,6 +622,15 @@ func (s *Service) buildChatRequest(req *llm.ChatRequest) *schemas.BifrostChatReq
 			}
 		}
 	}
+	if req.ReasoningEffort != "" {
+		if params == nil {
+			params = &schemas.ChatParameters{}
+		}
+		if params.ExtraParams == nil {
+			params.ExtraParams = map[string]interface{}{}
+		}
+		params.ExtraParams["reasoning_effort"] = req.ReasoningEffort
+	}
 	if params != nil {
 		out.Params = params
 	}
@@ -664,10 +675,32 @@ func mapChatResponse(r *schemas.BifrostChatResponse) *llm.ChatResponse {
 			if msg.ChatAssistantMessage != nil && msg.ChatAssistantMessage.Reasoning != nil {
 				out.ReasoningContent = *msg.ChatAssistantMessage.Reasoning
 			}
+			// Natively-generated images arrive in the assistant message's
+			// content blocks (data-URI or remote URL) for providers that
+			// surface them through the chat-completions shape.
+			if msg.Content != nil {
+				for i := range msg.Content.ContentBlocks {
+					if mp, ok := imageBlockToMedia(&msg.Content.ContentBlocks[i]); ok {
+						out.OutputMedia = append(out.OutputMedia, mp)
+					}
+				}
+			}
 		}
 		if ch.FinishReason != nil {
 			out.FinishReason = *ch.FinishReason
 		}
+	}
+	// Generated videos are surfaced at the response level by bifrost.
+	for i := range r.Videos {
+		v := r.Videos[i]
+		if v.URL == "" {
+			continue
+		}
+		mp := llm.ContentPart{Type: llm.ContentTypeVideo, URL: v.URL}
+		if v.ThumbnailURL != nil {
+			mp.Thumbnail = *v.ThumbnailURL
+		}
+		out.OutputMedia = append(out.OutputMedia, mp)
 	}
 	if r.Usage != nil {
 		out.Usage = llm.Usage{
@@ -690,6 +723,41 @@ func mapChatResponse(r *schemas.BifrostChatResponse) *llm.ChatResponse {
 		}
 	}
 	return out
+}
+
+// imageBlockToMedia converts a bifrost assistant content block into an output
+// media part when it carries a generated image — a ``data:<mime>;base64,…``
+// URI decodes to inline bytes, a remote ``http(s)`` URL is kept as a URL.
+// Returns ok=false for non-image / empty blocks.
+func imageBlockToMedia(b *schemas.ChatContentBlock) (llm.ContentPart, bool) {
+	if b == nil || b.Type != schemas.ChatContentBlockTypeImage || b.ImageURLStruct == nil {
+		return llm.ContentPart{}, false
+	}
+	url := b.ImageURLStruct.URL
+	if url == "" {
+		return llm.ContentPart{}, false
+	}
+	if strings.HasPrefix(url, "data:") {
+		// data:<mime>;base64,<payload>
+		comma := strings.IndexByte(url, ',')
+		if comma < 0 {
+			return llm.ContentPart{}, false
+		}
+		meta, payload := url[len("data:"):comma], url[comma+1:]
+		mime := meta
+		if semi := strings.IndexByte(meta, ';'); semi >= 0 {
+			mime = meta[:semi]
+		}
+		data, err := base64.StdEncoding.DecodeString(payload)
+		if err != nil || len(data) == 0 {
+			return llm.ContentPart{}, false
+		}
+		if mime == "" {
+			mime = "image/png"
+		}
+		return llm.ContentPart{Type: llm.ContentTypeImage, Mime: mime, Data: data}, true
+	}
+	return llm.ContentPart{Type: llm.ContentTypeImage, URL: url}, true
 }
 
 func mapChatChunk(c *schemas.BifrostStreamChunk) *llm.ChatChunk {

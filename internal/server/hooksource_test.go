@@ -38,6 +38,7 @@ func (s *stubApps) Uninstall(context.Context, string, bool) error { panic("not u
 func (s *stubApps) Enable(context.Context, string) error          { panic("not used") }
 func (s *stubApps) Disable(context.Context, string) error         { panic("not used") }
 func (s *stubApps) SetBYOK(context.Context, string, bool) error   { panic("not used") }
+func (s *stubApps) SetDisplayName(context.Context, string, string) error { panic("not used") }
 func (s *stubApps) Reload(context.Context, string) error          { panic("not used") }
 func (s *stubApps) CheckUpdate(context.Context, string, string) (*appmgr.UpdateInfo, error) {
 	panic("not used")

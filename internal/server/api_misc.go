@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"runtime"
@@ -8,7 +9,10 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
+	"github.com/mbathepaul/digitorn/internal/persistence/models"
 	"github.com/mbathepaul/digitorn/internal/runtime/policy/approval"
 	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
 )
@@ -143,31 +147,103 @@ func (d *Daemon) resolveApproval(w http.ResponseWriter, r *http.Request) {
 
 // ---------- Secrets (in-memory V1) ----------
 
+// secretSealer encrypts a secret value at rest. *mcpoauth.Sealer satisfies it.
+type secretSealer interface {
+	Seal([]byte) (string, error)
+	Open(string) ([]byte, error)
+}
+
+// secretStore holds per-user per-app secrets. When db+sealer are set it persists
+// them encrypted (survives restart, readable by the background service through
+// the daemon); the in-memory map is a write-through cache. With no sealer it
+// degrades to memory-only (dev / no key file).
 type secretStore struct {
-	mu   sync.RWMutex
-	data map[string]map[string]map[string]string
+	mu     sync.RWMutex
+	data   map[string]map[string]map[string]string
+	db     *gorm.DB
+	sealer secretSealer
 }
 
 func newSecretStore() *secretStore {
 	return &secretStore{data: map[string]map[string]map[string]string{}}
 }
 
+func newPersistedSecretStore(db *gorm.DB, sealer secretSealer) *secretStore {
+	return &secretStore{
+		data:   map[string]map[string]map[string]string{},
+		db:     db,
+		sealer: sealer,
+	}
+}
+
+func (s *secretStore) persists() bool { return s.db != nil && s.sealer != nil }
+
 func (s *secretStore) get(user, app, key string) (string, bool) {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
 	if u, ok := s.data[user]; ok {
 		if a, ok := u[app]; ok {
-			v, ok := a[key]
-			return v, ok
+			if v, ok := a[key]; ok {
+				s.mu.RUnlock()
+				return v, true
+			}
+		}
+	}
+	s.mu.RUnlock()
+	if !s.persists() {
+		return "", false
+	}
+	var row models.UserAppSecret
+	if err := s.db.Where("user_id = ? AND app_id = ? AND key = ?", user, app, key).
+		First(&row).Error; err != nil {
+		return "", false
+	}
+	plain, err := s.sealer.Open(row.Sealed)
+	if err != nil {
+		return "", false
+	}
+	v := string(plain)
+	s.cacheSet(user, app, key, v)
+	return v, true
+}
+
+// getAny returns a secret for (app, key) regardless of which user set it —
+// installation-scoped resolution for shared resources like a channel bot token
+// (one bot per app install). Used when the daemon resolves `{{secret.X}}` in a
+// channel's config before pushing it to the background service.
+func (s *secretStore) getAny(app, key string) (string, bool) {
+	if s.persists() {
+		var row models.UserAppSecret
+		if err := s.db.Where("app_id = ? AND key = ?", app, key).First(&row).Error; err == nil {
+			if plain, err := s.sealer.Open(row.Sealed); err == nil {
+				return string(plain), true
+			}
+		}
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, apps := range s.data {
+		if a, ok := apps[app]; ok {
+			if v, ok := a[key]; ok {
+				return v, true
+			}
 		}
 	}
 	return "", false
 }
 
 func (s *secretStore) all(user, app string) map[string]string {
+	out := map[string]string{}
+	if s.persists() {
+		var rows []models.UserAppSecret
+		if err := s.db.Where("user_id = ? AND app_id = ?", user, app).Find(&rows).Error; err == nil {
+			for _, r := range rows {
+				out[r.Key] = "********"
+			}
+			return out
+		}
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := map[string]string{}
 	if u, ok := s.data[user]; ok {
 		if a, ok := u[app]; ok {
 			for k := range a {
@@ -179,6 +255,22 @@ func (s *secretStore) all(user, app string) map[string]string {
 }
 
 func (s *secretStore) set(user, app, key, value string) {
+	s.cacheSet(user, app, key, value)
+	if !s.persists() {
+		return
+	}
+	sealed, err := s.sealer.Seal([]byte(value))
+	if err != nil {
+		return
+	}
+	row := models.UserAppSecret{UserID: user, AppID: app, Key: key, Sealed: sealed, UpdatedAt: time.Now().UTC()}
+	s.db.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "user_id"}, {Name: "app_id"}, {Name: "key"}},
+		DoUpdates: clause.AssignmentColumns([]string{"sealed", "updated_at"}),
+	}).Create(&row)
+}
+
+func (s *secretStore) cacheSet(user, app, key, value string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.data[user]; !ok {
@@ -192,21 +284,25 @@ func (s *secretStore) set(user, app, key, value string) {
 
 func (s *secretStore) delete(user, app, key string) bool {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if u, ok := s.data[user]; ok {
 		if a, ok := u[app]; ok {
-			if _, ok := a[key]; ok {
-				delete(a, key)
-				return true
-			}
+			delete(a, key)
 		}
 	}
-	return false
+	s.mu.Unlock()
+	if !s.persists() {
+		return true
+	}
+	res := s.db.Where("user_id = ? AND app_id = ? AND key = ?", user, app, key).
+		Delete(&models.UserAppSecret{})
+	return res.Error == nil && res.RowsAffected > 0
 }
 
 func (d *Daemon) ensureSecretStore() *secretStore {
 	d.secretsOnce.Do(func() {
-		d.secrets = newSecretStore()
+		if d.secrets == nil {
+			d.secrets = newSecretStore()
+		}
 	})
 	return d.secrets
 }
@@ -248,9 +344,57 @@ func (d *Daemon) setSecrets(w http.ResponseWriter, r *http.Request) {
 	}
 	s := d.ensureSecretStore()
 	for k, v := range req {
+		if v == secretSentinel {
+			continue // a redacted echo: keep the stored value, never overwrite
+		}
 		s.set(uid, appID, k, v)
 	}
+	d.repushChannelTriggers(appID, uid)
 	writeJSON(w, http.StatusOK, map[string]any{"updated": len(req)})
+}
+
+// bgAuthApp / bgAuthKey namespace the caller's auth refresh token in the secret
+// store (encrypted at rest). It is per-user, not per-app.
+const bgAuthApp = "__bg_auth__"
+const bgAuthKey = "refresh_token"
+
+// repushChannelTriggers re-resolves an app's channel configs (with freshly saved
+// secrets) and pushes them to the background as `userID`, attaching that user's
+// stored refresh token so background turns get a real per-user JWT. Best-effort
+// + async: never blocks the response.
+func (d *Daemon) repushChannelTriggers(appID, userID string) {
+	if d.cfg.Background.OpsURL == "" {
+		return
+	}
+	refresh, _ := d.ensureSecretStore().get(userID, bgAuthApp, bgAuthKey)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if ra, err := d.appMgr.Get(ctx, appID); err == nil && ra != nil && ra.Meta != nil {
+			d.pushTriggersAs(ctx, ra.Meta, userID, refresh)
+		}
+	}()
+}
+
+// setBackgroundToken stores the caller's auth refresh token so the background
+// service can mint fresh access tokens for their background apps. The web BFF
+// (which holds the refresh token) posts it when the user configures a background
+// app. Re-pushes nothing here; it lands with the next channel save / install.
+func (d *Daemon) setBackgroundToken(w http.ResponseWriter, r *http.Request) {
+	uid := userIDOf(r.Context())
+	var body struct {
+		RefreshToken string `json:"refresh_token"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	if body.RefreshToken == "" {
+		writeError(w, http.StatusBadRequest, "bad_request", "refresh_token required")
+		return
+	}
+	d.ensureSecretStore().set(uid, bgAuthApp, bgAuthKey, body.RefreshToken)
+	writeJSON(w, http.StatusOK, map[string]any{"stored": true})
 }
 
 type setSecretRequest struct {
@@ -266,7 +410,10 @@ func (d *Daemon) setSecret(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
-	d.ensureSecretStore().set(uid, appID, key, req.Value)
+	if req.Value != secretSentinel { // ignore a redacted echo; keep the stored value
+		d.ensureSecretStore().set(uid, appID, key, req.Value)
+	}
+	d.repushChannelTriggers(appID, uid)
 	writeJSON(w, http.StatusOK, map[string]any{"key": key, "updated": true})
 }
 

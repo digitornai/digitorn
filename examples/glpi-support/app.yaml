@@ -1,0 +1,278 @@
+schema_version: 2
+
+app:
+  app_id: glpi-support
+  name: GLPI Support Desk
+  short_name: GLPI Desk
+  icon: "🛠️"
+  color: "#1E88E5"
+  version: "1.0.0"
+  description: >
+    AI IT-support desk wired to GLPI. New tickets arrive by webhook, an agent
+    triages them, a specialist drafts a resolution from your IT knowledge base,
+    a human approves any write-back, and the answer is posted to the ticket via
+    the GLPI REST API. Deterministic, auditable, human-in-the-loop.
+  author: "Digitorn"
+  category: "support"
+
+# Background mode: the channels webhook trigger is armed by digitorn-background.
+runtime:
+  mode: background
+
+# ---------------------------------------------------------------------------
+# Agents — a triage coordinator + IT specialists. Specialists draft the reply
+# that will be posted back to GLPI after human approval.
+# ---------------------------------------------------------------------------
+agents:
+  - id: triage
+    role: coordinator
+    brain:
+      provider: openai
+      model: zen-deepseek-v4-flash-free
+      temperature: 0.1
+      config:
+        api_key: "{{env.OPENAI_API_KEY}}"
+    system_prompt: |
+      You are the triage brain of an IT support desk fed by GLPI tickets.
+      Read the ticket (title + body) and classify it into exactly one category:
+        - "network"  : VPN, Wi‑Fi, DNS, firewall, connectivity, outages
+        - "software" : application install/config/crash, Office, mail client
+        - "account"  : password, lockout, MFA, access requests, offboarding
+        - "other"    : anything else, unclear, or explicitly needs a human
+      Respond with ONLY a JSON object: {"category": "<one of the four>"}.
+
+  - id: network_expert
+    role: specialist
+    specialty: "Diagnoses network problems from the IT knowledge base."
+    brain:
+      provider: openai
+      model: zen-deepseek-v4-flash-free
+      temperature: 0.2
+      config:
+        api_key: "{{env.OPENAI_API_KEY}}"
+    system_prompt: |
+      You are an IT network specialist. Using ONLY the procedures in your
+      context, draft a concise, friendly reply to the ticket requester with
+      clear numbered steps. Never invent infrastructure details. If the issue
+      requires a privileged action (firewall change, site outage), say it will
+      be escalated to Network L2 instead of giving steps.
+
+      OUTPUT FORMAT — IMPORTANT: respond with ONLY a single JSON string literal
+      (a double-quoted, JSON-escaped string) containing your reply. No object,
+      no markdown, no code fences. Example: "Hi, please try the following: ..."
+
+  - id: software_expert
+    role: specialist
+    specialty: "Resolves software problems from the IT knowledge base."
+    brain:
+      provider: openai
+      model: zen-deepseek-v4-flash-free
+      temperature: 0.2
+      config:
+        api_key: "{{env.OPENAI_API_KEY}}"
+    system_prompt: |
+      You are an IT software specialist. Using ONLY the procedures in your
+      context, draft a concise, friendly reply with clear numbered steps.
+      License purchases, admin-rights actions, or data-loss situations must be
+      escalated to Software L2 rather than actioned.
+
+      OUTPUT FORMAT — IMPORTANT: respond with ONLY a single JSON string literal
+      (a double-quoted, JSON-escaped string) containing your reply. No object,
+      no markdown, no code fences.
+
+  - id: account_expert
+    role: specialist
+    specialty: "Handles account/access questions from the IT knowledge base."
+    brain:
+      provider: openai
+      model: zen-deepseek-v4-flash-free
+      temperature: 0.2
+      config:
+        api_key: "{{env.OPENAI_API_KEY}}"
+    system_prompt: |
+      You handle account and access tickets. Using ONLY the procedures in your
+      context, draft a concise, friendly reply. NEVER grant/remove access or
+      touch privileged accounts from a reply — those are escalated to IT
+      Security with approval; say so explicitly when relevant.
+
+      OUTPUT FORMAT — IMPORTANT: respond with ONLY a single JSON string literal
+      (a double-quoted, JSON-escaped string) containing your reply. No object,
+      no markdown, no code fences.
+
+# ---------------------------------------------------------------------------
+# Flow — triage → specialist → human approval gate → GLPI write-back.
+# When an app defines a flow, EVERY turn on the session runs the flow entry
+# node (the channel's per-event launch included), so routing lives here.
+# ---------------------------------------------------------------------------
+flow:
+  id: glpi
+  entry: triage_node
+  max_iterations: 30
+  description: "Triage → specialist draft → human approval → GLPI followup + resolve."
+  nodes:
+    - id: triage_node
+      type: agent
+      agent: triage
+      params:
+        task: "{{event.payload.message}}"
+      routes:
+        - { when: "category == 'network'", to: network_node }
+        - { when: "category == 'software'", to: software_node }
+        - { when: "category == 'account'", to: account_node }
+        - { default: true, to: human_handoff }
+
+    - id: network_node
+      type: agent
+      agent: network_expert
+      params:
+        task: "{{event.payload.message}}"
+      routes:
+        - { to: approval_gate }
+
+    - id: software_node
+      type: agent
+      agent: software_expert
+      params:
+        task: "{{event.payload.message}}"
+      routes:
+        - { to: approval_gate }
+
+    - id: account_node
+      type: agent
+      agent: account_expert
+      params:
+        task: "{{event.payload.message}}"
+      routes:
+        - { to: approval_gate }
+
+    # Human-in-the-loop: a sensitive action (writing a public reply back to the
+    # customer's ticket) is NEVER taken without explicit approval. The request
+    # is a durable event (AppendDurable) — it survives a daemon crash.
+    - id: approval_gate
+      type: approval
+      message: |
+        Post this reply to GLPI ticket #{{event.payload.id}}?
+
+        {{network_node.output}}{{software_node.output}}{{account_node.output}}
+      choices: [approve, reject]
+      routes:
+        - { when: "approvals.approval_gate == 'approve'", to: glpi_followup }
+        - { default: true, to: escalate }
+
+    # GLPI write-back #1 — add the approved reply as a public ITILFollowup.
+    # Exactly one specialist ran, so exactly one of the three {{*.output}}
+    # tokens expands (to a JSON string literal); the others resolve to "".
+    # That keeps the request body valid JSON under raw interpolation.
+    - id: glpi_followup
+      type: tool
+      tool: http.post
+      params:
+        url: "{{secret.GLPI_URL}}/apirest.php/Ticket/{{event.payload.id}}/ITILFollowup"
+        body: |
+          {"input":{"items_id":{{event.payload.id}},"itemtype":"Ticket","is_private":0,"content":{{network_node.output}}{{software_node.output}}{{account_node.output}}}}
+      routes:
+        - { to: glpi_resolve }
+      on_error:
+        - { default: true, to: writeback_failed }
+
+    # GLPI write-back #2 — mark the ticket Solved (status 5).
+    - id: glpi_resolve
+      type: tool
+      tool: http.put
+      params:
+        url: "{{secret.GLPI_URL}}/apirest.php/Ticket/{{event.payload.id}}"
+        body: |
+          {"input":{"id":{{event.payload.id}},"status":5}}
+      routes:
+        - { to: resolved }
+      on_error:
+        - { default: true, to: writeback_failed }
+
+    - id: resolved
+      type: terminal
+      params:
+        output: "Reply posted to GLPI ticket #{{event.payload.id}} and the ticket was marked Solved."
+
+    - id: escalate
+      type: terminal
+      params:
+        output: "The drafted reply was rejected at the approval gate. Ticket #{{event.payload.id}} is left open for a human specialist."
+
+    - id: writeback_failed
+      type: terminal
+      params:
+        output: "Approved, but the GLPI write-back failed. Ticket #{{event.payload.id}} needs a manual follow-up."
+
+    - id: human_handoff
+      type: terminal
+      params:
+        output: "This ticket needs a human specialist; routing it to the queue."
+
+# ---------------------------------------------------------------------------
+# Tools — the http module does the GLPI REST write-back; channels arms the
+# inbound webhook that turns a GLPI notification into a session launch.
+# ---------------------------------------------------------------------------
+tools:
+  capabilities:
+    default_policy: auto
+    grant:
+      - { module: http, actions: [post, put, get] }
+
+  modules:
+    # GLPI REST client. App-Token + Session-Token ride on every request via
+    # default_headers (resolved from {{secret.*}} at runtime / from the UI vault).
+    http:
+      config:
+        timeout: 30
+        default_headers:
+          App-Token: "{{secret.GLPI_APP_TOKEN}}"
+          Session-Token: "{{secret.GLPI_SESSION_TOKEN}}"
+          Content-Type: "application/json"
+
+    channels:
+      config:
+        default_agent: triage
+        max_turns: 30
+        timeout: 120
+        providers:
+          glpi:
+            adapter: webhook
+            config:
+              inbound_path: /hook/glpi
+              auth: api_key
+              api_key: "{{secret.GLPI_WEBHOOK_KEY}}"
+            activation:
+              # Only brand-new tickets are handled automatically.
+              filter:
+                - { field: event.payload.status, equals: new }
+              # One session per ticket so follow-ups land on the same history.
+              session: "ticket-{{event.payload.id}}"
+              # The launched session is owned by the ticket requester.
+              owner: "{{event.payload.users_id}}"
+              # Routing is done by the flow (triage_node), so no channel route.
+              message: |
+                GLPI ticket #{{event.payload.id}} — {{event.payload.name}}
+                Category: {{event.payload.itilcategories_name}}
+
+                {{event.payload.content}}
+              reply: none
+
+# ---------------------------------------------------------------------------
+# Context — ground every specialist in the IT knowledge base.
+# ---------------------------------------------------------------------------
+context:
+  sections:
+    - builtin: datetime
+    - title: "IT Knowledge Base — answer ONLY from this"
+      priority: 100
+      template: |
+        {{include:kb/network.md}}
+
+        {{include:kb/software.md}}
+
+        {{include:kb/accounts.md}}
+
+ui:
+  greeting: "GLPI Support Desk — new tickets are triaged, drafted, approved, and answered automatically."
+  workspace:
+    position: hidden

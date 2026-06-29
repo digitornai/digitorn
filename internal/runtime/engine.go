@@ -1,12 +1,16 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"maps"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -26,12 +30,13 @@ import (
 	"github.com/mbathepaul/digitorn/internal/runtime/contextsvc"
 	"github.com/mbathepaul/digitorn/internal/runtime/docextract"
 	"github.com/mbathepaul/digitorn/internal/runtime/errclass"
+	"github.com/mbathepaul/digitorn/internal/runtime/flow"
 	"github.com/mbathepaul/digitorn/internal/runtime/hooks"
 	"github.com/mbathepaul/digitorn/internal/runtime/policy"
 	"github.com/mbathepaul/digitorn/internal/runtime/policy/approval"
+	"github.com/mbathepaul/digitorn/internal/runtime/projectsettings"
 	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
 	"github.com/mbathepaul/digitorn/internal/runtime/toolname"
-	"github.com/mbathepaul/digitorn/internal/runtime/projectsettings"
 	"github.com/mbathepaul/digitorn/internal/runtime/turn"
 	"github.com/mbathepaul/digitorn/internal/runtime/workdir"
 	"github.com/mbathepaul/digitorn/internal/safego"
@@ -71,25 +76,45 @@ type EmergencyCompactor interface {
 	CompactSession(ctx context.Context, sessionID, strategy string, keepLast int) error
 }
 
+// CredentialResolver returns a user's stored provider key (apiKey + optional
+// baseURL) for BYOK injection. Implemented by *credentials.Resolver as an O(1)
+// in-memory lookup; ok=false when the user has none (caller falls back). nil =
+// per-user injection disabled.
+type CredentialResolver interface {
+	Lookup(ctx context.Context, userID, provider string) (apiKey, baseURL string, ok bool)
+}
+
+// AppSecretLookup resolves installation-scoped {{secret.X}} placeholders for an
+// app at runtime (flow URLs, module headers). nil = env fallback only.
+type AppSecretLookup interface {
+	Get(appID, key string) (string, bool)
+}
+
 type Engine struct {
-	Apps       AppLookup
-	Sessions   SessionAccess
-	LLM        LLMChat
-	Blobs      BlobLoader
+	Apps         AppLookup
+	Sessions     SessionAccess
+	LLM          LLMChat
+	Blobs        BlobLoader
+	CredResolver CredentialResolver // per-user BYOK key injection; nil = disabled
+	AppSecrets   AppSecretLookup    // per-app secret vault; nil = env fallback only
+	// MediaGen calls the gateway's dedicated image/video generation endpoints
+	// for agents whose brain kind is "image"/"video" (these are NOT served by
+	// chat-completions). nil = media generation disabled.
+	MediaGen   MediaGenerator
 	Tools      ToolCatalog
 	Dispatcher ToolDispatcher
 
-	allowedSigs sync.Map
-	SkillLoader SkillLoader
+	allowedSigs       sync.Map
+	SkillLoader       SkillLoader
 	ModelWindowLookup func(model string) int
 
-	Compactor EmergencyCompactor
-	ContextTouch func(sessionID string)
-	ContextIncrement func(sessionID string, deltaTokens int)
+	Compactor          EmergencyCompactor
+	ContextTouch       func(sessionID string)
+	ContextIncrement   func(sessionID string, deltaTokens int)
 	ContextRecordParts func(sessionID string, system, tools []string)
-	PrepareSummary func(sessionID, jwt string)
-	MicroCompactView bool
-	ContextLookup func(sessionID string) (contextsvc.ContextView, bool)
+	PrepareSummary     func(sessionID, jwt string)
+	MicroCompactView   bool
+	ContextLookup      func(sessionID string) (contextsvc.ContextView, bool)
 	ContextRecordRatio func(sessionID string, ratio float64)
 	Pool               *turn.Pool
 
@@ -270,7 +295,14 @@ func (e *Engine) tools() ToolCatalog {
 	return e.Tools
 }
 
-func buildAssistantParts(resp *llm.ChatResponse) []sessionstore.MessagePart {
+// blobPutter is the Put-capable subset of the blob store. e.Blobs is wired to
+// the concrete *blobstore.Store (which has Put) but typed as BlobLoader (Get
+// only), so we assert to this at runtime to persist generated media bytes.
+type blobPutter interface {
+	Put(ctx context.Context, mime string, r io.Reader) (sessionstore.BlobRef, error)
+}
+
+func (e *Engine) buildAssistantParts(ctx context.Context, resp *llm.ChatResponse) []sessionstore.MessagePart {
 	if resp == nil {
 		return nil
 	}
@@ -291,7 +323,111 @@ func buildAssistantParts(resp *llm.ChatResponse) []sessionstore.MessagePart {
 			},
 		})
 	}
+	// Natively-generated media (image/video). URL-backed parts (e.g. a hosted
+	// video) ride as-is ; inline bytes are persisted to the content-addressed
+	// blob store and referenced by hash — mirrors dispatch/busadapter for tool
+	// outputs, keeping the durable event log free of megabytes of base64.
+	for i := range resp.OutputMedia {
+		mp := resp.OutputMedia[i]
+		pt := sessionstore.PartTypeImage
+		if mp.Type == llm.ContentTypeVideo {
+			pt = sessionstore.PartTypeVideo
+		}
+		if mp.URL != "" {
+			parts = append(parts, sessionstore.MessagePart{
+				Type:      pt,
+				URL:       mp.URL,
+				Thumbnail: mp.Thumbnail,
+				Blob:      &sessionstore.BlobRef{Mime: mp.Mime},
+			})
+			continue
+		}
+		if len(mp.Data) == 0 {
+			continue
+		}
+		putter, ok := e.Blobs.(blobPutter)
+		if !ok {
+			continue
+		}
+		ref, err := putter.Put(ctx, mp.Mime, bytes.NewReader(mp.Data))
+		if err != nil {
+			if e.Logger != nil {
+				e.Logger.Warn("buildAssistantParts: blob put failed", slog.String("err", err.Error()))
+			}
+			continue
+		}
+		parts = append(parts, sessionstore.MessagePart{
+			Type:      pt,
+			Blob:      &ref,
+			Thumbnail: mp.Thumbnail,
+		})
+	}
 	return parts
+}
+
+// MediaGenerator calls the gateway's image/video generation endpoints. The
+// concrete impl lives in internal/runtime/mediagen.
+type MediaGenerator interface {
+	GenerateImage(ctx context.Context, model, prompt, bearer string) ([]llm.ContentPart, error)
+	GenerateVideo(ctx context.Context, model, prompt, bearer string) ([]llm.ContentPart, error)
+}
+
+// generateMedia handles an image/video agent turn: it generates media from the
+// last user prompt via the gateway's dedicated endpoints and returns it as a
+// terminal assistant response (no tools, no iteration). The persist + turn-end
+// flow then stores the media parts exactly like any other assistant message.
+func (e *Engine) generateMedia(ctx context.Context, in TurnInput, agent *schema.Agent, req *llm.ChatRequest) (*llm.ChatResponse, error) {
+	if e.MediaGen == nil {
+		return nil, fmt.Errorf("media generation not configured")
+	}
+	prompt := lastUserText(req.Messages)
+	if prompt == "" {
+		return nil, fmt.Errorf("media generation: no prompt")
+	}
+	var media []llm.ContentPart
+	var err error
+	switch agent.Brain.Kind {
+	case "image":
+		media, err = e.MediaGen.GenerateImage(ctx, agent.Brain.Model, prompt, in.UserJWT)
+	case "video":
+		media, err = e.MediaGen.GenerateVideo(ctx, agent.Brain.Model, prompt, in.UserJWT)
+	default:
+		return nil, fmt.Errorf("media generation: unsupported kind %q", agent.Brain.Kind)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &llm.ChatResponse{
+		Model:        agent.Brain.Model,
+		FinishReason: "stop",
+		OutputMedia:  media,
+	}, nil
+}
+
+// lastUserText returns the text of the most recent user message — the prompt
+// fed to image/video generation.
+func lastUserText(msgs []llm.ChatMessage) string {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role != "user" {
+			continue
+		}
+		if t := strings.TrimSpace(msgs[i].Content); t != "" {
+			return t
+		}
+		var b strings.Builder
+		for _, p := range msgs[i].Parts {
+			if p.Type == llm.ContentTypeText && p.Text != "" {
+				if b.Len() > 0 {
+					b.WriteByte(' ')
+				}
+				b.WriteString(p.Text)
+			}
+		}
+		if t := strings.TrimSpace(b.String()); t != "" {
+			return t
+		}
+	}
+	return ""
 }
 
 type slogReporter struct {
@@ -336,15 +472,123 @@ type TurnInput struct {
 	SessionID string
 	UserJWT   string
 	UserID    string
-	Mode string
+	Mode      string
 
 	Skill string
+
+	Template string
 
 	AgentID string
 
 	AgentRunID string
 
 	SubAgent bool
+}
+
+// injectTemplateDirective injects the selected template's system_prompt as a
+// durable system directive (same path as skills). Resolved by id from the app
+// YAML; persisted, so it stays active for the session.
+func (e *Engine) injectTemplateDirective(ctx context.Context, in TurnInput, correlationID string, app *appmgr.RuntimeApp, snap *sessionstore.SessionSnapshot) {
+	if in.Template == "" || app == nil || app.Definition == nil {
+		return
+	}
+	var tpl *schema.TemplateBlock
+	for i := range app.Definition.Templates {
+		if app.Definition.Templates[i].ID == in.Template {
+			tpl = &app.Definition.Templates[i]
+			break
+		}
+	}
+	if tpl == nil {
+		e.Logger.Warn("runtime: template not found",
+			slog.String("template", in.Template), slog.String("app", in.AppID))
+		return
+	}
+	e.seedTemplateWorkdir(in, app, tpl)
+	if strings.TrimSpace(tpl.SystemPrompt) == "" {
+		return
+	}
+	body := "Template " + tpl.Name + " — follow these instructions:\n\n" + tpl.SystemPrompt
+	content := wrapRuntimeDirective("template", "high", body)
+	e.injectSystemDirective(ctx, in, correlationID, content, DirectiveTemplate,
+		map[string]any{"template_id": tpl.ID, "name": tpl.Name}, nil)
+	if st, err := e.Sessions.State(in.SessionID); err == nil && st != nil {
+		*snap = st.Snapshot()
+	}
+}
+
+// seedTemplateWorkdir copies a template's seed_dir into the session workdir,
+// but only when that workdir is still empty so a live project is never touched.
+func (e *Engine) seedTemplateWorkdir(in TurnInput, app *appmgr.RuntimeApp, tpl *schema.TemplateBlock) {
+	if tpl.SeedDir == "" || app.BundleDir == "" || e.PathPolicies == nil {
+		return
+	}
+	pp, ok := e.PathPolicies.PathPolicyFor(in.AppID, in.SessionID)
+	if !ok || !pp.HasWorkdir() {
+		return
+	}
+	dst := pp.Root()
+	// Seed only when the workdir holds no real project files yet. Ignore
+	// hidden meta the daemon creates at session start (.digitorn shadow
+	// repo, .git) so the seed still lands in an otherwise-fresh workdir.
+	if entries, err := os.ReadDir(dst); err == nil {
+		for _, e := range entries {
+			if !strings.HasPrefix(e.Name(), ".") {
+				return
+			}
+		}
+	}
+	base := filepath.Clean(app.BundleDir)
+	src := filepath.Clean(filepath.Join(base, filepath.FromSlash(tpl.SeedDir)))
+	if src != base && !strings.HasPrefix(src, base+string(filepath.Separator)) {
+		return
+	}
+	if fi, err := os.Stat(src); err != nil || !fi.IsDir() {
+		return
+	}
+	if err := copyTreeNoClobber(src, dst); err != nil {
+		e.Logger.Warn("runtime: template seed failed",
+			slog.String("template", tpl.ID), slog.String("err", err.Error()))
+		return
+	}
+	e.Logger.Info("runtime: template workdir seeded",
+		slog.String("template", tpl.ID), slog.String("workdir", dst))
+}
+
+func copyTreeNoClobber(src, dst string) error {
+	return filepath.WalkDir(src, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		if _, err := os.Stat(target); err == nil {
+			return nil
+		}
+		in, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer in.Close()
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		out, err := os.Create(target)
+		if err != nil {
+			return err
+		}
+		if _, err := io.Copy(out, in); err != nil {
+			out.Close()
+			return err
+		}
+		return out.Close()
+	})
 }
 
 type TurnResult struct {
@@ -369,6 +613,10 @@ func (e *Engine) Run(ctx context.Context, in TurnInput) (*TurnResult, error) {
 	if app == nil || app.Definition == nil {
 		return nil, fmt.Errorf("runtime: app %q has no Definition", in.AppID)
 	}
+	if app.Definition.Flow != nil && !in.SubAgent {
+		return e.runFlow(ctx, app, in)
+	}
+
 	if len(app.Definition.Agents) == 0 {
 		return nil, fmt.Errorf("runtime: app %q has no agents", in.AppID)
 	}
@@ -621,12 +869,44 @@ func (e *Engine) runPhases(
 		}
 	}
 
+	// Selected starter template: fold its instructions into the authoritative
+	// system prompt (not only the durable conversation directive) so even a
+	// weak model treats them as binding on the scaffolding turn.
+	if in.Template != "" && app.Definition != nil {
+		for i := range app.Definition.Templates {
+			if app.Definition.Templates[i].ID != in.Template {
+				continue
+			}
+			if tp := strings.TrimSpace(app.Definition.Templates[i].SystemPrompt); tp != "" {
+				block := "# Active starter template: " + app.Definition.Templates[i].Name + "\n" + tp
+				if systemPrompt != "" {
+					systemPrompt += "\n\n" + block
+				} else {
+					systemPrompt = block
+				}
+			}
+			break
+		}
+	}
+
 	var (
 		apiKey  string
 		baseURL string
 	)
 	if app.Meta != nil && app.Meta.BYOK {
+		// BYOK: the brain-declared bundle credential is the fallback; a key the
+		// user stored in their own vault for this provider takes precedence. The
+		// resolver is an O(1) in-memory lookup (decrypts once, then cached) so
+		// this never blocks the turn. Non-BYOK is untouched → gateway as before.
 		apiKey, baseURL = extractEmbeddedAuth(agent.Brain)
+		if e.CredResolver != nil {
+			if uk, ub, ok := e.CredResolver.Lookup(ctx, in.UserID, agent.Brain.Provider); ok {
+				apiKey = uk
+				if ub != "" {
+					baseURL = ub
+				}
+			}
+		}
 	}
 
 	if err := tr.TransitionTo(ctx, turn.PhaseRunning); err != nil {
@@ -650,6 +930,7 @@ func (e *Engine) runPhases(
 	}
 
 	e.injectSkillDirective(ctx, in, tr.ID, &snap)
+	e.injectTemplateDirective(ctx, in, tr.ID, app, &snap)
 
 	var (
 		lastSeq       uint64
@@ -677,6 +958,7 @@ func (e *Engine) runPhases(
 		if err := ctx.Err(); err != nil {
 			return nil, hooks.Payload{}, fmt.Errorf("runtime: turn cancelled at iter %d: %w", iter, err)
 		}
+		tr.StepID = fmt.Sprintf("%s:s%d", tr.ID, iter)
 		PingTurnKeepalive(ctx)
 
 		e.guardContextPressure(ctx, in, agent, &snap, compactPol, &guardKeep, usage.PromptTokens)
@@ -703,6 +985,12 @@ func (e *Engine) runPhases(
 		if agent.Brain.MaxTokens != nil {
 			req.MaxTokens = agent.Brain.MaxTokens
 		}
+		if agent.Brain.Timeout != nil && *agent.Brain.Timeout > 0 {
+			req.Timeout = time.Duration(*agent.Brain.Timeout * float64(time.Second))
+		}
+		if eff := e.reasoningEffortFor(in.SessionID, agent.ID); eff != "" {
+			req.ReasoningEffort = eff
+		}
 
 		var (
 			mctx           *ports.MiddlewareContext
@@ -728,8 +1016,13 @@ func (e *Engine) runPhases(
 			sentEst = estReqTokens(req)
 			var r *llm.ChatResponse
 			var err error
+			isMediaAgent := agent.Brain.Kind == "image" || agent.Brain.Kind == "video"
 			for retries := 0; ; {
-				r, err = e.chatOrStream(ctx, tr, in, req)
+				if isMediaAgent {
+					r, err = e.generateMedia(ctx, in, agent, req)
+				} else {
+					r, err = e.chatOrStream(ctx, tr, in, req)
+				}
 				if err != nil && e.Compactor != nil && !emergencyCompacted && contextcompact.IsContextOverflow(err) {
 					emergencyCompacted = true
 					keep := 0
@@ -914,6 +1207,7 @@ func (e *Engine) runPhases(
 		if strings.TrimSpace(lastContent) != "" {
 			note = lastContent + "\n\n" + note
 		}
+		tr.StepID = fmt.Sprintf("%s:s%d", tr.ID, maxIter)
 		if seq, perr := e.persistAssistantStep(ctx, tr, in, &llm.ChatResponse{Content: note}); perr == nil {
 			lastSeq = seq
 		}
@@ -1181,7 +1475,7 @@ func resolveAutoCompact(rt *schema.RuntimeBlock, brainCtx *schema.ContextConfig)
 }
 
 const (
-	compactionAbsBuffer = 13000
+	compactionAbsBuffer     = 13000
 	compactionMaxBufferFrac = 0.25
 )
 
@@ -1323,11 +1617,12 @@ func (e *Engine) persistAssistantStep(
 		AppID:         in.AppID,
 		UserID:        in.UserID,
 		CorrelationID: tr.ID,
+		StepID:        tr.StepID,
 		Message: &sessionstore.MessagePayload{
-			Role:      "assistant",
-			Content:   resp.Content,
-			Parts:     buildAssistantParts(resp),
-			Reasoning: resp.ReasoningContent,
+			Role:               "assistant",
+			Content:            resp.Content,
+			Parts:              e.buildAssistantParts(ctx, resp),
+			Reasoning:          resp.ReasoningContent,
 			ReasoningStartedAt: resp.ReasoningStartedAt,
 			ReasoningEndedAt:   resp.ReasoningEndedAt,
 		},
@@ -1425,6 +1720,21 @@ func (e *Engine) modelOverrideFor(sessionID, agentID string, selfOverrides map[s
 	return selfOverrides[agentID]
 }
 
+func (e *Engine) reasoningEffortFor(sessionID, agentID string) string {
+	root := sessionID
+	if i := strings.Index(sessionID, "::agent::"); i >= 0 {
+		root = sessionID[:i]
+	}
+	if st, err := e.Sessions.State(root); err == nil && st != nil {
+		snap := st.Snapshot()
+		if ov := snap.EffortOverrides[agentID]; ov != "" {
+			return ov
+		}
+		return snap.ReasoningEffort
+	}
+	return ""
+}
+
 func interruptMarker(cause error) string {
 	reason := "generation was cut off before finishing"
 	switch {
@@ -1454,6 +1764,7 @@ func (e *Engine) persistInterruptedAssistant(tr *turn.Turn, in TurnInput, conten
 		AppID:         in.AppID,
 		UserID:        in.UserID,
 		CorrelationID: tr.ID,
+		StepID:        tr.StepID,
 		Message: &sessionstore.MessagePayload{
 			Role:    "assistant",
 			Content: content,
@@ -1568,6 +1879,7 @@ func (e *Engine) persistToolCallEvents(
 			AppID:         in.AppID,
 			UserID:        in.UserID,
 			CorrelationID: tr.ID,
+			StepID:        tr.StepID,
 			Tool: &sessionstore.ToolPayload{
 				CallID:    tc.ID,
 				Name:      tc.Name,
@@ -2238,6 +2550,7 @@ func (e *Engine) persistToolResults(
 			AppID:         in.AppID,
 			UserID:        in.UserID,
 			CorrelationID: tr.ID,
+			StepID:        tr.StepID,
 			Tool:          tp,
 		}
 	}
@@ -2420,6 +2733,171 @@ func isCancellation(ctx context.Context, err error) bool {
 		}
 	}
 	return false
+}
+
+func (e *Engine) runFlow(ctx context.Context, app *appmgr.RuntimeApp, in TurnInput) (*TurnResult, error) {
+	flowCfg := app.Definition.Flow
+	deps := flow.Deps{
+		Sessions: e.Sessions,
+		RunAgent: func(ctx context.Context, spec flow.AgentSpec) (flow.AgentResult, error) {
+			r, err := e.RunSubAgent(ctx, SubAgentSpec{
+				AppID:         spec.AppID,
+				ParentSession: spec.ParentSession,
+				UserID:        spec.UserID,
+				UserJWT:       spec.UserJWT,
+				AgentID:       spec.AgentID,
+				RunID:         spec.RunID,
+				Task:          spec.Task,
+				MemorySeed:    spec.MemorySeed,
+			})
+			return flow.AgentResult{Status: r.Status, Content: r.Content, Error: r.Error}, err
+		},
+		RunTool: func(ctx context.Context, inv flow.ToolInvocation) flow.ToolOutcome {
+			return e.flowToolHooked(ctx, inv)
+		},
+		Approvals: e.ApprovalRegistry,
+		Logger:    e.Logger,
+	}
+	flowID := flowCfg.ID
+	if flowID == "" {
+		flowID = "flow"
+	}
+	tr, err := turn.New(turn.Options{
+		SessionID: in.SessionID, AppID: in.AppID, AgentID: flowID,
+		UserID: in.UserID, UserJWT: in.UserJWT,
+		Pool: e.Pool, Sink: e.Sessions, IDGen: e.IDGen, Logger: e.Logger,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("runtime: new flow turn: %w", err)
+	}
+	if err := tr.Start(ctx); err != nil {
+		return nil, fmt.Errorf("runtime: start flow turn: %w", err)
+	}
+	_ = tr.TransitionTo(ctx, turn.PhaseLoading)
+	_ = tr.TransitionTo(ctx, turn.PhaseRunning)
+
+	fr := flow.New(flowCfg, deps, e.IDGen)
+	runIn := flow.RunInput(in.AppID, in.SessionID, in.UserID, in.UserJWT, tr.ID).
+		WithEvent(e.flowEvent(in.SessionID))
+	if e.AppSecrets != nil {
+		lookup := e.AppSecrets
+		appID := in.AppID
+		runIn = runIn.WithSecretLookup(func(key string) (string, bool) {
+			return lookup.Get(appID, key)
+		})
+	}
+	res, runErr := fr.Run(ctx, flowCfg, runIn)
+	if runErr != nil {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if cErr := tr.Fail(closeCtx, runErr); cErr != nil {
+			e.Logger.Warn("runtime: flow turn fail emit error", slog.String("err", cErr.Error()))
+		}
+		e.emitTurnError(closeCtx, in, tr, runErr)
+		return nil, runErr
+	}
+
+	_ = tr.TransitionTo(ctx, turn.PhasePersisting)
+	seq, perr := e.persistAssistantStep(ctx, tr, in, &llm.ChatResponse{Content: res.Content})
+	if perr != nil {
+		e.Logger.Warn("runtime: persist flow result failed", slog.String("err", perr.Error()))
+	}
+	if err := tr.CloseDone(ctx); err != nil {
+		e.Logger.Warn("runtime: flow turn close error", slog.String("err", err.Error()))
+	}
+	return &TurnResult{Seq: seq, Content: res.Content, TurnID: tr.ID}, nil
+}
+
+// flowEvent seeds the flow's `event.*` namespace from the triggering user
+// turn. When a non-human launcher (background webhook) attached a structured
+// TriggerEvent to the user message, that scope is used so nodes can read
+// {{event.payload.id}} etc. Otherwise falls back to the message text only.
+func (e *Engine) flowEvent(sessionID string) map[string]any {
+	msg := ""
+	var trigger map[string]any
+	if st, err := e.Sessions.State(sessionID); err == nil && st != nil {
+		snap := st.Snapshot()
+		for i := len(snap.Messages) - 1; i >= 0; i-- {
+			if snap.Messages[i].Role != "user" {
+				continue
+			}
+			msg = snap.Messages[i].Content
+			if msg == "" {
+				for _, p := range snap.Messages[i].Parts {
+					if p.Type == sessionstore.PartTypeText {
+						msg += p.Text
+					}
+				}
+			}
+			trigger = snap.Messages[i].TriggerEvent
+			break
+		}
+	}
+	if len(trigger) > 0 {
+		out := make(map[string]any, len(trigger)+2)
+		for k, v := range trigger {
+			out[k] = v
+		}
+		payload, _ := out["payload"].(map[string]any)
+		if payload == nil {
+			payload = map[string]any{}
+			out["payload"] = payload
+		}
+		if msg != "" {
+			if _, ok := payload["message"]; !ok {
+				payload["message"] = msg
+			}
+			if _, ok := out["message"]; !ok {
+				out["message"] = msg
+			}
+			if _, ok := out["text"]; !ok {
+				out["text"] = msg
+			}
+		}
+		return out
+	}
+	return map[string]any{
+		"text":    msg,
+		"message": msg,
+		"payload": map[string]any{"message": msg, "text": msg},
+	}
+}
+
+// flowToolHooked dispatches a flow tool node through the same tool_start /
+// tool_end hook machinery agent-driven tool calls use, so a tool invoked by a
+// flow behaves identically to one invoked by an agent (doc: "Tool hooks fired
+// around node execution"). Flow tool nodes are agent-less, so hooks fire at
+// app level (agent=nil); injection-style effects that need an LLM turn do not
+// apply here, but gate (tool_start) and transform_result (tool_end) do.
+func (e *Engine) flowToolHooked(ctx context.Context, inv flow.ToolInvocation) flow.ToolOutcome {
+	payload := hooks.Payload{
+		AppID: inv.AppID, SessionID: inv.SessionID, UserID: inv.UserID,
+		ToolName: inv.Name, ToolArgs: inv.Args,
+	}
+	if gate := e.fireHookGate(ctx, inv.AppID, nil, schema.HookEventToolStart, payload); gate != nil && !gate.Allow {
+		return flow.ToolOutcome{Status: "errored", Error: "blocked by hook gate: " + gate.Reason}
+	}
+
+	out := e.ExecuteToolGated(ctx, ToolInvocation{
+		CallID:    inv.CallID,
+		Name:      inv.Name,
+		Args:      inv.Args,
+		AppID:     inv.AppID,
+		UserID:    inv.UserID,
+		SessionID: inv.SessionID,
+		UserJWT:   inv.UserJWT,
+	})
+
+	resultMap := outcomeToResult(out)
+	endPayload := payload
+	endPayload.ToolStatus = out.Status
+	endPayload.ToolError = out.Error
+	endPayload.ToolResult = resultMap
+	if res := e.fireHook(ctx, inv.AppID, nil, schema.HookEventToolEnd, endPayload); res.Modified {
+		applyResultMutation(&out, resultMap)
+	}
+
+	return flow.ToolOutcome{Status: out.Status, Parts: out.Parts, Error: out.Error}
 }
 
 func extractEmbeddedAuth(b schema.Brain) (apiKey, baseURL string) {

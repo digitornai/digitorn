@@ -17,7 +17,7 @@ import (
 // (+ any sibling assets). Embedded into the binary so a fresh install has working
 // apps with no manual step. Add a built-in by dropping a directory under builtins/.
 //
-//go:embed builtins
+//go:embed all:builtins
 var builtinFS embed.FS
 
 // builtinAppNames lists the bundled app ids (each builtins/<id>/ holding an app.yaml).

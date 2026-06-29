@@ -1,0 +1,5 @@
+# Local demo secrets — copy demo.env.example → demo.env
+demo.env
+
+# Optional local GLPI override
+.env.local

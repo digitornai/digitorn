@@ -137,7 +137,7 @@ exists in the workspace.
 Separate from `tools.modules.workspace.config`, the
 **`ui.workspace:`** block at the top level is what the
 client reads to pick a renderer (see
-[Workspace & Preview](../../language/41-preview.md) +
+Workspace & Preview +
 [Client Manifest](../../language/44-client-manifest.md)):
 
 ```yaml
@@ -231,7 +231,7 @@ workspace surface with operations grouped as:
 
 The exact route shapes are not documented publicly - the
 native CLI and
-the [React Preview SDK](../../language/47-preview-sdk.md)
+the React Preview SDK
 expose these operations as typed methods.
 
 Hunks have stable 12-char SHA-256 ids (header + body) - the
@@ -321,7 +321,7 @@ At app bootstrap:
 - App-config block reference (`ui.workspace`):
   [App Configuration → ui](../../language/02-app-config.md#ui---display-layer-daemon-never-reads)
 - Workspace + preview YAML reference:
-  [Workspace & Preview](../../language/41-preview.md)
+  Workspace & Preview
 - Preview transport (every `Ws*` call goes through `preview`):
   [preview reference](preview.md)
 - Filesystem module (real-FS direct access):

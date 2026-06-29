@@ -203,7 +203,7 @@ Permission categories
 | `fs.*` | All filesystem permissions. |
 
 Paths and host allowlists are evaluated by the daemon's sandbox
-layer. See [OS Sandbox](35-sandbox.md) for the full kernel-level
+layer. See OS Sandbox for the full kernel-level
 isolation model (Landlock / seccomp / Seatbelt / Job Objects).
 
 ## Smithery - hosted servers
@@ -380,5 +380,5 @@ tools:
 - Capabilities (grant / approve / deny): [Security](11-security.md)
 - Credentials vault, scopes, audit log:
   [credentials.md](../reference/runtime/credentials.md)
-- OS-level sandbox: [OS Sandbox](35-sandbox.md)
+- OS-level sandbox: OS Sandbox
 - Per-module reference: [modules/reference/mcp.md](../reference/modules/mcp.md)

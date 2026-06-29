@@ -199,7 +199,7 @@ needs:
 - **OS-level sandbox**. On Linux that's Landlock + seccomp; on
   macOS, Seatbelt; on Windows, Job Objects. Declare it under
   `security.sandbox`. The
-  [OS Sandbox reference](../language/35-sandbox.md) explains
+  OS Sandbox reference explains
   per-platform availability and the four profile presets
   (`dev`, `standard`, `strict`, `maximum`).
 - **Persistent state**. The default `memory` and `rag` modules
@@ -241,4 +241,4 @@ deployment that:
 That's the full end-to-end shape. The
 [Reference](../reference/) and [Language](../language/) sections
 are where the granular knobs live; come back to them whenever
-the framework's behaviour surprises you.
+the runtime's behaviour surprises you.

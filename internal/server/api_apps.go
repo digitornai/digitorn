@@ -150,6 +150,32 @@ func (d *Daemon) setAppBYOK(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// setAppDisplayName overrides the displayed label for an app. An empty/blank
+// name clears the override (falls back to the bundle's short name). Returns the
+// new effective short name.
+func (d *Daemon) setAppDisplayName(w http.ResponseWriter, r *http.Request) {
+	appID := chi.URLParam(r, "app_id")
+	var body struct {
+		Name string `json:"name"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	if err := d.appMgr.SetDisplayName(r.Context(), appID, body.Name); err != nil {
+		writeError(w, appMgrErrStatus(err), "set_display_name_failed", err.Error())
+		return
+	}
+	short := strings.TrimSpace(body.Name)
+	if ra, err := d.appMgr.Get(r.Context(), appID); err == nil && ra != nil && ra.Meta != nil {
+		short = ra.Meta.ShortName
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"app_id":     appID,
+		"short_name": short,
+	})
+}
+
 // reloadApp handles POST /api/apps/{app_id}/reload : recompile from
 // the on-disk source. Used after the operator hand-edits app.yaml.
 func (d *Daemon) reloadApp(w http.ResponseWriter, r *http.Request) {

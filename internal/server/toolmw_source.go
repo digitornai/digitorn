@@ -7,6 +7,7 @@ import (
 
 	"github.com/mbathepaul/digitorn/internal/appmgr"
 	"github.com/mbathepaul/digitorn/internal/embeddings"
+	"github.com/mbathepaul/digitorn/internal/modulesettings"
 	"github.com/mbathepaul/digitorn/internal/runtime/dispatch"
 	"github.com/mbathepaul/digitorn/internal/toolmw"
 	"github.com/mbathepaul/digitorn/pkg/module"
@@ -30,13 +31,30 @@ type appGetter interface {
 	Get(ctx context.Context, appID string) (*appmgr.RuntimeApp, error)
 }
 
-// appModuleConfigSource resolves an app's per-module config block
-// (tools.modules.<id>.config) so the dispatcher delivers it to the
-// module at call time — the only correct path for a shared (in-proc or
-// worker) module instance. Satisfies dispatch.ModuleConfigSource.
-type appModuleConfigSource struct{ apps appGetter }
+// moduleDeltas is the narrow slice of *modulesettings.Store the source needs:
+// a user's saved per-app per-module config deltas (O(1) cached). nil disables
+// the per-user layer.
+type moduleDeltas interface {
+	Deltas(ctx context.Context, userID, appID, moduleID string) map[string]any
+}
 
-func (s appModuleConfigSource) ModuleConfig(appID, moduleID string) map[string]any {
+// appSecretAny resolves installation-scoped app secrets ({{secret.X}} in YAML).
+type appSecretAny interface {
+	getAny(app, key string) (string, bool)
+}
+
+// appModuleConfigSource resolves an app's per-module config block
+// (tools.modules.<id>.config) so the dispatcher delivers it to the module at
+// call time. The YAML block is the per-app DEFAULT; when the app's BYOK flag is
+// on, the calling user's saved deltas deep-merge over it (per-user config). Off
+// BYOK → defaults only. Satisfies dispatch.ModuleConfigSource.
+type appModuleConfigSource struct {
+	apps    appGetter
+	deltas  moduleDeltas
+	secrets appSecretAny
+}
+
+func (s appModuleConfigSource) ModuleConfig(appID, userID, moduleID string) map[string]any {
 	if s.apps == nil || appID == "" {
 		return nil
 	}
@@ -48,7 +66,22 @@ func (s appModuleConfigSource) ModuleConfig(appID, moduleID string) map[string]a
 	if !ok {
 		return nil
 	}
-	return mb.Config
+	cfg := mb.Config
+	if ra.Meta != nil && ra.Meta.BYOK && userID != "" && s.deltas != nil {
+		if d := s.deltas.Deltas(context.Background(), userID, appID, moduleID); len(d) > 0 {
+			cfg = modulesettings.DeepMerge(mb.Config, d)
+		}
+	}
+	if s.secrets == nil || len(cfg) == 0 {
+		return cfg
+	}
+	resolved, ok := resolveSecretPlaceholders(cfg, func(key string) (string, bool) {
+		return s.secrets.getAny(appID, key)
+	}).(map[string]any)
+	if !ok {
+		return cfg
+	}
+	return resolved
 }
 
 type toolPipelineSource struct {

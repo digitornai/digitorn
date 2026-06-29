@@ -40,6 +40,11 @@ func fakeOps(t *testing.T) (*httptest.Server, *map[string]any, *[]string) {
 			_ = json.NewEncoder(w).Encode(map[string]any{"runs": []map[string]any{
 				{"id": "r1", "trigger_id": "trg-alice", "app_id": "app1", "outcome": "ok"},
 				{"id": "r2", "trigger_id": "trg-bob", "app_id": "app1", "outcome": "ok"},
+				{"id": "r3", "trigger_id": "trg-glpi", "app_id": "glpi-support", "outcome": "failed", "error": "session_exists: daemon 403"},
+			}})
+		case r.URL.Path == "/ops/triggers":
+			_ = json.NewEncoder(w).Encode(map[string]any{"triggers": []map[string]any{
+				{"id": "trg-glpi", "app_id": "glpi-support", "adapter": "webhook", "owner": "bob"},
 			}})
 		default:
 			http.NotFound(w, r)
@@ -134,6 +139,20 @@ func TestAutomations_RunsAreUserScoped(t *testing.T) {
 	body := rec.Body.String()
 	if !strings.Contains(body, `"r2"`) || strings.Contains(body, `"r1"`) {
 		t.Fatalf("runs cross-user leak: %s", body)
+	}
+}
+
+// Channel/webhook trigger runs are visible when scoped to that app.
+func TestAutomations_RunsIncludeChannelTriggers(t *testing.T) {
+	srv, _, _ := fakeOps(t)
+	defer srv.Close()
+	d := automationsDaemon(srv.URL)
+
+	rec := httptest.NewRecorder()
+	d.listAutomationRuns(rec, asUser(httptest.NewRequest("GET", "/api/automations/runs?app=glpi-support", nil), "bob"))
+	body := rec.Body.String()
+	if !strings.Contains(body, `"r3"`) {
+		t.Fatalf("channel trigger run missing: %s", body)
 	}
 }
 

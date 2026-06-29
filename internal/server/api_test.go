@@ -16,6 +16,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/mbathepaul/digitorn/internal/config"
 	"github.com/mbathepaul/digitorn/internal/runtime"
 	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
 )
@@ -112,7 +113,13 @@ func newAPIHarness(t *testing.T) *apiHarness {
 	bridge := NewSocketIOBridge(rt, bus, builder, paths, NullAuth{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	bridge.Start(context.Background())
 
+	// Production always builds the Daemon with a non-nil *config.Config
+	// (Build(cfg *config.Config) is the only constructor). Mirror that invariant
+	// so handlers that read d.cfg (repushChannelTriggers, putSessionModel, …)
+	// exercise the real prod path instead of panicking on a nil deref.
+	cfg := config.Defaults()
 	d := &Daemon{
+		cfg:             &cfg,
 		sessionStore:    bus,
 		sessionFlusher:  flusher,
 		sessionPaths:    paths,

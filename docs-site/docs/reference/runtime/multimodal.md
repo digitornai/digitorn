@@ -21,7 +21,7 @@ All core components implemented and tested:
 
 ## Overview
 
-Support for images at every level of the framework:
+Support for images at every level of the runtime:
 - **User -> Agent**: the user sends images (upload, paste, URL).
 - **Tool -> Agent**: a tool produces an image (screenshot, diagram, chart).
 - **Agent -> User**: images are rendered in the chat.

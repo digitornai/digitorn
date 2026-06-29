@@ -5,9 +5,8 @@ title: Versioning and stability
 
 # Versioning and stability
 
-Digitorn ships under semantic versioning at the package level
-(`go.mod`) and an explicit YAML language version
-(`schema_version`).
+Digitorn ships under semantic versioning at the release level
+and an explicit YAML language version (`schema_version`).
 
 ## YAML schema version
 

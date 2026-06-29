@@ -229,7 +229,7 @@ the daemon runs the builtin and ignores any `template:` field.
 - Add a custom builtin: implement an async handler in the
   daemon's slash dispatch and declare it in your YAML.
 - Combine with skills: declare an app skill under
-  `skills:` and invoke it via the framework's
+  `skills:` and invoke it via the runtime's
   `/use_skill <name>` shortcut (different mechanism, see
   [Advanced 2](advanced-02-bundle-skills.md)).
 - Let users author their own templates per-app: set

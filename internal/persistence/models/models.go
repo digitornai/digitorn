@@ -22,11 +22,17 @@ type App struct {
 
 	// Denormalized metadata for the marketplace UI (avoids parsing the
 	// bundle on every /api/apps call).
-	Category string `gorm:"size:64;index"`
-	Author   string `gorm:"size:128"`
+	Category  string `gorm:"size:64;index"`
+	Author    string `gorm:"size:128"`
 	ShortName string `gorm:"size:64"`  // optional compact label (e.g. "Claude Pro")
 	Icon      string `gorm:"size:256"` // file path (icon.png) OR text/emoji (🧱)
 	Color     string `gorm:"size:16"`  // hex color, e.g. #14B8A6 — used when Icon is text/emoji
+
+	// DisplayName is a user-set override for the displayed label. When set it
+	// wins over the bundle's ShortName and, unlike ShortName, is NOT overwritten
+	// on reload/upgrade. Empty = fall back to ShortName. Set via
+	// PUT /api/apps/{app_id}/display-name.
+	DisplayName string `gorm:"size:64"`
 
 	Enabled bool `gorm:"not null;default:true"`
 
@@ -60,6 +66,65 @@ type Credential struct {
 }
 
 func (Credential) TableName() string { return "credentials" }
+
+// UserCredential is one entry in the user's encrypted credential vault — a
+// third-party provider secret (LLM API key, database URL, OAuth token, …) the
+// user stores so their own apps/agents can use it. Scope is ALWAYS per-user:
+// there is no app/system scope and no grant table — a credential belongs to a
+// user and that user's own sessions resolve it. The secret payload lives sealed
+// in Sealed (mcpoauth.Sealer over the JSON fields map); the plaintext NEVER
+// leaves the daemon and is NEVER returned by the read API — the UI shows only
+// the masked previews kept in DisplayMeta. Distinct from the shared
+// `credentials` table (mcpoauth tokens) on purpose: a dedicated table keeps the
+// vault schema independent and avoids drift on the shared one.
+type UserCredential struct {
+	ID           string `gorm:"size:64;primaryKey"`
+	UserID       string `gorm:"size:128;not null;index:idx_ucred_user_provider,priority:1"`
+	ProviderName string `gorm:"size:128;not null;index:idx_ucred_user_provider,priority:2"`
+	ProviderType string `gorm:"size:32;not null"` // api_key, oauth2, connection_string, …
+	Name         string `gorm:"size:64;not null"` // optional stable slug for YAML refs
+	Label        string `gorm:"size:64;not null"` // human label for the picker
+	Sealed       string `gorm:"type:text"`        // Sealer.Seal(JSON(fields))
+	DisplayMeta  []byte `gorm:"type:text"`        // JSON {"masked_fields": {...}}
+	Status       string `gorm:"size:32;not null"` // valid, expired, invalid, …
+
+	ExpiresAt       *time.Time
+	LastValidatedAt *time.Time
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+}
+
+func (UserCredential) TableName() string { return "user_credentials" }
+
+// UserModuleConfig is one user's per-app, per-module config DELTAS (BYOK mode):
+// only the fields the user changed, sealed at rest. The YAML `config:` block is
+// the immutable per-app default; when the app's BYOK flag is on, these deltas
+// deep-merge over it for that user. Keyed (user_id, app_id, module_id).
+type UserModuleConfig struct {
+	ID        string `gorm:"size:64;primaryKey"`
+	UserID    string `gorm:"size:128;not null;uniqueIndex:idx_umodcfg_user_app_module,priority:1"`
+	AppID     string `gorm:"size:128;not null;uniqueIndex:idx_umodcfg_user_app_module,priority:2"`
+	ModuleID  string `gorm:"size:128;not null;uniqueIndex:idx_umodcfg_user_app_module,priority:3"`
+	Sealed    string `gorm:"type:text"` // Sealer.Seal(JSON(deltas))
+	UpdatedAt time.Time
+}
+
+func (UserModuleConfig) TableName() string { return "user_module_config" }
+
+// UserAppSecret is one user's per-app secret value (a channel bot token, an API
+// key referenced as `{{secret.X}}` in the bundle), sealed at rest. Keyed
+// (user_id, app_id, key). Set via PUT /api/apps/{id}/secrets; resolved by the
+// background service through the daemon at channel-arm time.
+type UserAppSecret struct {
+	ID        uint      `gorm:"primaryKey"`
+	UserID    string    `gorm:"size:128;not null;uniqueIndex:idx_uappsec_user_app_key,priority:1"`
+	AppID     string    `gorm:"size:128;not null;uniqueIndex:idx_uappsec_user_app_key,priority:2"`
+	Key       string    `gorm:"size:128;not null;uniqueIndex:idx_uappsec_user_app_key,priority:3"`
+	Sealed    string    `gorm:"type:text"` // Sealer.Seal(value)
+	UpdatedAt time.Time
+}
+
+func (UserAppSecret) TableName() string { return "user_app_secret" }
 
 // OAuthState is a pending MCP OAuth authorization, binding a CSRF state token to
 // the user who started the flow (the provider callback can't carry the JWT).
@@ -177,8 +242,8 @@ type ManagedMCPServer struct {
 	Command     string            `gorm:"size:512"`
 	Args        []string          `gorm:"serializer:json"`
 	URL         string            `gorm:"size:1024"`
-	Env         map[string]string `gorm:"serializer:json"` // non-secret env (IMAP_HOST, ports, flags)
-	Secrets     []byte            `gorm:"type:text"`       // sealed JSON map[name]value (token / api-key values)
+	Env         map[string]string `gorm:"serializer:json"`             // non-secret env (IMAP_HOST, ports, flags)
+	Secrets     []byte            `gorm:"type:text"`                   // sealed JSON map[name]value (token / api-key values)
 	AuthType    string            `gorm:"size:32;not null;default:''"` // "" | oauth2 | token
 	Package     string            `gorm:"size:256"`
 	CreatedAt   time.Time
@@ -192,13 +257,13 @@ func (ManagedMCPServer) TableName() string { return "managed_mcp_servers" }
 // per piece per user, shared across all apps the user uses the piece in.
 // SealedAuth stores the JSON-marshalled credential map, sealed with mcpoauth.Sealer.
 type InstalledPiece struct {
-	ID         uint      `gorm:"primaryKey;autoIncrement"`
-	UserID     string    `gorm:"size:128;not null;uniqueIndex:idx_installed_piece_user_name,priority:1"`
-	PieceName  string    `gorm:"size:128;not null;uniqueIndex:idx_installed_piece_user_name,priority:2"`
-	Version    string    `gorm:"size:64;not null;default:''"`
-	AuthType   string    `gorm:"size:32;not null;default:'none'"` // secret_text|custom|oauth2|basic|none
-	SealedAuth []byte    `gorm:"type:text"`
-	Enabled    bool      `gorm:"not null;default:true"`
+	ID         uint   `gorm:"primaryKey;autoIncrement"`
+	UserID     string `gorm:"size:128;not null;uniqueIndex:idx_installed_piece_user_name,priority:1"`
+	PieceName  string `gorm:"size:128;not null;uniqueIndex:idx_installed_piece_user_name,priority:2"`
+	Version    string `gorm:"size:64;not null;default:''"`
+	AuthType   string `gorm:"size:32;not null;default:'none'"` // secret_text|custom|oauth2|basic|none
+	SealedAuth []byte `gorm:"type:text"`
+	Enabled    bool   `gorm:"not null;default:true"`
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
 }

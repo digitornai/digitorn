@@ -462,10 +462,8 @@ func (d *Daemon) sessionWindowBrain(snap sessionstore.SessionSnapshot) schema.Br
 		return base
 	}
 	eff := *brain
-	hasOverride := false
 	if ov := snap.ModelOverrides[entryID]; ov != "" {
 		eff.Model = ov
-		hasOverride = true
 	}
 	// EntryModelWindow from the session metadata (persisted at model switch time)
 	// takes priority over the gateway cache — it survives restart and doesn't need
@@ -482,15 +480,6 @@ func (d *Daemon) sessionWindowBrain(snap sessionstore.SessionSnapshot) schema.Br
 			reserved = eff.Context.OutputReserved
 		}
 		eff.Context = &schema.ContextConfig{MaxTokens: w, OutputReserved: reserved}
-	} else if hasOverride {
-		// Model override but no window known yet : drop the YAML's
-		// context.max_tokens so Resolve falls through to ContextWindowFor()
-		// (the hardcoded model table) instead of using 1M which masks compaction.
-		if eff.Context != nil {
-			cc := *eff.Context
-			cc.MaxTokens = 0
-			eff.Context = &cc
-		}
 	}
 	return eff
 }

@@ -14,6 +14,14 @@ import (
 )
 
 func (d *Daemon) pushTriggersToBackground(ctx context.Context, app *appmgr.App) {
+	d.pushTriggersAs(ctx, app, "", "")
+}
+
+// pushTriggersAs pushes an app's channel triggers, attaching the owner + their
+// auth refresh token so the background service can mint fresh per-user access
+// tokens for this app's turns (gateway needs a real UserJWT). owner/refresh may
+// be empty (install-time push with no user context).
+func (d *Daemon) pushTriggersAs(ctx context.Context, app *appmgr.App, owner, refreshToken string) {
 	if d.cfg.Background.OpsURL == "" {
 		return
 	}
@@ -53,12 +61,18 @@ func (d *Daemon) pushTriggersToBackground(ctx context.Context, app *appmgr.App) 
 		if act.Reply == "" {
 			act.Reply = bgchannels.ReplyNone
 		}
+		resolvedConfig, _ := d.resolveConfigSecrets(app.AppID, pc.Config).(map[string]any)
+		if resolvedConfig == nil {
+			resolvedConfig = pc.Config
+		}
 		req := service.CreateTriggerRequest{
-			AppID:      app.AppID,
-			Provider:   name,
-			Adapter:    pc.Adapter,
-			Config:     pc.Config,
-			Activation: &act,
+			AppID:        app.AppID,
+			Provider:     name,
+			Adapter:      pc.Adapter,
+			Config:       resolvedConfig,
+			Activation:   &act,
+			Owner:        owner,
+			RefreshToken: refreshToken,
 		}
 		body, err := json.Marshal(req)
 		if err != nil {

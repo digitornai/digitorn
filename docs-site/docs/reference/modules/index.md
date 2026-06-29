@@ -40,7 +40,7 @@ and never declared explicitly.
 | Module | One-liner |
 |--------|-----------|
 | [rag](rag.md) | Hybrid retrieval over knowledge bases (BM25 + dense + Text2SQL). |
-| [vector](vector.md) | Vector store primitive (Qdrant, Chroma, in-memory). |
+| vector | Vector store primitive (Qdrant, Chroma, in-memory). |
 | [index_module](index_module.md) | Token-aware code indexing for IDE-style search. |
 
 ### UI surfaces
@@ -50,7 +50,7 @@ and never declared explicitly.
 | [workspace](workspace.md) | In-memory virtual filesystem mirrored to the client. |
 | [preview](preview.md) | Internal SSE transport. Auto-loaded by workspace. |
 | [web_preview](web_preview.md) | Iframe attachment registry for spawned dev servers. |
-| [widget](widget.md) | Declarative UI tree (43 primitives; 7 module actions, 15 client-side action-types). |
+| widget | Declarative UI tree (43 primitives; 7 module actions, 15 client-side action-types). |
 
 ### Integration
 
@@ -59,7 +59,7 @@ and never declared explicitly.
 | [mcp](mcp.md) | Connect to external MCP servers. |
 | [channels](channels.md) | Bidirectional I/O: webhook, cron, file_watcher, email, RSS, queue, slack, discord, telegram, voice. |
 | [lsp](lsp.md) | Language Server Protocol diagnostics passthrough. |
-| [queue](queue.md) | Message queue primitive (Redis, in-memory). |
+| queue | Message queue primitive (Redis, in-memory). |
 | [cron_native](cron_native.md) | Cron scheduler (`schedule`, `cancel_schedule`, `remind`). |
 | [dev_tools](dev_tools.md) | Development conveniences. |
 
@@ -75,8 +75,8 @@ module access](../../language/03-agents.md#per-agent-module-access)),
 list the action names in their FQN suffix form
 (`{ shell: [bash] }`, not `{ shell: [Bash] }`).
 
-## Adding your own module
+## How modules are exposed
 
-Modules are Go packages that implement the `Module` interface. The full surface (`CONFIG_MODEL`, params,
-constraints, slots, capability slots, `register_handler`) is
-covered in [How to add a module](../../howtos/add-a-module.md).
+Modules are the runtime's built-in capability set. Each module
+exposes its own surface (`CONFIG_MODEL`, params, constraints,
+slots, capability slots) that you wire up from YAML.

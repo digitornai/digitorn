@@ -257,7 +257,7 @@ all four - allowlist the modules, deny the dangerous actions,
 behavior-block the dangerous params, and require approval for
 anything risky.
 
-## What this proves about the framework
+## What this proves about the runtime
 
 These tests aren't proving the docs - they're proving the
 **daemon really enforces what the YAML declares**, end to

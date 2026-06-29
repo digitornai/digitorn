@@ -6,7 +6,7 @@ slug: /
 
 # Digitorn
 
-A declarative framework for building AI agent applications.
+A declarative runtime for building AI agent applications.
 Define what your agents do, how they think, and what tools
 they use, entirely in YAML.
 

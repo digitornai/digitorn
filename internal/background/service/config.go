@@ -30,6 +30,11 @@ type Config struct {
 	DaemonURL  string
 	ServiceJWT string
 
+	// AuthURL is the external auth service the background uses to refresh a
+	// user's access token (POST /auth/refresh) so a background-triggered turn can
+	// authorize against the LLM gateway with a valid per-user JWT.
+	AuthURL string
+
 	// For BG-6 (config discovery): where the app bundles live + how often to
 	// re-scan them to pick up installs / channel-config changes.
 	AppsDir   string
@@ -51,6 +56,7 @@ func FromEnv() Config {
 		LeaseTTL:   time.Duration(envInt("DIGITORN_BG_LEASE_TTL_SEC", 60)) * time.Second,
 		DaemonURL:  env("DIGITORN_BG_DAEMON_URL", "http://127.0.0.1:8000"),
 		ServiceJWT: os.Getenv("DIGITORN_BG_SERVICE_JWT"),
+		AuthURL:    env("DIGITORN_BG_AUTH_URL", "https://auth.digitorn.ai"),
 		AppsDir:    env("DIGITORN_BG_APPS_DIR", defaultAppsDir()),
 		RescanSec:  envInt("DIGITORN_BG_RESCAN_SEC", 60),
 		OpsToken:   os.Getenv("DIGITORN_BG_OPS_TOKEN"),

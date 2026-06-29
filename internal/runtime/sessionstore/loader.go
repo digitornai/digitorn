@@ -196,6 +196,8 @@ func hydrateFromSnapshot(s *SessionState, snap *SessionSnapshot) {
 		s.TokensIn = snap.TokensIn
 		s.TokensOut = snap.TokensOut
 		s.EntryModelWindow = snap.EntryModelWindow
+	s.ReasoningEffort = snap.ReasoningEffort
+	s.EffortOverrides = snap.EffortOverrides
 	s.UsdTotal = snap.UsdTotal
 	s.Title = snap.Title
 	s.Workspace = snap.Workspace

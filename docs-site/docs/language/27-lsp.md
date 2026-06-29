@@ -249,4 +249,4 @@ request by id.
 - Per-module deep reference (config knobs, troubleshooting):
   [modules/reference/lsp.md](../reference/modules/lsp.md)
 - Workspace module (uses LSP for live preview lint):
-  [Workspace & Preview](41-preview.md)
+  Workspace & Preview

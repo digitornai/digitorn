@@ -33,8 +33,10 @@ type App struct {
 	// true when the app is trigger/channel-driven — the signal the web client
 	// uses to open the ops dashboard instead of the chat surface. Both are
 	// populated from the snapshot for enabled apps ; empty/false otherwise.
-	Mode       string `json:"mode,omitempty"`
-	Background bool   `json:"background"`
+	Mode        string    `json:"mode,omitempty"`
+	Background  bool      `json:"background"`
+	Modes       []AppMode `json:"modes,omitempty"`
+	DefaultMode string    `json:"default_mode,omitempty"`
 	// BYOK ("bring your own key") routes this app's LLM traffic directly
 	// to the provider using the brain-declared credential, bypassing the
 	// digitorn LLM gateway. Default false : the daemon uses the gateway
@@ -43,6 +45,10 @@ type App struct {
 	BYOK        bool      `json:"byok"`
 	InstalledAt time.Time `json:"installed_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
+	// Activity is the compiled ``ui.activity`` block, surfaced on the
+	// summary so the composer + workspace can gate the Activity pane
+	// without fetching the full manifest.
+	Activity *schema.ActivityPanelBlock `json:"activity,omitempty"`
 }
 
 // RuntimeApp is what the runtime consumes : the decoded app.dgc
@@ -92,6 +98,11 @@ type Manager interface {
 	// snapshot so the next runtime turn picks up the change without
 	// daemon restart. Returns ErrAppNotFound if the row is missing.
 	SetBYOK(ctx context.Context, appID string, enabled bool) error
+
+	// SetDisplayName overrides the displayed label (trimmed; "" clears the
+	// override → falls back to the bundle's short name). Survives reload.
+	// Returns ErrAppNotFound if the row is missing.
+	SetDisplayName(ctx context.Context, appID, name string) error
 
 	// Reload recompiles the app from its on-disk source (used when the
 	// operator edits app.yaml by hand) and refreshes the snapshot.
@@ -215,10 +226,14 @@ func (m *gormManager) swapSnapshot(appID string, ra *RuntimeApp) {
 
 // metaFromRow converts a DB row to the public App type.
 func metaFromRow(r *models.App) *App {
+	shortName := r.ShortName
+	if r.DisplayName != "" {
+		shortName = r.DisplayName
+	}
 	return &App{
 		AppID:       r.AppID,
 		Name:        r.Name,
-		ShortName:   r.ShortName,
+		ShortName:   shortName,
 		Version:     r.Version,
 		Description: r.Description,
 		Category:    r.Category,
@@ -236,6 +251,47 @@ func metaFromRow(r *models.App) *App {
 // background is true for non-conversation modes OR when the app declares a
 // channels module or runtime triggers (the channels-based apps leave
 // runtime.mode empty, so mode alone is not a reliable discriminant).
+type AppMode struct {
+	ID          string `json:"id"`
+	Label       string `json:"label,omitempty"`
+	Description string `json:"description,omitempty"`
+	Icon        string `json:"icon,omitempty"`
+	Accent      string `json:"accent,omitempty"`
+}
+
+func deriveModes(def *schema.AppDefinition) (modes []AppMode, defaultMode string) {
+	if def == nil || def.Runtime == nil || len(def.Runtime.Modes) == 0 {
+		return nil, ""
+	}
+	order := def.Runtime.ModesOrder
+	if len(order) == 0 {
+		order = make([]string, 0, len(def.Runtime.Modes))
+		for id := range def.Runtime.Modes {
+			order = append(order, id)
+		}
+	}
+	modes = make([]AppMode, 0, len(order))
+	for _, id := range order {
+		md, ok := def.Runtime.Modes[id]
+		if !ok {
+			continue
+		}
+		modes = append(modes, AppMode{
+			ID:          id,
+			Label:       md.Label,
+			Description: md.Description,
+			Icon:        md.Icon,
+			Accent:      md.Accent,
+		})
+	}
+	if _, ok := def.Runtime.Modes["auto"]; ok {
+		defaultMode = "auto"
+	} else if len(modes) > 0 {
+		defaultMode = modes[0].ID
+	}
+	return modes, defaultMode
+}
+
 func deriveMode(def *schema.AppDefinition) (mode string, background bool) {
 	if def == nil {
 		return "", false
@@ -268,5 +324,9 @@ func (m *gormManager) enrichMeta(meta *App) {
 	}
 	if ra, ok := m.readSnapshot().apps[meta.AppID]; ok && ra != nil {
 		meta.Mode, meta.Background = deriveMode(ra.Definition)
+		meta.Modes, meta.DefaultMode = deriveModes(ra.Definition)
+		if ra.Definition != nil && ra.Definition.UI != nil {
+			meta.Activity = ra.Definition.UI.Activity
+		}
 	}
 }

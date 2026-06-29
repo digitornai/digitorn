@@ -1,73 +1,73 @@
 package schema
 
 type BehaviorConfig struct {
-	Profile         string                   `yaml:"profile,omitempty"`
-	Rules           map[string]any           `yaml:"rules,omitempty"`
-	Custom          []BehaviorCustomRule     `yaml:"custom,omitempty"`
-	RuleDefinitions []BehaviorRuleDefinition `yaml:"rule_definitions,omitempty"`
-	StateTracking   *StateTrackingConfig     `yaml:"state_tracking,omitempty"`
-	ClassifyTurns   bool                     `yaml:"classify_turns,omitempty"`
-	Classifier      *ClassifierConfig        `yaml:"classifier,omitempty"`
-	Brain           *Brain                   `yaml:"brain,omitempty"`
-	UseAgentBrain   *bool                    `yaml:"use_agent_brain,omitempty"`
+	Profile         string                   `yaml:"profile,omitempty" json:"profile,omitempty"`
+	Rules           map[string]any           `yaml:"rules,omitempty" json:"rules,omitempty"`
+	Custom          []BehaviorCustomRule     `yaml:"custom,omitempty" json:"custom,omitempty"`
+	RuleDefinitions []BehaviorRuleDefinition `yaml:"rule_definitions,omitempty" json:"rule_definitions,omitempty"`
+	StateTracking   *StateTrackingConfig     `yaml:"state_tracking,omitempty" json:"state_tracking,omitempty"`
+	ClassifyTurns   bool                     `yaml:"classify_turns,omitempty" json:"classify_turns,omitempty"`
+	Classifier      *ClassifierConfig        `yaml:"classifier,omitempty" json:"classifier,omitempty"`
+	Brain           *Brain                   `yaml:"brain,omitempty" json:"brain,omitempty"`
+	UseAgentBrain   *bool                    `yaml:"use_agent_brain,omitempty" json:"use_agent_brain,omitempty"`
 }
 
 type BehaviorCustomRule map[string]any
 
 type BehaviorRuleDefinition struct {
-	ID          string         `yaml:"id"`
-	Description string         `yaml:"description,omitempty"`
-	Trigger     any            `yaml:"trigger,omitempty"`
-	When        RuleWhen       `yaml:"when,omitempty"`
-	Action      RuleAction     `yaml:"action,omitempty"`
-	Condition   map[string]any `yaml:"condition,omitempty"`
-	Message     string         `yaml:"message,omitempty"`
+	ID          string         `yaml:"id" json:"id"`
+	Description string         `yaml:"description,omitempty" json:"description,omitempty"`
+	Trigger     any            `yaml:"trigger,omitempty" json:"trigger,omitempty"`
+	When        RuleWhen       `yaml:"when,omitempty" json:"when,omitempty"`
+	Action      RuleAction     `yaml:"action,omitempty" json:"action,omitempty"`
+	Condition   map[string]any `yaml:"condition,omitempty" json:"condition,omitempty"`
+	Message     string         `yaml:"message,omitempty" json:"message,omitempty"`
 }
 
 type StateTrackingConfig struct {
-	Sets     map[string]StateTrackingSetConfig     `yaml:"sets,omitempty"`
-	Counters map[string]StateTrackingCounterConfig `yaml:"counters,omitempty"`
-	Flags    map[string]StateTrackingFlagConfig    `yaml:"flags,omitempty"`
+	Sets     map[string]StateTrackingSetConfig     `yaml:"sets,omitempty" json:"sets,omitempty"`
+	Counters map[string]StateTrackingCounterConfig `yaml:"counters,omitempty" json:"counters,omitempty"`
+	Flags    map[string]StateTrackingFlagConfig    `yaml:"flags,omitempty" json:"flags,omitempty"`
 }
 
 type StateTrackingSetConfig struct {
-	AddOn   []string `yaml:"add_on"`
-	Target  string   `yaml:"target,omitempty"`
-	Aliases []string `yaml:"aliases,omitempty"`
+	AddOn   []string `yaml:"add_on" json:"add_on"`
+	Target  string   `yaml:"target,omitempty" json:"target,omitempty"`
+	Aliases []string `yaml:"aliases,omitempty" json:"aliases,omitempty"`
 }
 
 type StateTrackingCounterConfig struct {
-	IncrementOn []string          `yaml:"increment_on"`
-	ResetOn     []string          `yaml:"reset_on,omitempty"`
-	ResetWhen   map[string]string `yaml:"reset_when,omitempty"`
+	IncrementOn []string          `yaml:"increment_on" json:"increment_on"`
+	ResetOn     []string          `yaml:"reset_on,omitempty" json:"reset_on,omitempty"`
+	ResetWhen   map[string]string `yaml:"reset_when,omitempty" json:"reset_when,omitempty"`
 }
 
 type StateTrackingFlagConfig struct {
-	SetOn   []string `yaml:"set_on"`
-	UnsetOn []string `yaml:"unset_on,omitempty"`
+	SetOn   []string `yaml:"set_on" json:"set_on"`
+	UnsetOn []string `yaml:"unset_on,omitempty" json:"unset_on,omitempty"`
 }
 
 type ClassifierConfig struct {
-	Frequency         ClassifierFrequency `yaml:"frequency,omitempty"`
-	FrequencyN        int                 `yaml:"frequency_n,omitempty"`
-	SkipFollowups     *bool               `yaml:"skip_followups,omitempty"`
-	Timeout           int                 `yaml:"timeout,omitempty"`
-	ComplexityLevels  []any               `yaml:"complexity_levels,omitempty"`
-	Approaches        []any               `yaml:"approaches,omitempty"`
-	RiskLevels        []any               `yaml:"risk_levels,omitempty"`
-	MaxDirectives     int                 `yaml:"max_directives,omitempty"`
-	Context           *ClassifierContext  `yaml:"context,omitempty"`
-	SystemPrompt      string              `yaml:"system_prompt,omitempty"`
-	DirectivePrefix   string              `yaml:"directive_prefix,omitempty"`
-	HighRiskWarning   string              `yaml:"high_risk_warning,omitempty"`
-	HighRiskThreshold string              `yaml:"high_risk_threshold,omitempty"`
-	DirectiveFooter   string              `yaml:"directive_footer,omitempty"`
+	Frequency         ClassifierFrequency `yaml:"frequency,omitempty" json:"frequency,omitempty"`
+	FrequencyN        int                 `yaml:"frequency_n,omitempty" json:"frequency_n,omitempty"`
+	SkipFollowups     *bool               `yaml:"skip_followups,omitempty" json:"skip_followups,omitempty"`
+	Timeout           int                 `yaml:"timeout,omitempty" json:"timeout,omitempty"`
+	ComplexityLevels  []any               `yaml:"complexity_levels,omitempty" json:"complexity_levels,omitempty"`
+	Approaches        []any               `yaml:"approaches,omitempty" json:"approaches,omitempty"`
+	RiskLevels        []any               `yaml:"risk_levels,omitempty" json:"risk_levels,omitempty"`
+	MaxDirectives     int                 `yaml:"max_directives,omitempty" json:"max_directives,omitempty"`
+	Context           *ClassifierContext  `yaml:"context,omitempty" json:"context,omitempty"`
+	SystemPrompt      string              `yaml:"system_prompt,omitempty" json:"system_prompt,omitempty"`
+	DirectivePrefix   string              `yaml:"directive_prefix,omitempty" json:"directive_prefix,omitempty"`
+	HighRiskWarning   string              `yaml:"high_risk_warning,omitempty" json:"high_risk_warning,omitempty"`
+	HighRiskThreshold string              `yaml:"high_risk_threshold,omitempty" json:"high_risk_threshold,omitempty"`
+	DirectiveFooter   string              `yaml:"directive_footer,omitempty" json:"directive_footer,omitempty"`
 }
 
 type ClassifierContext struct {
-	ToolInventory bool `yaml:"tool_inventory,omitempty"`
-	SessionState  bool `yaml:"session_state,omitempty"`
-	WorkspaceInfo bool `yaml:"workspace_info,omitempty"`
-	RecentHistory bool `yaml:"recent_history,omitempty"`
-	HistoryDepth  int  `yaml:"history_depth,omitempty"`
+	ToolInventory bool `yaml:"tool_inventory,omitempty" json:"tool_inventory,omitempty"`
+	SessionState  bool `yaml:"session_state,omitempty" json:"session_state,omitempty"`
+	WorkspaceInfo bool `yaml:"workspace_info,omitempty" json:"workspace_info,omitempty"`
+	RecentHistory bool `yaml:"recent_history,omitempty" json:"recent_history,omitempty"`
+	HistoryDepth  int  `yaml:"history_depth,omitempty" json:"history_depth,omitempty"`
 }

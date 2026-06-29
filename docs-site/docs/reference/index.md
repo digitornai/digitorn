@@ -24,7 +24,7 @@ paths see [Tutorial](/docs/tutorial/).
 
 ## Where things actually live
 
-The runtime is an in-process framework. When you call a tool
+The runtime runs in-process. When you call a tool
 from the LLM, the path is:
 
 1. The LLM emits a tool call (native API or a parser-recoverable text

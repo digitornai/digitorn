@@ -177,10 +177,11 @@ type agentState struct {
 	cancel context.CancelFunc
 	done   chan struct{}
 
-	status    atomic.Value // string
-	endedNano atomic.Int64
-	result    atomic.Value // runtime.AgentResult
-	errMsg    atomic.Value // string
+	status       atomic.Value // string
+	endedNano    atomic.Int64
+	result       atomic.Value // runtime.AgentResult
+	errMsg       atomic.Value // string
+	cancelReason atomic.Value // string — user-facing reason when cancelled by the user
 
 	toolCalls   atomic.Int64
 	llmCalls    atomic.Int64
@@ -488,7 +489,14 @@ func (m *Manager) runAgent(a *agentState, req SpawnRequest) {
 		a.errMsg.Store(err.Error())
 		if a.ctx.Err() != nil {
 			status = "cancelled"
-			a.errMsg.Store(a.ctx.Err().Error())
+			// Prefer the user-facing reason (set when the user explicitly
+			// cancelled this sub-agent) over the raw "context canceled" string,
+			// so the parent agent reads a clear message in the sub-agent result.
+			if reason, ok := a.cancelReason.Load().(string); ok && reason != "" {
+				a.errMsg.Store(reason)
+			} else {
+				a.errMsg.Store(a.ctx.Err().Error())
+			}
 		}
 	}
 	a.status.Store(status)
@@ -603,6 +611,21 @@ func (m *Manager) Cancel(root, runID string) error {
 	}
 	a.cancel()
 	return nil
+}
+
+// CancelWithReason stops an agent and its whole subtree, attaching a
+// user-facing reason that surfaces in the cancelled agent's result (so the
+// parent agent learns the user aborted it, not a bare "context canceled").
+// Returns the number of agents signalled.
+func (m *Manager) CancelWithReason(root, runID, reason string) (int, error) {
+	a := m.lookup(root, runID)
+	if a == nil {
+		return 0, ErrNotFound
+	}
+	if reason != "" {
+		a.cancelReason.Store(reason)
+	}
+	return m.CancelTree(root, runID), nil
 }
 
 func (m *Manager) CancelTree(root, runID string) int {

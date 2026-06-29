@@ -73,7 +73,7 @@ func ResolveWithRuntime(snap sessionstore.SessionSnapshot, brain schema.Brain, r
 //  1. gatewayWindow             (live from /v1/models max_context_tokens — authoritative model window)
 //  2. brain.context.max_tokens  (explicit per-agent YAML config — fallback when gateway unknown)
 //  3. runtimeMaxTokens          (app-level runtime.context.max_tokens — general ceiling)
-//  4. ContextWindowFor()        (hardcoded table — last resort for unknown models)
+//  4. DefaultContextWindow      (single conservative default — no hardcoded per-model table)
 //
 // gatewayWindow is the AUTHENTIC source for the model's real context window. It
 // wins over brain.context.max_tokens because the YAML config is often set to the
@@ -101,7 +101,7 @@ func ResolveWithRuntimeAndGateway(snap sessionstore.SessionSnapshot, brain schem
 		window = runtimeMaxTokens
 	}
 	if window <= 0 {
-		window = contextcompact.ContextWindowFor(brain.Provider, brain.Model)
+		window = contextcompact.DefaultContextWindow
 	}
 	if reserved <= 0 {
 		reserved = DefaultOutputReserved

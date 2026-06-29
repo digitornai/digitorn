@@ -7,7 +7,7 @@ title: Client SDKs
 
 | Client | Page | Use it for |
 |--------|------|-----------|
-| React preview SDK | [preview-sdk.md](../../language/47-preview-sdk.md) | The `@digitorn/preview-sdk` npm package. Hooks and components used inside `web/` of any preview app to subscribe to workspace state. |
+| React preview SDK | preview-sdk.md | The `@digitorn/preview-sdk` npm package. Hooks and components used inside `web/` of any preview app to subscribe to workspace state. |
 
 ## Choosing an SDK
 

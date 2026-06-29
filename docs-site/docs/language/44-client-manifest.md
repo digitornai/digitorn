@@ -187,7 +187,7 @@ fine; pick one place per app for clarity.
 virtual filesystem and how to position the viewer relative to the
 chat.
 
-Renderer fields (documented in [Workspace & Preview](41-preview.md)):
+Renderer fields (documented in Workspace & Preview):
 
 - `render_mode: str` (default `"auto"`) - `react`, `html`,
   `markdown`, `slides`, `code`, `latex`, `builder`, or `auto`. Auto
@@ -279,7 +279,7 @@ ui:
 Full surface - 43 widget primitives, 15 client-side action-types
 (distinct from the 7 server-side widget module actions),
 server-side template substitution, live `widget:*` Socket.IO
-events - is in [Widgets](42-widgets.md). External widget files under
+events - is in Widgets. External widget files under
 `./widgets/*.yaml` in the bundle dir are auto-loaded into
 `inline` by the compiler (keyed by file stem, same pattern as
 skills).
@@ -687,14 +687,14 @@ real security boundary is `tools.capabilities`
 - App-config block reference for the `ui:` block:
   [App Configuration → ui](02-app-config.md#ui---display-layer-daemon-never-reads)
 - Workspace renderer + preview proxy:
-  [Workspace & Preview](41-preview.md)
+  Workspace & Preview
 - Declarative widget primitives + actions:
-  [Widgets](42-widgets.md)
+  Widgets
 - Skills (server-side, distinct from `ui.slash_commands`):
   [Skills System](21-skills.md)
 - Bundle namespaces (where `{{prompt.X}}` / `{{include:}}` come
   from): [Bundle namespaces](38-bundle-namespaces.md)
 - Building a custom React UI inside the preview iframe:
-  [Preview SDK](47-preview-sdk.md) - `<DigiPreview>` provider,
+  Preview SDK - `<DigiPreview>` provider,
   `useWorkspaceFiles`, `useSessionMeta`, `useSessionLifecycle`,
   hidden `__sdk__/` namespace, host ↔ iframe protocol.

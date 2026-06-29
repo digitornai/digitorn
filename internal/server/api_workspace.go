@@ -934,7 +934,11 @@ func readFileCapped(abs string, cap int64) (data []byte, truncated bool, err err
 // per-workdir shadow repo (<workdir>/.digitorn/…) — internal git plumbing that
 // is never exposed to the editor or the file tree.
 func isShadowRel(rel string) bool {
-	s := filepath.ToSlash(strings.TrimPrefix(rel, "./"))
+	// Normalise Windows separators to "/" regardless of the host OS: on Linux
+	// filepath.ToSlash is a no-op on "\", so a client that sends ".digitorn\git\HEAD"
+	// would otherwise slip past this guard and expose the internal shadow dir.
+	s := strings.ReplaceAll(rel, "\\", "/")
+	s = strings.TrimPrefix(s, "./")
 	return s == ".digitorn" || strings.HasPrefix(s, ".digitorn/")
 }
 

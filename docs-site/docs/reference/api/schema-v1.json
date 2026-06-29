@@ -129,7 +129,7 @@
         },
         "image_generation": {
           "default": false,
-          "description": "Whether this model can generate images. If true, the framework handles image output in tool results and SSE events. Models like DALL-E, Stable Diffusion via MCP.",
+          "description": "Whether this model can generate images. If true, the runtime handles image output in tool results and SSE events. Models like DALL-E, Stable Diffusion via MCP.",
           "title": "Image Generation",
           "type": "boolean"
         },

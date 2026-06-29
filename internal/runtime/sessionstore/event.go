@@ -171,6 +171,16 @@ const (
 	// the durable trail also lets a reconnecting / cold-loading client
 	// reconstruct the task list from the event stream.
 	EventBackgroundTask EventType = "background_task"
+
+	// Flow engine lifecycle events. These are durable (ride the session log)
+	// but intentionally NOT projected into snap.Messages — the projector has
+	// no case for them — so the LLM never sees them in context. They exist
+	// purely for client observability (live progress indicators, post-hoc
+	// audit) and crash-recovery state reconstruction.
+	EventFlowStarted   EventType = "flow_started"
+	EventFlowNodeStart EventType = "flow_node_started"
+	EventFlowNodeEnd   EventType = "flow_node_ended"
+	EventFlowEnded     EventType = "flow_ended"
 )
 
 type Event struct {
@@ -181,6 +191,7 @@ type Event struct {
 	AppID         string    `json:"app_id,omitempty"`
 	UserID        string    `json:"user_id,omitempty"`
 	CorrelationID string    `json:"correlation_id,omitempty"`
+	StepID        string    `json:"step_id,omitempty"`
 
 	// LiveOutputTokens is the running ~estimate of tokens generated so far in
 	// the current assistant message — set ONLY on EventAssistantDelta during
@@ -214,6 +225,7 @@ type Event struct {
 	Retry      *RetryPayload            `json:"retry,omitempty"`
 	Security   *SecurityDecisionPayload `json:"security,omitempty"`
 	Background *BackgroundTaskPayload   `json:"background,omitempty"`
+	Flow       *FlowPayload             `json:"flow,omitempty"`
 	// WorkspaceChanges carries the live pending-changes list for the workspace
 	// preview push. Set only on EventWorkspaceChanges (transient).
 	WorkspaceChanges *WorkspaceChangesPayload `json:"workspace_changes,omitempty"`
@@ -344,6 +356,12 @@ type MessagePayload struct {
 	ToolCallIDs []string       `json:"tool_call_ids,omitempty"`
 	Attachments []BlobRef      `json:"attachments,omitempty"`
 	Extra       map[string]any `json:"extra,omitempty"`
+
+	// TriggerEvent is the structured inbound event that caused this user turn
+	// (channels scope: provider, adapter, source, payload, …). Non-human
+	// launchers (background webhooks, cron) attach it so flow nodes can read
+	// {{event.payload.*}} at runtime. Empty for ordinary chat clients.
+	TriggerEvent map[string]any `json:"trigger_event,omitempty"`
 }
 
 // MessagePart is one chunk of a multi-part message. The Type field is
@@ -364,6 +382,12 @@ type MessagePart struct {
 	Blob       *BlobRef        `json:"blob,omitempty"`
 	ToolCall   *ToolCallSpec   `json:"tool_call,omitempty"`
 	ToolResult *ToolResultSpec `json:"tool_result,omitempty"`
+
+	// URL is a remote media reference for image/video parts that live at a
+	// gateway-hosted URL (e.g. a generated video) rather than in the blob
+	// store. Mutually exclusive with Blob. Thumbnail is an optional poster.
+	URL       string `json:"url,omitempty"`
+	Thumbnail string `json:"thumbnail,omitempty"`
 }
 
 // Part type discriminators. Use these constants instead of string
@@ -615,6 +639,7 @@ type MetaPayload struct {
 	Model            string `json:"model,omitempty"`
 	AgentID          string `json:"agent_id,omitempty"`
 	MaxContextTokens int    `json:"max_ctx_tokens,omitempty"`
+	ReasoningEffort  string `json:"reasoning_effort,omitempty"`
 	// EntryAgent pins which agent handles this session (overrides the app's YAML
 	// entry agent) and ContextExtra is extra system-prompt text for the session.
 	// Both are set at creation by non-human launchers (e.g. a background channel
@@ -669,3 +694,19 @@ type TurnPayload struct {
 }
 
 func (e Event) Time() time.Time { return time.Unix(0, e.TsUnixNano).UTC() }
+
+// FlowPayload carries the flow engine lifecycle data for the four flow events
+// (flow_started, flow_node_started, flow_node_ended, flow_ended). These events
+// are durable but NOT projected into snap.Messages, so they never reach the
+// LLM context — they exist for client observability and crash-recovery audit.
+type FlowPayload struct {
+	FlowID    string `json:"flow_id,omitempty"`
+	NodeID    string `json:"node_id,omitempty"`
+	NodeType  string `json:"node_type,omitempty"`
+	// Status is "running" on node_started, "completed"/"errored"/"skipped" on node_ended,
+	// and "completed"/"errored" on flow_ended.
+	Status    string `json:"status,omitempty"`
+	Output    string `json:"output,omitempty"`
+	Error     string `json:"error,omitempty"`
+	Iteration int    `json:"iteration,omitempty"`
+}

@@ -29,6 +29,7 @@ import (
 	"github.com/mbathepaul/digitorn/internal/background/processor"
 	"github.com/mbathepaul/digitorn/internal/background/service"
 	"github.com/mbathepaul/digitorn/internal/background/store"
+	"github.com/mbathepaul/digitorn/internal/background/userauth"
 )
 
 type inbound struct{ mgr *processor.Manager }
@@ -36,8 +37,20 @@ type inbound struct{ mgr *processor.Manager }
 func (i *inbound) Handler() http.Handler         { return i.mgr.Handler() }
 func (i *inbound) Start(ctx context.Context) error { return i.mgr.Start(ctx) }
 
-func rearmFunc(st *store.Store, mgr *processor.Manager, ca *cron.Adapter, pa *pieces.Adapter) func(context.Context, service.CreateTriggerRequest) (store.Trigger, error) {
+// channelRuntimeAdapters are armed from the scanned app YAML (persistent
+// listeners), not the DB-trigger path — so a /ops/triggers push for one is a
+// no-op for arming. It still carries the owner's refresh token, which we store.
+var channelRuntimeAdapters = map[string]bool{
+	"discord": true, "telegram": true, "webhook": true, "rss": true, "whatsapp": true,
+}
+
+func rearmFunc(client *daemonclient.Client, st *store.Store, mgr *processor.Manager, ca *cron.Adapter, pa *pieces.Adapter, umgr *userauth.Manager) func(context.Context, service.CreateTriggerRequest) (store.Trigger, error) {
 	return func(ctx context.Context, req service.CreateTriggerRequest) (store.Trigger, error) {
+		// Store the owner's refresh token regardless of adapter, so background
+		// turns for this app can mint a fresh per-user access token.
+		if umgr != nil && req.Owner != "" && req.RefreshToken != "" {
+			_ = umgr.Save(ctx, req.Owner, req.RefreshToken)
+		}
 		activation := channels.ActivationConfig{
 			Agent:       req.Agent,
 			Message:     req.Message,
@@ -50,6 +63,12 @@ func rearmFunc(st *store.Store, mgr *processor.Manager, ca *cron.Adapter, pa *pi
 		}
 		if req.Activation != nil {
 			activation = *req.Activation
+		}
+		// The trigger's session runs AS the user who configured it (the push
+		// owner) — that's whose stored token authorizes the LLM gateway. This
+		// overrides a blank YAML owner so channel turns are never owner-less.
+		if req.Owner != "" {
+			activation.Owner = req.Owner
 		}
 
 		spec := processor.TriggerSpec{
@@ -79,7 +98,7 @@ func rearmFunc(st *store.Store, mgr *processor.Manager, ca *cron.Adapter, pa *pi
 			if pa == nil {
 				return store.Trigger{}, fmt.Errorf("pieces adapter not initialized")
 			}
-			p, err := piecesProviderFromConfig(req)
+			p, err := piecesProviderFromConfig(ctx, client, req)
 			if err != nil {
 				return store.Trigger{}, err
 			}
@@ -92,12 +111,61 @@ func rearmFunc(st *store.Store, mgr *processor.Manager, ca *cron.Adapter, pa *pi
 			return st.GetTrigger(ctx, id)
 
 		default:
-			return store.Trigger{}, fmt.Errorf("adapter %q cannot be armed at runtime (supported: cron, pieces)", req.Adapter)
+			// Channel adapters (discord/telegram/…): the live listener is armed by
+			// the YAML scan; here we arm the trigger that binds events to a session
+			// owned by the configurer, so the turn carries that user's JWT.
+			if channelRuntimeAdapters[req.Adapter] {
+				id, err := mgr.Arm(ctx, spec)
+				if err != nil {
+					return store.Trigger{}, err
+				}
+				return st.GetTrigger(ctx, id)
+			}
+			return store.Trigger{}, fmt.Errorf("adapter %q cannot be armed at runtime (supported: cron, pieces, channels)", req.Adapter)
 		}
 	}
 }
 
-func piecesProviderFromConfig(req service.CreateTriggerRequest) (pieces.Provider, error) {
+// resolvePiecesAuth resolves a pieces trigger's auth. When the config says
+// `auth_from_installed: "<piece>"` (or `true` for the trigger's own piece),
+// it pulls the owner's CONFIGURED connector credentials from the daemon —
+// so a connector configured once (2-click) is reused by background triggers,
+// no re-config. Otherwise it falls back to env-placeholder resolution.
+func resolvePiecesAuth(ctx context.Context, client *daemonclient.Client, owner string, cfg map[string]any, piece string) any {
+	installed := ""
+	switch v := cfg["auth_from_installed"].(type) {
+	case string:
+		installed = v
+	case bool:
+		if v {
+			installed = piece
+		}
+	}
+	if installed != "" && client != nil {
+		if wire, err := client.PieceAuth(ctx, owner, installed); err == nil && len(wire) > 0 {
+			return wire
+		}
+	}
+	a, ok := cfg["auth"]
+	if !ok {
+		return nil
+	}
+	am, ok := a.(map[string]any)
+	if !ok {
+		return a
+	}
+	resolved := make(map[string]any, len(am))
+	for k, v := range am {
+		if s, ok := v.(string); ok {
+			resolved[k] = os.ExpandEnv(s)
+		} else {
+			resolved[k] = v
+		}
+	}
+	return resolved
+}
+
+func piecesProviderFromConfig(ctx context.Context, client *daemonclient.Client, req service.CreateTriggerRequest) (pieces.Provider, error) {
 	cfg := req.Config
 	if cfg == nil {
 		return pieces.Provider{}, fmt.Errorf("pieces trigger requires config")
@@ -116,24 +184,7 @@ func piecesProviderFromConfig(req service.CreateTriggerRequest) (pieces.Provider
 		interval = time.Duration(sec) * time.Second
 	}
 
-	// Serialize auth back to map for the provider.
-	var auth any
-	if a, ok := cfg["auth"]; ok {
-		// Re-resolve env placeholders if auth is a string map.
-		if am, ok := a.(map[string]any); ok {
-			resolved := make(map[string]any, len(am))
-			for k, v := range am {
-				if s, ok := v.(string); ok {
-					resolved[k] = os.ExpandEnv(s)
-				} else {
-					resolved[k] = v
-				}
-			}
-			auth = resolved
-		} else {
-			auth = a
-		}
-	}
+	auth := resolvePiecesAuth(ctx, client, req.Owner, cfg, piece)
 
 	var props map[string]any
 	if p, ok := cfg["props"].(map[string]any); ok {
@@ -151,8 +202,8 @@ func piecesProviderFromConfig(req service.CreateTriggerRequest) (pieces.Provider
 	}, nil
 }
 
-func loadPiecesFromDB(st *store.Store) ([]pieces.Provider, error) {
-	triggers, err := st.AllTriggers(context.Background(), "", true)
+func loadPiecesFromDB(ctx context.Context, client *daemonclient.Client, st *store.Store) ([]pieces.Provider, error) {
+	triggers, err := st.AllTriggers(ctx, "", true)
 	if err != nil {
 		return nil, err
 	}
@@ -178,22 +229,8 @@ func loadPiecesFromDB(st *store.Store) ([]pieces.Provider, error) {
 		if sec, ok := cfg["interval"].(float64); ok && sec > 0 {
 			interval = time.Duration(sec) * time.Second
 		}
-		var auth any
-		if a, ok := cfg["auth"]; ok {
-			if am, ok := a.(map[string]any); ok {
-				resolved := make(map[string]any, len(am))
-				for k, v := range am {
-					if s, ok := v.(string); ok {
-						resolved[k] = os.ExpandEnv(s)
-					} else {
-						resolved[k] = v
-					}
-				}
-				auth = resolved
-			} else {
-				auth = a
-			}
-		}
+		owner, _ := cfg["owner"].(string)
+		auth := resolvePiecesAuth(ctx, client, owner, cfg, piece)
 		var props map[string]any
 		if p, ok := cfg["props"].(map[string]any); ok {
 			props = p
@@ -240,7 +277,7 @@ func main() {
 		// Boot from DB: reload pieces triggers persisted from previous runs.
 		// The daemon pushes triggers via POST /ops/triggers on app install —
 		// no filesystem scanning needed.
-		piecesProviders, err := loadPiecesFromDB(st)
+		piecesProviders, err := loadPiecesFromDB(context.Background(), client, st)
 		if err != nil {
 			log.Warn("background: could not load pieces triggers from DB", "err", err.Error())
 		}
@@ -248,17 +285,54 @@ func main() {
 		pa := discovery.NewPiecesAdapter(piecesProviders, st, log)
 		ca := cron.New(nil)
 
+		// Per-user token manager: keeps a fresh access token per owner (refresh
+		// against the auth service) so background turns carry a real UserJWT for
+		// the LLM gateway. Shares the service's DB; feeds the daemonclient.
+		ustore := userauth.NewStore(st.DB())
+		if merr := ustore.Migrate(); merr != nil {
+			log.Warn("background: user-token store migrate failed", "err", merr.Error())
+		}
+		umgr := userauth.NewManager(ustore, userauth.NewClient(cfg.AuthURL))
+		client.SetUserTokenProvider(umgr.Token)
+
 		reg := discovery.NewBaseRegistry(ca, pa)
+
+		// Channels (discord/telegram/…) are discovered from the installed app
+		// YAMLs and armed as persistent listeners — a separate path from the
+		// DB-scheduled cron/pieces above. Register their adapters into the SAME
+		// registry before the manager is built so Manager.Start launches them.
+		// Secrets ({{secret.X}}) resolve from env for now (DIGITORN_BG_SECRET_*).
+		var channelPlan discovery.Plan
+		if apps, serr := discovery.ScanApps(cfg.AppsDir); serr != nil {
+			log.Warn("background: apps dir unreadable, no channels armed", "dir", cfg.AppsDir, "err", serr.Error())
+		} else {
+			// {{secret.X}} resolves from the daemon's per-app secret store first
+			// (the UI-pasted token), falling back to env vars.
+			secretFn := func(appID, key string) string {
+				v, _ := client.AppChannelSecret(context.Background(), appID, key)
+				return v
+			}
+			channelPlan = discovery.BuildPlan(apps, os.Getenv, secretFn)
+			discovery.RegisterChannelAdapters(reg, channelPlan, st, log)
+		}
+
 		mgr, err := discovery.ArmFromDB(context.Background(), st, reg, log)
 		if err != nil {
 			return service.Setup{}, err
+		}
+
+		// Arm the channel triggers on the same manager (alongside the DB ones).
+		for _, tr := range discovery.ChannelTriggers(channelPlan) {
+			if _, aerr := mgr.Arm(context.Background(), tr); aerr != nil {
+				log.Warn("background: arm channel trigger failed", "provider", tr.Provider, "adapter", tr.Adapter, "err", aerr.Error())
+			}
 		}
 
 		proc := processor.New(st, client, reg, nil, log)
 		return service.Setup{
 			Processor: proc,
 			Inbound:   &inbound{mgr: mgr},
-			Rearm:     rearmFunc(st, mgr, ca, pa),
+			Rearm:     rearmFunc(client, st, mgr, ca, pa, umgr),
 		}, nil
 	}
 

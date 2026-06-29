@@ -1,0 +1,25 @@
+# Test config: mcp-browser server for Digitorn
+# Usage: digitornd -config test_mcp_browser.yaml
+
+server:
+  host: "127.0.0.1"
+  port: 8000
+
+database:
+  driver: "sqlite"
+  dsn: "digitorn_test_mcp.db"
+
+llm:
+  providers:
+    anthropic:
+      api_key: ""  # ou env: ANTHROPIC_API_KEY
+    openai:
+      api_key: ""  # ou env: OPENAI_API_KEY
+
+# Module MCP avec le serveur browser
+mcp:
+  servers:
+    browser:
+      command: "mcp-browser"
+      args: ["mcp"]
+      timeout: 30

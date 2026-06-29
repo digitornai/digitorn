@@ -227,8 +227,8 @@ primitives.
 
 The full primitive vocabulary (43 of them - text, image, list,
 form, input, button, modal, table, chart, …) lives in
-[Widgets](../language/42-widgets.md) and the
-[widget module reference](../reference/modules/widget.md).
+Widgets and the
+widget module reference.
 
 ## When to use which
 

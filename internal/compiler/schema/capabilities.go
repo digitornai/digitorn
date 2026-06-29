@@ -8,32 +8,32 @@ import (
 )
 
 type CapabilitiesConfig struct {
-	DefaultPolicy   CapabilityPolicy  `yaml:"default_policy,omitempty"`
-	MaxRiskLevel    RiskLevel         `yaml:"max_risk_level,omitempty"`
-	Grant           []CapabilityGrant `yaml:"grant,omitempty"`
-	Approve         []CapabilityGrant `yaml:"approve,omitempty"`
-	Deny            []CapabilityGrant `yaml:"deny,omitempty"`
-	ApprovalTimeout int               `yaml:"approval_timeout,omitempty"`
-	HiddenModules   []string          `yaml:"hidden_modules,omitempty"`
-	HiddenActions   []CapabilityGrant `yaml:"hidden_actions,omitempty"`
+	DefaultPolicy   CapabilityPolicy  `yaml:"default_policy,omitempty" json:"default_policy,omitempty"`
+	MaxRiskLevel    RiskLevel         `yaml:"max_risk_level,omitempty" json:"max_risk_level,omitempty"`
+	Grant           []CapabilityGrant `yaml:"grant,omitempty" json:"grant,omitempty"`
+	Approve         []CapabilityGrant `yaml:"approve,omitempty" json:"approve,omitempty"`
+	Deny            []CapabilityGrant `yaml:"deny,omitempty" json:"deny,omitempty"`
+	ApprovalTimeout int               `yaml:"approval_timeout,omitempty" json:"approval_timeout,omitempty"`
+	HiddenModules   []string          `yaml:"hidden_modules,omitempty" json:"hidden_modules,omitempty"`
+	HiddenActions   []CapabilityGrant `yaml:"hidden_actions,omitempty" json:"hidden_actions,omitempty"`
 
 	// MaxDataClassification caps the sensitivity level an action may declare
 	// (public | internal | confidential | restricted). Gate 5 blocks any
 	// action whose data_classification exceeds this. Empty = no cap.
-	MaxDataClassification string `yaml:"max_data_classification,omitempty"`
+	MaxDataClassification string `yaml:"max_data_classification,omitempty" json:"max_data_classification,omitempty"`
 
 	// RateLimits caps calls per action over a sliding 60-second window.
 	// Keys are "module.action" FQNs, or "*" for a default applied to every
 	// action without an explicit key. Value is calls/minute (0 = unlimited).
 	// Gate 6 blocks a call that would exceed its limit. Empty = no limiting.
-	RateLimits map[string]int `yaml:"rate_limits,omitempty"`
+	RateLimits map[string]int `yaml:"rate_limits,omitempty" json:"rate_limits,omitempty"`
 }
 
 type CapabilityGrant struct {
-	Module  string   `yaml:"module"`
-	Tools   []string `yaml:"tools,omitempty"`
-	Actions []string `yaml:"actions,omitempty"` // deprecated alias of Tools
-	Reason  string   `yaml:"reason,omitempty"`
+	Module  string   `yaml:"module" json:"module"`
+	Tools   []string `yaml:"tools,omitempty" json:"tools,omitempty"`
+	Actions []string `yaml:"actions,omitempty" json:"actions,omitempty"` // deprecated alias of Tools
+	Reason  string   `yaml:"reason,omitempty" json:"reason,omitempty"`
 }
 
 func (g CapabilityGrant) EffectiveTools() []string {

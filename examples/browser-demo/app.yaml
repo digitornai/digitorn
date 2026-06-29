@@ -1,0 +1,46 @@
+schema_version: 2
+
+app:
+  app_id: browser-demo
+  name: Browser Demo
+  version: "0.1.0"
+  description: "Demo agent using mcp-browser for web automation tasks."
+  author: "you@example.com"
+  category: "automation"
+
+agents:
+  - id: main
+    role: worker
+    brain:
+      provider: anthropic
+      model: claude-sonnet-4-6
+      temperature: 0.7
+      max_tokens: 4096
+      config:
+        api_key: "{{env.ANTHROPIC_API_KEY}}"
+    system_prompt: |
+      You are a browser automation assistant. You can navigate websites,
+      take screenshots, fill forms, and extract content from web pages.
+
+      Use the browser tools to help users with web tasks.
+      Always confirm what you're about to do before taking actions.
+    modules:
+      - mcp
+
+tools:
+  modules:
+    mcp:
+      config:
+        servers:
+          browser:
+            transport: stdio
+            command: mcp-browser
+            args: ["mcp"]
+            timeout: 30
+            sandbox:
+              permissions: [process.exec, net.http]
+  capabilities:
+    default_policy: auto
+    grant:
+      - module: mcp
+        tools: [browser_action, browser_screenshot, browser_extract, browser_form, browser_query]

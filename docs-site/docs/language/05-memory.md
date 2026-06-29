@@ -271,9 +271,9 @@ files on disk. This is the same mechanism Claude Code uses with `CLAUDE.md` and 
 `~/.claude/memory/` directory.
 
 File memory is opt-in via `context.sections` in the app YAML. It requires no extra
-module — only the `filesystem` module the agent uses to write files.
+module · only the `filesystem` module the agent uses to write files.
 
-### `builtin: memory_index` — zero-config memory
+### `builtin: memory_index` · zero-config memory
 
 The easiest setup: declare one section with `builtin: memory_index`.
 
@@ -290,8 +290,8 @@ The runtime:
 1. Scans `{workdir}/.digitorn/memory/` for `.md` files at every turn start.
 2. Injects their content into the system prompt inside `<system-reminder>` tags (so
    the agent distinguishes dynamic memory from hardcoded instructions).
-3. Always appends the **writing directive** — even on the first turn when the directory
-   is empty — so the agent knows immediately how and when to persist knowledge.
+3. Always appends the **writing directive** · even on the first turn when the directory
+   is empty · so the agent knows immediately how and when to persist knowledge.
 
 `MEMORY.md` (if present) is loaded first as the index; all other `.md` files follow in
 alphabetical order.
@@ -329,11 +329,11 @@ Don't add inline or block comments when editing source files.
 ```markdown
 # Memory Index
 
-- [No code comments](feedback_no_code_comments.md) — Don't add comments when modifying code
-- [Deploy process](reference_deploy.md) — make deploy ENV=prod
+- No code comments · Don't add comments when modifying code
+- Deploy process · make deploy ENV=prod
 ```
 
-### `file:` / `files:` / `dir:` — custom paths
+### `file:` / `files:` / `dir:` · custom paths
 
 For full control over which files are loaded:
 
@@ -374,7 +374,7 @@ context:
 | Field | Type | Description |
 |-------|------|-------------|
 | `file` | string | Single file path (relative to workdir or absolute). |
-| `files` | list | Multiple file paths — merged with `file:` in order. |
+| `files` | list | Multiple file paths · merged with `file:` in order. |
 | `dir` | string | Load all `.md` files from this directory (`MEMORY.md` first). |
 | `optional` | bool | Silently skip missing or unreadable files (default `false`). |
 | `writable` | bool | Inject the memory writing directive (default `false`). Without this, file sections are read-only context. |
@@ -384,7 +384,7 @@ context:
 | `when` | string | Gate: path check (`session.workdir`) or comparison (`session.context_pct >= 60`). |
 | `priority` | int | Render order (lower = earlier). |
 
-### `when:` — conditional sections
+### `when:` · conditional sections
 
 Sections are dropped when `when:` resolves to empty/false. Supports both a plain path
 (truthy check) and comparison expressions:

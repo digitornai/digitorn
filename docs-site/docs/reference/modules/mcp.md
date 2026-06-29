@@ -496,7 +496,7 @@ tools:
 - App-config block reference (`tools.modules.mcp`):
   [App Configuration → tools.modules](../../language/02-app-config.md#toolsmodules---module-configuration)
 - OS-level sandbox + per-server permissions:
-  [OS-Level Sandbox → MCP servers](../../language/35-sandbox.md#mcp-servers---deny-by-default)
+  OS-Level Sandbox → MCP servers
 - Credentials vault, OAuth providers, refresh loop:
   [credentials.md](../../reference/runtime/credentials.md)
 - App-level OAuth + token injection routes:

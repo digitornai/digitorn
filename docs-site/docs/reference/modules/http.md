@@ -3,12 +3,12 @@ id: http
 title: http Module
 sidebar_label: http
 sidebar_position: 6
-description: HTTP client — REST verbs, file upload/download, SSRF-guarded.
+description: HTTP client · REST verbs, file upload/download, SSRF-guarded.
 ---
 
 # http
 
-HTTP client for calling external APIs. All standard verbs, JSON auto-parsing, multipart upload, file download. Every request goes through the SSRF guard — same blocklist as the `web` module.
+HTTP client for calling external APIs. All standard verbs, JSON auto-parsing, multipart upload, file download. Every request goes through the SSRF guard · same blocklist as the `web` module.
 
 | Property | Value |
 |----------|-------|
@@ -91,9 +91,9 @@ tools:
 
 ## SSRF guard
 
-All URLs are validated before the request is sent — same blocklist as the `web` module: loopback, RFC 1918, link-local, AWS/GCP metadata endpoints, IPv6 ULA. Set `allow_private_hosts: true` to disable (dev only).
+All URLs are validated before the request is sent · same blocklist as the `web` module: loopback, RFC 1918, link-local, AWS/GCP metadata endpoints, IPv6 ULA. Set `allow_private_hosts: true` to disable (dev only).
 
 ## Cross-references
 
-- [web module](web.md) — search + fetch (built on the same SSRF guard)
+- [web module](web.md) · search + fetch (built on the same SSRF guard)
 - [App Configuration → tools.modules](../../language/02-app-config.md#toolsmodules---module-configuration)

@@ -1159,7 +1159,7 @@ type globParams struct {
 	Glob       string  `json:"glob"`        // alias : models often key the pattern under the tool name
 	Type       string  `json:"type"`        // "file" | "dir" | "any" (default)
 	MaxResults flexjson.Int `json:"max_results"` // cap (default globDefaultCap)
-	Tree       *bool   `json:"tree"`        // nil = default true; false only when explicitly set
+	Tree       *flexjson.Bool `json:"tree"` // nil = default true; false only when explicitly set
 }
 
 // effectivePattern resolves the glob pattern, accepting the common LLM mistake of
@@ -1284,7 +1284,7 @@ func (m *Module) glob(ctx context.Context, raw json.RawMessage) (tool.Result, er
 	for i, h := range hits {
 		files[i] = h.rel
 	}
-	if p.Tree == nil || *p.Tree {
+	if p.Tree == nil || bool(*p.Tree) {
 		var treeOut string
 		if base != "" {
 			treeOut = renderPathsTreeRich(base, files)

@@ -390,4 +390,4 @@ digitorn dev deploy ./my-app/app.yaml --force
 - Behavior profiles (where `{{behavior.X}}` files come from):
   [Behavior Engine](43-behavior.md)
 - Widget files auto-loaded into `ui.widgets.inline`:
-  [Widgets](42-widgets.md)
+  Widgets

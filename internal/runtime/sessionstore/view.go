@@ -31,10 +31,15 @@ type HistoryMessage struct {
 	Reasoning   string    `json:"reasoning,omitempty"`
 	ReasoningStartedAt int64     `json:"reasoning_started_at,omitempty"`
 	ReasoningEndedAt   int64     `json:"reasoning_ended_at,omitempty"`
-	Seq         uint64    `json:"seq"`
-	Ts          string    `json:"ts"`
-	ToolCalls   []any     `json:"tool_calls,omitempty"`
-	Attachments []BlobRef `json:"attachments,omitempty"`
+	Seq         uint64        `json:"seq"`
+	StepID      string        `json:"step_id,omitempty"`
+	Ts          string        `json:"ts"`
+	ToolCalls   []any         `json:"tool_calls,omitempty"`
+	Attachments []BlobRef     `json:"attachments,omitempty"`
+	// Parts carries the full multi-part shape (text/image/video/…) so the
+	// denormalized history fallback can render generated media the same way
+	// the live + event-replay paths do.
+	Parts []MessagePart `json:"parts,omitempty"`
 }
 
 type HistoryEvent struct {
@@ -79,6 +84,7 @@ type SocketEnvelope struct {
 	// normal event — backward compatible with the legacy wire shape.
 	AgentRunID    string `json:"agent_run_id,omitempty"`
 	RootSessionID string `json:"root_session_id,omitempty"`
+	StepID        string `json:"step_id,omitempty"`
 
 	// CorrelationID ties a transient event to a parent it belongs to : a
 	// run_parallel child's tool_progress carries the parent run_parallel
@@ -131,6 +137,7 @@ func (b *EnvelopeBuilder) Build(ev *Event) SocketEnvelope {
 		UserID:           ev.UserID,
 		InstanceID:       b.InstanceID,
 		CorrelationID:    ev.CorrelationID,
+		StepID:           ev.StepID,
 		LiveOutputTokens: ev.LiveOutputTokens,
 	}
 }
@@ -204,9 +211,11 @@ func BuildHistory(state *SessionState, messages []Message, events []Event, opts 
 			ReasoningStartedAt: m.ReasoningStartedAt,
 			ReasoningEndedAt:   m.ReasoningEndedAt,
 			Seq:         m.Seq,
+			StepID:      m.StepID,
 			Ts:          unixNanoToISO(m.TsUnixNano),
 			ToolCalls:   toolCalls,
 			Attachments: m.Attachments,
+			Parts:       m.Parts,
 		})
 	}
 

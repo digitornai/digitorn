@@ -114,6 +114,7 @@ func TranscriptFromParts(snap *SessionSnapshot, events []Event) []Message {
 		parts, content, toolIDs, atts := NormalizeMessageParts(ev.Message)
 		out = append(out, Message{
 			Seq:         ev.Seq,
+			StepID:      ev.StepID,
 			Role:        ev.Message.Role,
 			Parts:       parts,
 			Content:     content,

@@ -62,7 +62,7 @@ async function handleRequest(req: Request, loader: PieceLoader): Promise<Respons
 }
 
 async function handlePoll(req: TriggerPollRequest, loader: PieceLoader): Promise<TriggerPollResponse> {
-  const piece = loader.getPiece(req.piece)
+  const piece = await loader.getPiece(req.piece)
   if (!piece) throw new Error(`piece "${req.piece}" not installed`)
 
   const triggerDef = piece.metadata.triggers?.[req.trigger]
@@ -89,7 +89,7 @@ async function handlePoll(req: TriggerPollRequest, loader: PieceLoader): Promise
 }
 
 async function handleEnable(req: TriggerEnableRequest, loader: PieceLoader): Promise<{ ok: boolean }> {
-  const piece = loader.getPiece(req.piece)
+  const piece = await loader.getPiece(req.piece)
   if (!piece) throw new Error(`piece "${req.piece}" not installed`)
 
   const triggerDef = piece.metadata.triggers?.[req.trigger]
@@ -110,7 +110,7 @@ async function handleEnable(req: TriggerEnableRequest, loader: PieceLoader): Pro
 }
 
 async function handleDisable(req: TriggerEnableRequest, loader: PieceLoader): Promise<{ ok: boolean }> {
-  const piece = loader.getPiece(req.piece)
+  const piece = await loader.getPiece(req.piece)
   if (!piece) throw new Error(`piece "${req.piece}" not installed`)
 
   const triggerDef = piece.metadata.triggers?.[req.trigger]
@@ -131,7 +131,7 @@ async function handleDisable(req: TriggerEnableRequest, loader: PieceLoader): Pr
 }
 
 async function handleHandshake(req: TriggerHandshakeRequest, loader: PieceLoader): Promise<unknown> {
-  const piece = loader.getPiece(req.piece)
+  const piece = await loader.getPiece(req.piece)
   if (!piece) throw new Error(`piece "${req.piece}" not installed`)
 
   const triggerDef = piece.metadata.triggers?.[req.trigger]
@@ -178,7 +178,7 @@ interface PieceSummary {
 }
 
 async function handlePiecesList(loader: PieceLoader): Promise<{ pieces: PieceSummary[]; count: number }> {
-  const pieces = loader.getAllPieces()
+  const pieces = loader.getAllManifests()
   const summaries: PieceSummary[] = pieces.map(p => pieceToSummary(p))
   return { pieces: summaries, count: summaries.length }
 }
@@ -209,7 +209,7 @@ function pieceToSummary(p: { id: string; displayName: string; description: strin
 }
 
 async function handlePieceAuth(pieceId: string, loader: PieceLoader): Promise<unknown> {
-  const piece = loader.getPiece(pieceId)
+  const piece = loader.getManifest(pieceId)
   if (!piece) return { error: `piece "${pieceId}" not found` }
 
   const auth = piece.metadata.auth
@@ -285,7 +285,7 @@ async function handlePieceAuth(pieceId: string, loader: PieceLoader): Promise<un
 }
 
 async function handlePieceStatus(pieceId: string, loader: PieceLoader): Promise<unknown> {
-  const piece = loader.getPiece(pieceId)
+  const piece = loader.getManifest(pieceId)
   if (!piece) return { error: `piece "${pieceId}" not found` }
 
   return {

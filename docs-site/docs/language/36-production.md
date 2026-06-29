@@ -168,7 +168,7 @@ The OS-level sandbox is enabled by default
 `--sandbox` / `--no-sandbox` CLI flag.
 
 Full reference (levels, namespaces, MCP per-server permissions,
-allow_paths, audit log) lives in [OS-Level Sandbox](35-sandbox.md).
+allow_paths, audit log) lives in OS-Level Sandbox.
 Quick recap of the four levels:
 
 | Level | Layers | Recommended for |
@@ -458,7 +458,7 @@ throttle, and the rich liveness payload.
   sandbox / kv_backend field): [Settings](../reference/runtime/configuration.md)
   *(see also)*
 - OS-Level Sandbox detail page:
-  [OS-Level Sandbox](35-sandbox.md)
+  OS-Level Sandbox
 - Credentials encryption + KMS modes:
   [credentials.md](../reference/runtime/credentials.md)
 - Auth model + JWT verification:

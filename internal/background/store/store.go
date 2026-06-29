@@ -17,6 +17,10 @@ type Store struct{ db *gorm.DB }
 // New wraps a GORM handle. Call Migrate once before use.
 func New(db *gorm.DB) *Store { return &Store{db: db} }
 
+// DB exposes the underlying handle so sibling stores (e.g. userauth) can share
+// the one background-service database instead of opening a second connection.
+func (s *Store) DB() *gorm.DB { return s.db }
+
 // Migrate creates/updates the background tables. Idempotent.
 func (s *Store) Migrate() error { return s.db.AutoMigrate(&Trigger{}, &Job{}, &Run{}) }
 

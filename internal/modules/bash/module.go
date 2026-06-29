@@ -482,7 +482,13 @@ func (m *Module) run(ctx context.Context, raw json.RawMessage) (tool.Result, err
 			timeout = 0
 		}
 		started := time.Now()
-		res := runWithPTY(ctx, m.kind, m.path, command, root, buildEnv(m.cfg.EnvAllow), m.cfg.MaxOutput, timeout)
+		// Prompt watchdog active in the foreground (where a hang freezes the turn);
+		// disabled for background tasks, which run off the loop and may sit quiet.
+		promptWait := time.Duration(m.cfg.PromptWaitSecs) * time.Second
+		if tool.IsBackground(ctx) {
+			promptWait = 0
+		}
+		res := runWithPTY(ctx, m.kind, m.path, command, root, buildEnv(m.cfg.EnvAllow), m.cfg.MaxOutput, timeout, promptWait)
 		m.enrich(&res, root, started)
 		workdir.NotifyFileChange(ctx)
 		return m.result(command, res, nil, timeout), nil
@@ -650,7 +656,8 @@ func (m *Module) shellName() string {
 }
 
 func (m *Module) result(command string, res cmdResult, err error, timeout time.Duration) tool.Result {
-	toolFailed := res.TimedOut || res.Cancelled || errors.Is(err, errShellExited) || errors.Is(err, errWaitingForInput)
+	toolFailed := res.TimedOut || res.Cancelled || res.WaitingForInput || res.ExitCode != 0 ||
+		errors.Is(err, errShellExited) || errors.Is(err, errWaitingForInput)
 	out := tool.Result{
 		Success: !toolFailed,
 		Data: runResult{
@@ -677,8 +684,14 @@ func (m *Module) result(command string, res cmdResult, err error, timeout time.D
 			out.Error = fmt.Sprintf("command timed out after %s; its process tree was killed", timeout)
 		case errors.Is(err, errShellExited):
 			out.Error = "the command ended the shell session (e.g. `exit`); a fresh shell starts on the next call"
-		case errors.Is(err, errWaitingForInput):
-			out.Error = "command is waiting for interactive input (e.g. sudo password prompt). Retry with the `input` parameter to provide the answer."
+		case res.WaitingForInput || errors.Is(err, errWaitingForInput):
+			out.Error = "command was waiting for interactive input (e.g. a sudo/ssh password or a y/n confirmation) and was stopped so it could not hang. Retry with the `input` parameter to provide the answer, or use a non-interactive form (e.g. `sudo -n`, `--yes`/`-y`, `ssh -o BatchMode=yes`)."
+		default: // non-zero exit code: surface the code AND the reason (stderr) so the agent sees WHY
+			if detail := errorDetail(res.Stderr, res.Stdout); detail != "" {
+				out.Error = fmt.Sprintf("exit code %d: %s", res.ExitCode, detail)
+			} else {
+				out.Error = fmt.Sprintf("exit code %d", res.ExitCode)
+			}
 		}
 	}
 	return out

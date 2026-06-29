@@ -208,4 +208,4 @@ tools:
 - Behavior engine (built-in `read_before_edit` rule):
   [Behavior Engine](../../language/43-behavior.md#the-14-built-in-rules)
 - Sandbox Landlock guards (kernel-level path enforcement):
-  [OS-Level Sandbox → Landlock](../../language/35-sandbox.md#1-landlock---filesystem)
+  OS-Level Sandbox → Landlock

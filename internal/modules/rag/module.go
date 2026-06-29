@@ -52,6 +52,7 @@ func New() *Module {
 		SupportedPlatforms: []domainmodule.Platform{
 			domainmodule.PlatformLinux, domainmodule.PlatformMacOS, domainmodule.PlatformWindows,
 		},
+		ConfigSchema: module.SchemaFromType(&Config{}),
 	}
 
 	m.RegisterTool(module.Tool{
@@ -382,7 +383,7 @@ func (m *Module) ingestDirectory(ctx context.Context, raw json.RawMessage) (tool
 		KnowledgeBase string   `json:"knowledge_base"`
 		Name          string   `json:"name"`
 		Path          string   `json:"path"`
-		Recursive     *bool    `json:"recursive"`
+		Recursive     *flexjson.Bool `json:"recursive"`
 		Extensions    []string `json:"extensions"`
 		MaxFiles      flexjson.Int      `json:"max_files"`
 	}
@@ -391,7 +392,7 @@ func (m *Module) ingestDirectory(ctx context.Context, raw json.RawMessage) (tool
 	if strings.TrimSpace(p.Path) == "" {
 		return fail("path is required"), nil
 	}
-	recursive := p.Recursive == nil || *p.Recursive
+	recursive := p.Recursive == nil || bool(*p.Recursive)
 	maxFiles := int(p.MaxFiles)
 	if maxFiles <= 0 {
 		maxFiles = 1000

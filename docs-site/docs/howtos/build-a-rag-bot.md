@@ -256,5 +256,5 @@ configuration surface.
 - [Advanced RAG](../language/37-rag.md) - the pipeline knobs:
   hybrid weights, reranker, semantic cache, Text2SQL, CRAG,
   adaptive routing.
-- [Vector module](../reference/modules/vector.md) - lower level,
+- Vector module - lower level,
   raw collections without the RAG pipeline.

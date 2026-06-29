@@ -14,15 +14,15 @@ Pre-built binaries are available on the [GitHub Releases page](https://github.co
 
 Each release ships a bundle containing:
 
-- `digitornd` — the daemon process (HTTP API, Socket.IO events, agent loop)
-- `digitorn` — the CLI client (chat, app management, auth)
-- `digitorn-worker-llm` — LLM inference worker
-- `digitorn-worker-embeddings` — embedding worker
-- `digitorn-worker` — general-purpose worker
-- `digitorn-background` — background automation service (optional)
+- `digitornd` · the daemon process (HTTP API, Socket.IO events, agent loop)
+- `digitorn` · the CLI client (chat, app management, auth)
+- `digitorn-worker-llm` · LLM inference worker
+- `digitorn-worker-embeddings` · embedding worker
+- `digitorn-worker` · general-purpose worker
+- `digitorn-background` · background automation service (optional)
 - `config.example.yaml`
 
-Deploy the **whole folder** — do not split the binaries.
+Deploy the **whole folder** · do not split the binaries.
 
 ### Linux / macOS
 
@@ -138,8 +138,6 @@ digitorn list
 
 ## Prerequisites
 
-- **Go 1.22+** (only if building from source)
-- **Git** (only if building from source)
 - **Optional**: Node.js + npx for MCP servers that require them
 
 ## Uninstall

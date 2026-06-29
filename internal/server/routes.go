@@ -71,6 +71,9 @@ func (d *Daemon) MountAPI() {
 		// App-scoped (not session) so the blob exists before a per_event session is
 		// created. Generic — web/CLI/background channels/voice all use it.
 		r.Post("/api/apps/{app_id}/blobs", d.uploadBlob)
+		// Outbound media: stream a stored blob by hash (assistant-generated
+		// images, tool image outputs). Content-addressed → immutable + cacheable.
+		r.Get("/api/apps/{app_id}/blobs/{hash}", d.getBlob)
 
 		// ----- Automations : user-scoped window onto the background service -----
 		// The bg /ops API is admin-only ; these routes enforce per-user ownership
@@ -100,6 +103,7 @@ func (d *Daemon) MountAPI() {
 				r.Get("/state", d.getState)
 				r.Get("/memory", d.getMemory)
 				r.Get("/agents", d.getAgents)
+				r.Post("/agents/{agent_id}/cancel", d.cancelAgent)
 				r.Get("/queue", d.getQueue)
 
 				r.Post("/messages", d.postMessage)
@@ -127,11 +131,32 @@ func (d *Daemon) MountAPI() {
 
 		// ----- Secrets (in-memory V1, file-backed V2) -----
 		r.Get("/api/apps/{app_id}/required-secrets", d.requiredSecrets)
+		r.Get("/api/apps/{app_id}/channel-secrets", d.appChannelSecrets)
+		r.Get("/api/apps/{app_id}/channel-secret", d.appChannelSecretValue)
+		r.Put("/api/auth/background-token", d.setBackgroundToken)
 		r.Get("/api/apps/{app_id}/secrets", d.listSecrets)
 		r.Get("/api/apps/{app_id}/secrets/{key}", d.getSecret)
 		r.Put("/api/apps/{app_id}/secrets", d.setSecrets)
 		r.Put("/api/apps/{app_id}/secrets/{key}", d.setSecret)
 		r.Delete("/api/apps/{app_id}/secrets/{key}", d.deleteSecret)
+
+		// ----- App module settings (schema + values) -----
+		r.Get("/api/apps/{app_id}/module-settings", d.appModuleSettings)
+		r.Put("/api/apps/{app_id}/modules/{module_id}/config", d.setAppModuleConfig)
+
+		// ----- Credential vault (per-user, encrypted at rest) -----
+		r.Get("/api/credentials", d.credentialsList)
+		r.Post("/api/credentials", d.credentialsCreate)
+		r.Get("/api/credentials/providers", d.credentialsProviders)
+		r.Get("/api/credentials/models", d.credentialsModels)
+		r.Post("/api/credentials/test", d.credentialsTest)
+		r.Get("/api/credentials-grants", d.credentialsGrants)
+		r.Post("/api/credentials/copilot/device/start", d.credentialsCopilotStart)
+		r.Get("/api/credentials/copilot/device/status", d.credentialsCopilotStatus)
+		r.Get("/api/credentials/copilot/models", d.credentialsCopilotModels)
+		r.Put("/api/credentials/{id}", d.credentialsUpdate)
+		r.Delete("/api/credentials/{id}", d.credentialsDelete)
+		r.Post("/api/credentials/{id}/refresh", d.credentialsRefresh)
 
 		// ----- Diagnostics / Status -----
 		r.Get("/api/apps/{app_id}/diagnostics", d.diagnostics)
@@ -153,6 +178,7 @@ func (d *Daemon) MountAPI() {
 			r.Put("/{piece_name}", d.piecesUpdateCreds)
 			r.Delete("/{piece_name}", d.piecesUninstall)
 			r.Get("/{piece_name}/auth-schema", d.piecesAuthSchema)
+			r.Get("/{piece_name}/bridge-auth", d.piecesBridgeAuth)
 			r.Get("/{piece_name}/status", d.piecesStatus)
 			r.Post("/{piece_name}/configure", d.piecesConfigure)
 			r.Post("/{piece_name}/test", d.piecesTestAuth)
@@ -210,6 +236,7 @@ func (d *Daemon) mountAppRoutes(r chi.Router) {
 	r.Post("/api/apps/{app_id}/enable", d.enableApp)
 	r.Post("/api/apps/{app_id}/disable", d.disableApp)
 	r.Put("/api/apps/{app_id}/byok", d.setAppBYOK)
+	r.Put("/api/apps/{app_id}/display-name", d.setAppDisplayName)
 	r.Post("/api/apps/{app_id}/reload", d.reloadApp)
 	r.Get("/api/apps/{app_id}/check-update", d.checkUpdate)
 
@@ -310,7 +337,9 @@ func (d *Daemon) mountStubs(r chi.Router) {
 	r.Post("/api/apps/{app_id}/notifications", stub("notifications.send"))
 
 	// Skills / Snippets / Templates / Triggers / Watchers / Preview / LSP / OAuth-MCP.
-	r.Get("/api/apps/{app_id}/templates", stub("templates.list"))
+	r.Get("/api/apps/{app_id}/templates", d.listTemplates)
+	r.Get("/api/apps/{app_id}/templates/{template_id}/preview", d.serveTemplatePreview)
+	r.Get("/api/apps/{app_id}/templates/{template_id}/preview/*", d.serveTemplatePreview)
 	r.Get("/api/apps/{app_id}/skills", d.listSkills)
 	r.Post("/api/apps/{app_id}/skills", d.createSkill)
 	r.Patch("/api/apps/{app_id}/skills/{skill_id}", d.updateSkill)

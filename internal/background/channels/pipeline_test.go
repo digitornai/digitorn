@@ -452,3 +452,36 @@ func TestFilterSecretsIn_Recursive(t *testing.T) {
 		t.Fatal("nested secret not filtered")
 	}
 }
+
+func TestProcess_AttachesTriggerEventForFlow(t *testing.T) {
+	e := Event{
+		Provider: "glpi",
+		Adapter:  "webhook",
+		Source:   "10.0.0.1",
+		Payload: map[string]any{
+			"id":     float64(4242),
+			"status": "new",
+			"name":   "VPN down",
+		},
+	}
+	act, err := Process(context.Background(), e, ActivationConfig{
+		Message: "{{event.payload.name}}",
+	}, ModuleConfig{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if act.TriggerEvent == nil {
+		t.Fatal("expected TriggerEvent on activation")
+	}
+	if act.TriggerEvent["provider"] != "glpi" {
+		t.Fatalf("provider = %v", act.TriggerEvent["provider"])
+	}
+	payload := act.TriggerEvent["payload"].(map[string]any)
+	if payload["id"] != float64(4242) {
+		t.Fatalf("payload.id = %v", payload["id"])
+	}
+	ls := act.ToLaunchSpec("glpi-support")
+	if ls.TriggerEvent == nil || ls.TriggerEvent["adapter"] != "webhook" {
+		t.Fatalf("LaunchSpec lost TriggerEvent: %+v", ls.TriggerEvent)
+	}
+}

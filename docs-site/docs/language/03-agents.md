@@ -140,7 +140,7 @@ back to OpenAI-compatible defaults.
 
 ### Native vs text-based tool calling
 
-The framework detects which tool-calling format a provider supports.
+The runtime detects which tool-calling format a provider supports.
 
 - **Native** - tools are passed via the API `tools=` parameter; the
   LLM emits structured `tool_calls`. Default for: OpenAI, Anthropic,
@@ -164,7 +164,7 @@ text-based (e.g. `qwen2.5-coder` on Ollama).
 #### Tool-call recovery
 
 Even with native tool calling, models occasionally emit malformed or
-text-wrapped tool calls. The framework's recovery parser (in the
+text-wrapped tool calls. The runtime's recovery parser (in the
 provider streaming layer) handles:
 
 1. Llama-style `<function=name{...}</function>` - regex parse

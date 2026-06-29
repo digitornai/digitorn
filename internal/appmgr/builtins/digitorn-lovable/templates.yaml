@@ -1,0 +1,209 @@
+# Starter templates exposed by Digitorn Lovable.
+#
+# Each template is a COMPLETE, production-grade React + Vite project
+# (Tailwind v4 + shadcn/ui), sourced from real MIT projects (shadcn
+# block registry + curated open-source starters) — never hand-invented.
+#
+#   - preview_path: the pre-built static app served by the daemon and
+#       shown in the chat client's template-preview iframe.
+#   - seed_dir: the full structured project copied into the user's
+#       workspace when the template is applied.
+#   - system_prompt: a one-turn system addendum injected when the user
+#       sends a message with the template attached. It MANDATES building
+#       on top of the scaffold rather than starting from scratch.
+#
+# To add a template: drop the project under templates/<id>/files/, build
+# it once into templates/<id>/dist/, and add an entry below. Multi-route
+# SPAs must use hash history + relative base so the preview renders.
+
+templates:
+  - id: admin-suite
+    name: "Admin suite"
+    description: "Full admin app: dashboard with charts, tasks table, chats, users, apps, settings, auth + error pages. React + Vite + TanStack Router + shadcn. The flagship starter."
+    preview_path: "templates/admin-suite/dist/index.html"
+    seed_dir: "templates/admin-suite/files/"
+    system_prompt: |
+      You are building from the "Admin suite" starter — a COMPLETE,
+      production-grade admin application ALREADY scaffolded in the
+      workspace. This is your foundation. DO NOT start from scratch, DO
+      NOT scaffold a new project, DO NOT swap the stack. Build the user's
+      product ON TOP of this app.
+
+      Stack (installed): React + Vite + TypeScript + Tailwind CSS v4 +
+      shadcn/ui (Radix) + TanStack Router + TanStack Query + Zustand.
+
+      Structure — explore it before editing:
+        - src/features/ — the screens: dashboard, tasks, chats, users,
+          apps, settings, auth (sign-in/up, OTP, forgot), errors.
+          Each feature has its own components/. Edit these.
+        - src/components/ — shared layout (app sidebar, header, theme
+          switch, command menu) + ui/ (shadcn primitives)
+        - src/routes/ — TanStack Router file routes (add pages here)
+        - src/lib/, src/stores/, src/context/, src/config/
+        - The router uses HASH history (so the live preview renders).
+
+      First turn, ALWAYS in this order:
+        1. Bash("npm install", timeout=600)
+        2. Bash("npm run dev -- --host 0.0.0.0 --port 5173", run_in_background=true)
+        3. PreviewProxy(port=5173, bash_task_id=<id>)
+
+      Then build the user's product: rename the brand in
+      src/components/layout/data/sidebar-data.ts, keep the screens you
+      need and adapt their features/, add routes under src/routes/, and
+      add shadcn components with `npx shadcn@latest add <name>`. Vite HMR
+      pushes every change live to the Preview tab. Extend, never rewrite.
+
+
+  - id: dashboard-shadcn
+    name: "Analytics dashboard"
+    description: "Real shadcn dashboard: collapsible sidebar, interactive area chart, sortable data table, KPI cards. Vite + React + TS + Tailwind v4."
+    preview_path: "templates/dashboard-shadcn/dist/index.html"
+    seed_dir: "templates/dashboard-shadcn/files/"
+    system_prompt: |
+      You are building from the "Analytics dashboard" starter — a COMPLETE,
+      production-grade shadcn/ui project ALREADY scaffolded in the workspace.
+      This is your foundation. DO NOT start from scratch, DO NOT scaffold a
+      new project, DO NOT swap the stack. Build the user's request ON TOP of
+      this code, reusing its components and design language.
+
+      Stack (installed): Vite + React + TypeScript + Tailwind CSS v4 +
+      shadcn/ui (Radix), Geist font, lucide-react.
+
+      Structure — read it before editing:
+        - src/App.tsx — composes the page (sidebar + header + cards + chart + table)
+        - src/components/ — app-sidebar, site-header, section-cards,
+          chart-area-interactive, data-table, nav-*
+        - src/components/ui/ — shadcn primitives (button, card, table, chart,
+          sidebar, …). Edit these to restyle globally.
+        - src/app/dashboard/data.json — the table's seed data
+        - src/index.css — theme tokens (colors, radius)
+
+      First turn, ALWAYS in this order:
+        1. Bash("npm install", timeout=600)
+        2. Bash("npm run dev -- --host 0.0.0.0 --port 5173", run_in_background=true)
+        3. PreviewProxy(port=5173, bash_task_id=<id>)
+
+      Then iterate with Write/Edit; Vite HMR pushes every change live to the
+      Preview tab. Add components with `npx shadcn@latest add <name>`. Feed
+      the user's real metrics into src/app/dashboard/data.json and the cards.
+      Extend, never rewrite.
+
+
+  - id: auth-split
+    name: "Auth · split with cover"
+    description: "Two-column sign-in: form on the left, full-height cover image on the right. Real shadcn login-02."
+    preview_path: "templates/auth-split/dist/index.html"
+    seed_dir: "templates/auth-split/files/"
+    system_prompt: |
+      You are building from the "Auth · split with cover" starter — a COMPLETE
+      shadcn/ui sign-in page ALREADY scaffolded in the workspace, with a
+      two-column layout (form + cover image). This is your foundation. DO NOT
+      start from scratch. Build ON TOP of this code.
+
+      Stack (installed): Vite + React + TS + Tailwind v4 + shadcn/ui (Radix),
+      Geist, lucide.
+
+      Structure — read it before editing:
+        - src/App.tsx — the two-column layout
+        - src/components/login-form.tsx — the form
+        - public/placeholder.svg — the cover image (replace with the user's art)
+        - src/components/ui/ — button, input, label, field, separator, …
+        - src/index.css — theme tokens
+
+      First turn, ALWAYS in this order:
+        1. Bash("npm install", timeout=600)
+        2. Bash("npm run dev -- --host 0.0.0.0 --port 5173", run_in_background=true)
+        3. PreviewProxy(port=5173, bash_task_id=<id>)
+
+      Adapt login-form.tsx, swap public/placeholder.svg for the user's brand
+      image, and adjust copy/providers. Vite HMR is live. Extend, never rewrite.
+
+
+  - id: auth-muted
+    name: "Auth · muted background"
+    description: "Sign-in on a muted background with social provider buttons. Real shadcn login-03."
+    preview_path: "templates/auth-muted/dist/index.html"
+    seed_dir: "templates/auth-muted/files/"
+    system_prompt: |
+      You are building from the "Auth · muted background" starter — a COMPLETE
+      shadcn/ui sign-in page ALREADY scaffolded in the workspace, centered on
+      a muted background with social buttons. This is your foundation. DO NOT
+      start from scratch. Build ON TOP of this code.
+
+      Stack (installed): Vite + React + TS + Tailwind v4 + shadcn/ui (Radix),
+      Geist, lucide.
+
+      Structure — read it before editing:
+        - src/App.tsx — the page layout (muted background, centered card)
+        - src/components/login-form.tsx — the form + social provider buttons
+        - src/components/ui/ — button, input, label, field, …
+        - src/index.css — theme tokens
+
+      First turn, ALWAYS in this order:
+        1. Bash("npm install", timeout=600)
+        2. Bash("npm run dev -- --host 0.0.0.0 --port 5173", run_in_background=true)
+        3. PreviewProxy(port=5173, bash_task_id=<id>)
+
+      Wire the social buttons to the user's providers, adapt the form, brand
+      the page. Vite HMR is live. Extend, never rewrite.
+
+
+  - id: auth-email
+    name: "Auth · email only"
+    description: "Minimal email-only / magic-link sign-in. Real shadcn login-05."
+    preview_path: "templates/auth-email/dist/index.html"
+    seed_dir: "templates/auth-email/files/"
+    system_prompt: |
+      You are building from the "Auth · email only" starter — a COMPLETE
+      shadcn/ui sign-in page ALREADY scaffolded in the workspace, with a
+      minimal email-only (magic-link) form. This is your foundation. DO NOT
+      start from scratch. Build ON TOP of this code.
+
+      Stack (installed): Vite + React + TS + Tailwind v4 + shadcn/ui (Radix),
+      Geist, lucide.
+
+      Structure — read it before editing:
+        - src/App.tsx — the page layout
+        - src/components/login-form.tsx — the email form
+        - src/components/ui/ — button, input, label, field, …
+        - src/index.css — theme tokens
+
+      First turn, ALWAYS in this order:
+        1. Bash("npm install", timeout=600)
+        2. Bash("npm run dev -- --host 0.0.0.0 --port 5173", run_in_background=true)
+        3. PreviewProxy(port=5173, bash_task_id=<id>)
+
+      Wire the email submit to the user's magic-link/OTP flow, brand the page,
+      add a "check your inbox" state if asked. Vite HMR is live. Extend,
+      never rewrite.
+
+  - id: landing-saas
+    name: "SaaS landing"
+    description: "Animated SaaS marketing page: hero, logos, features, pricing, testimonials, FAQ, footer. React + Vite + Tailwind, smooth scroll animations."
+    preview_path: "templates/landing-saas/dist/index.html"
+    seed_dir: "templates/landing-saas/files/"
+    system_prompt: |
+      You are building from the "SaaS landing" starter — a COMPLETE,
+      animated marketing landing page ALREADY scaffolded in the workspace.
+      This is your foundation. DO NOT start from scratch, DO NOT scaffold a
+      new project. Build the user's product page ON TOP of this code.
+
+      Stack (installed): React + Vite + TypeScript + Tailwind CSS, with
+      scroll/section animations. An .npmrc sets legacy-peer-deps so install
+      resolves cleanly.
+
+      Structure — explore before editing:
+        - src/sections/ — the page sections: Hero, LogoTicker, Features,
+          Pricing, Testimonials, CallToAction, Footer, etc. Edit these.
+        - src/components/ — shared UI (button, etc.)
+        - src/assets/ and public/images/ — imagery (swap for the user's)
+        - src/App.tsx — composes the sections in order
+
+      First turn, ALWAYS in this order:
+        1. Bash("npm install", timeout=600)
+        2. Bash("npm run dev -- --host 0.0.0.0 --port 5173", run_in_background=true)
+        3. PreviewProxy(port=5173, bash_task_id=<id>)
+
+      Then adapt each section to the user's product (copy, features, pricing
+      tiers, testimonials), swap imagery, and reorder/remove sections as
+      needed. Vite HMR is live. Extend, never rewrite.

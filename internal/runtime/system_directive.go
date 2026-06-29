@@ -25,6 +25,7 @@ const (
 	DirectiveBehaviorEnforce  SystemDirectiveSource = "behavior_enforcement"
 	DirectiveBehaviorClassify SystemDirectiveSource = "behavior_classifier"
 	DirectiveSkillUse         SystemDirectiveSource = "skill_use"
+	DirectiveTemplate         SystemDirectiveSource = "template"
 	DirectiveOther            SystemDirectiveSource = "other"
 )
 

@@ -52,7 +52,8 @@ type Bridge struct {
 	idGen       atomic.Int64
 	cachedTools []tool.Spec
 	toolsAt     time.Time
-	toolsMu     sync.Mutex
+	toolsMu     sync.Mutex // guards cachedTools/toolsAt only — never held across a bridge call
+	refreshMu   sync.Mutex // single-flight: at most one tools/list refresh in flight
 	running     atomic.Bool
 
 	// config
@@ -237,12 +238,34 @@ func (b *Bridge) initialize(ctx context.Context) error {
 }
 
 // ListTools returns the bridge's tool list, cached for 5 minutes.
+//
+// The slow part — the bridge tools/list round-trip — runs WITHOUT holding any
+// lock the agent loop needs. toolsMu only ever guards the brief cache read/swap.
+// When the cache is stale, a single goroutine (guarded by refreshMu) refreshes
+// while every other caller is served the stale snapshot immediately, so a slow
+// or hung refresh can never stall agent turns that just need the tool list.
 func (b *Bridge) ListTools(ctx context.Context) ([]tool.Spec, error) {
-	b.toolsMu.Lock()
-	defer b.toolsMu.Unlock()
+	cached, at := b.snapshotTools()
+	if cached != nil && time.Since(at) < 5*time.Minute {
+		return cached, nil
+	}
 
-	if b.cachedTools != nil && time.Since(b.toolsAt) < 5*time.Minute {
-		return b.cachedTools, nil
+	// Stale or empty: try to become the sole refresher.
+	if !b.refreshMu.TryLock() {
+		if cached != nil {
+			return cached, nil // another goroutine is refreshing — serve stale
+		}
+		// Cold start, no cache yet: wait for the in-flight refresh, then read.
+		b.refreshMu.Lock()
+		b.refreshMu.Unlock()
+		cached, _ = b.snapshotTools()
+		return cached, nil
+	}
+	defer b.refreshMu.Unlock()
+
+	// Another goroutine may have refreshed between our snapshot and the lock.
+	if cached, at = b.snapshotTools(); cached != nil && time.Since(at) < 5*time.Minute {
+		return cached, nil
 	}
 
 	callCtx, cancel := context.WithTimeout(ctx, callTimeout)
@@ -250,7 +273,7 @@ func (b *Bridge) ListTools(ctx context.Context) ([]tool.Spec, error) {
 
 	raw, err := b.call(callCtx, "tools/list", map[string]any{})
 	if err != nil {
-		return b.cachedTools, err // return stale on error
+		return cached, err // return stale on error
 	}
 
 	var resp struct {
@@ -276,9 +299,19 @@ func (b *Bridge) ListTools(ctx context.Context) ([]tool.Spec, error) {
 			Tags:         []string{"pieces", pieceTagOf(t.Name)},
 		})
 	}
+	b.toolsMu.Lock()
 	b.cachedTools = specs
 	b.toolsAt = time.Now()
+	b.toolsMu.Unlock()
 	return specs, nil
+}
+
+// snapshotTools reads the cached tool list and its timestamp under toolsMu
+// (held only for this read — never across a bridge call).
+func (b *Bridge) snapshotTools() ([]tool.Spec, time.Time) {
+	b.toolsMu.Lock()
+	defer b.toolsMu.Unlock()
+	return b.cachedTools, b.toolsAt
 }
 
 // CallTool invokes a piece action via the bridge and returns a tool.Result.

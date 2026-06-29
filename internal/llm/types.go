@@ -61,6 +61,7 @@ type ChatRequest struct {
 	Temperature *float64 `json:"temperature,omitempty"`
 	MaxTokens   *int     `json:"max_tokens,omitempty"`
 	TopP        *float64 `json:"top_p,omitempty"`
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 
 	// Timeout caps the request duration. 0 = use worker default.
 	Timeout time.Duration `json:"timeout,omitempty"`
@@ -152,6 +153,10 @@ type ContentPart struct {
 	Data []byte `json:"data,omitempty"`
 	URL  string `json:"url,omitempty"`
 
+	// Display metadata for generated media (assistant output parts).
+	Name      string `json:"name,omitempty"`
+	Thumbnail string `json:"thumbnail,omitempty"`
+
 	// CacheControl on the block level. Used when ChatMessage.Parts has
 	// multiple blocks and only the LAST one carries the breakpoint —
 	// Anthropic caches up to and including the marked block, so finer
@@ -230,6 +235,11 @@ type ChatResponse struct {
 	ReasoningStartedAt int64 `json:"reasoning_started_at,omitempty"`
 	ReasoningEndedAt   int64 `json:"reasoning_ended_at,omitempty"`
 	ReasoningContent string `json:"reasoning_content,omitempty"`
+
+	// OutputMedia carries natively-generated media (image/video) returned as
+	// the assistant's answer. Each part is image/video with either inline
+	// ``Data`` (decoded data-URI) or a remote ``URL`` (e.g. a generated video).
+	OutputMedia []ContentPart `json:"output_media,omitempty"`
 }
 
 // ChatChunk is one streaming delta. Successive chunks of the same request

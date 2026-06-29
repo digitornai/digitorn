@@ -18,7 +18,7 @@ export async function executeTool(
   const parsed = parseToolName(toolName)
   if (!parsed) return { success: false, error: `invalid tool name: ${toolName}` }
 
-  const piece = loader.getPiece(parsed.piece)
+  const piece = await loader.getPiece(parsed.piece)
   if (!piece) return { success: false, error: `piece "${parsed.piece}" is not installed` }
 
   const actionDef = piece.metadata.actions[parsed.action]
@@ -26,6 +26,7 @@ export async function executeTool(
 
   const { auth: rawAuth, sessionId, propsValue } = extractPropsAndAuth(args)
   const auth = resolveAuthValue(rawAuth)
+  coerceCustomAuthTypes(auth, piece.metadata.auth)
   const ctx = makeActionContext(auth, propsValue, sessionId, parsed.action)
 
   try {
@@ -35,5 +36,33 @@ export async function executeTool(
     const msg = err instanceof Error ? err.message : String(err)
     process.stderr.write(`pieces-bridge: ${toolName} failed: ${msg}\n`)
     return { success: false, error: msg }
+  }
+}
+
+// The daemon stores credentials as strings, so a CHECKBOX field arrives as
+// "true"/"false" and a NUMBER as a numeric string. Pieces test these with
+// truthy/typed checks (e.g. `auth.useAtlasUrl ? …`), where the string "false"
+// is truthy — silently wrong. Coerce each custom-auth field back to its
+// declared type so string-stored booleans/numbers behave correctly.
+function coerceCustomAuthTypes(
+  auth: unknown,
+  authDef: import('./types.ts').AuthDef | import('./types.ts').AuthDef[] | undefined,
+): void {
+  if (!auth || typeof auth !== 'object' || !('props' in auth)) return
+  const props = (auth as { props?: Record<string, unknown> }).props
+  if (!props || typeof props !== 'object') return
+
+  const defs = Array.isArray(authDef) ? authDef : authDef ? [authDef] : []
+  const custom = defs.find(a => a.type === 'CUSTOM_AUTH')
+  if (!custom?.props) return
+
+  for (const [key, value] of Object.entries(props)) {
+    const type = custom.props[key]?.type
+    if (type === 'CHECKBOX') {
+      props[key] = value === true || value === 'true'
+    } else if (type === 'NUMBER' && typeof value === 'string' && value.trim() !== '') {
+      const n = Number(value)
+      if (!Number.isNaN(n)) props[key] = n
+    }
   }
 }

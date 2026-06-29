@@ -11,7 +11,7 @@ integrations, and the credentials manifest endpoints are
 Public clients use the SDKs and CLI:
 
 - **Native CLI** - `digitorn chat <app-id>`
-- **React Preview SDK** - [preview-sdk](47-preview-sdk.md)
+- **React Preview SDK** - preview-sdk
 - **CLI** - [cli reference](../reference/cli/)
 
 The live event stream over Socket.IO is the one transport

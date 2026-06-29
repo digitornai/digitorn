@@ -68,7 +68,7 @@ before storage.
 
 ### `memory.set_goal` - `goal`
 
-Called via FQN (`memory.set_goal`) — there is no `SetGoal` PascalCase alias.
+Called via FQN (`memory.set_goal`) · there is no `SetGoal` PascalCase alias.
 
 ```
 memory.set_goal(goal="Fix the authentication bug in src/auth/validate.ts")

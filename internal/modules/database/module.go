@@ -34,6 +34,7 @@ func New() *Module {
 		SupportedPlatforms: []domainmodule.Platform{
 			domainmodule.PlatformLinux, domainmodule.PlatformMacOS, domainmodule.PlatformWindows,
 		},
+		ConfigSchema: module.SchemaFromType(&Config{}),
 	}
 
 	m.RegisterTool(module.Tool{

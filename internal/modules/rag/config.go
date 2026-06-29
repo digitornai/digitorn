@@ -12,7 +12,7 @@ import (
 // tolerated (forward/backward compatibility) ; only the Phase-1 subset is
 // acted on so far, the rest is parsed and carried for later phases.
 type Config struct {
-	EmbeddingModel EmbeddingModel `json:"embedding_model"`
+	EmbeddingModel EmbeddingModel  `json:"embedding_model"`
 	Reranker       json.RawMessage `json:"reranker,omitempty"` // bool | string ; Phase 2
 	Backend        Backend         `json:"backend"`
 	Pipeline       Pipeline        `json:"pipeline"`
@@ -33,7 +33,7 @@ type Config struct {
 	// distributed lease) in the app's OWN database — set it, or leave empty to
 	// reuse the pgvector backend DSN, so a client can keep everything (index +
 	// state) on their infra with nothing local. See indexer.PgStore.
-	CursorDSN string `json:"cursor_dsn"`
+	CursorDSN string `json:"cursor_dsn" jsonschema:"title=Cursor DSN,format=password"`
 
 	MaxKnowledgeBases int `json:"max_knowledge_bases"`
 	MaxDocuments      int `json:"max_documents"`
@@ -61,7 +61,7 @@ type SourceConfig struct {
 
 	// Database source (type: "database"). Walk = Query ; CDC (trigger
 	// type: cdc) streams CDCTable's WAL in real time.
-	DSN            string   `json:"dsn"`
+	DSN            string   `json:"dsn" jsonschema:"title=Source DSN,format=password"`
 	Query          string   `json:"query"`
 	IDColumn       string   `json:"id_column"`
 	TextColumns    []string `json:"text_columns"`
@@ -134,15 +134,15 @@ func (e *EmbeddingModel) UnmarshalJSON(b []byte) error {
 // Backend declares the app's vector server. Keys match the Python
 // BackendConfig exactly (type/path/url/api_key/index_name/dsn/…).
 type Backend struct {
-	Type         string `json:"type"`
-	Path         string `json:"path"`
-	URL          string `json:"url"`
-	APIKey       string `json:"api_key"`
-	IndexName    string `json:"index_name"`
-	Cloud        string `json:"cloud"`
-	Region       string `json:"region"`
-	DSN          string `json:"dsn"`
-	Quantization string `json:"quantization"`
+	Type         string `json:"type" jsonschema:"title=Type,enum=qdrant,enum=pgvector,enum=elasticsearch,enum=memory"`
+	Path         string `json:"path" jsonschema:"title=Path"`
+	URL          string `json:"url" jsonschema:"title=URL"`
+	APIKey       string `json:"api_key" jsonschema:"title=API key,format=password"`
+	IndexName    string `json:"index_name" jsonschema:"title=Index name"`
+	Cloud        string `json:"cloud" jsonschema:"title=Cloud"`
+	Region       string `json:"region" jsonschema:"title=Region"`
+	DSN          string `json:"dsn" jsonschema:"title=Connection string (DSN),format=password"`
+	Quantization string `json:"quantization" jsonschema:"title=Quantization"`
 }
 
 // Pipeline mirrors the Python PipelineConfig.

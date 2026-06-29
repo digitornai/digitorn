@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -24,14 +25,16 @@ import (
 	"github.com/mbathepaul/digitorn/internal/config"
 	"github.com/mbathepaul/digitorn/internal/core/eventbus"
 	"github.com/mbathepaul/digitorn/internal/core/servicebus"
+	"github.com/mbathepaul/digitorn/internal/credentials"
 	domainmodule "github.com/mbathepaul/digitorn/internal/domain/module"
 	"github.com/mbathepaul/digitorn/internal/embeddings"
 	"github.com/mbathepaul/digitorn/internal/llm"
-	"github.com/mbathepaul/digitorn/internal/middlewareplugin"
 	"github.com/mbathepaul/digitorn/internal/mcphub"
 	"github.com/mbathepaul/digitorn/internal/mcpservers"
+	"github.com/mbathepaul/digitorn/internal/middlewareplugin"
 	"github.com/mbathepaul/digitorn/internal/module/gateway"
 	"github.com/mbathepaul/digitorn/internal/modules/pieces"
+	"github.com/mbathepaul/digitorn/internal/modulesettings"
 	"github.com/mbathepaul/digitorn/internal/persistence/db"
 	"github.com/mbathepaul/digitorn/internal/ports"
 	"github.com/mbathepaul/digitorn/internal/runtime"
@@ -44,6 +47,7 @@ import (
 	"github.com/mbathepaul/digitorn/internal/runtime/contextsvc"
 	"github.com/mbathepaul/digitorn/internal/runtime/dispatch"
 	"github.com/mbathepaul/digitorn/internal/runtime/hooks"
+	"github.com/mbathepaul/digitorn/internal/runtime/mediagen"
 	"github.com/mbathepaul/digitorn/internal/runtime/policy/approval"
 	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
 	"github.com/mbathepaul/digitorn/internal/runtime/skills"
@@ -94,15 +98,18 @@ type Daemon struct {
 	ctxParts          sync.Map                              // sessionID -> ctxParts (build-time system+tools for the recount breakdown)
 	agents            *agent.Manager
 
-	appCompiler  *compiler.Compiler
-	appMgr       appmgr.Manager
-	userSkills   *userskills.Store
-	userSnippets *usersnippets.Store
-	mcpCatalog   *mcpCatalog       // materializes worker-hosted MCP tools as native actions
-	piecesCatalog *piecesCatalog   // materializes pieces bridge tools as native actions
-	mcpOAuth     *mcpoauth.Service // daemon-side MCP OAuth (token store, CSRF flow); nil if the key file is unavailable
-	managedMCP   *mcpservers.Store // per-user managed MCP server store (install/list/configure); nil if the key file is unavailable
-	mcpHub       *mcphub.Client    // read-only client for the Hub's curated MCP catalog (the install-config source)
+	appCompiler    *compiler.Compiler
+	appMgr         appmgr.Manager
+	userSkills     *userskills.Store
+	userSnippets   *usersnippets.Store
+	mcpCatalog     *mcpCatalog           // materializes worker-hosted MCP tools as native actions
+	piecesCatalog  *piecesCatalog        // materializes pieces bridge tools as native actions
+	mcpOAuth       *mcpoauth.Service     // daemon-side MCP OAuth (token store, CSRF flow); nil if the key file is unavailable
+	managedMCP     *mcpservers.Store     // per-user managed MCP server store (install/list/configure); nil if the key file is unavailable
+	creds          *credentials.Store    // per-user encrypted credential vault; nil if the key file is unavailable
+	credResolver   *credentials.Resolver // runtime O(1) per-user BYOK key cache; nil if the key file is unavailable
+	moduleSettings *modulesettings.Store // per-user per-app module config deltas (BYOK); nil if the key file is unavailable
+	mcpHub         *mcphub.Client        // read-only client for the Hub's curated MCP catalog (the install-config source)
 
 	engine           runtime.Runner
 	sessionRunner    *sessionRunner // serializes + coalesces agent turns per session (user + proactive wakes)
@@ -243,12 +250,20 @@ func Build(cfg *config.Config) (*Daemon, error) {
 	// store. A key-file failure disables OAuth (handlers 503) without blocking boot.
 	var mcpOAuth *mcpoauth.Service
 	var mcpSrvStore *mcpservers.Store
+	var credStore *credentials.Store
+	var credResolver *credentials.Resolver
+	var moduleSettings *modulesettings.Store
+	var appSecrets *secretStore
 	if sealer, serr := mcpoauth.NewSealer(mcpoauth.DefaultKeyPath()); serr != nil {
-		logger.Warn("bootstrap: mcp oauth + managed servers disabled (key file unavailable)", slog.String("error", serr.Error()))
+		logger.Warn("bootstrap: mcp oauth + managed servers + credential vault disabled (key file unavailable)", slog.String("error", serr.Error()))
 		pieces.Setup(gdb, nil) // pieces still work but credentials stored unencrypted
 	} else {
 		mcpOAuth = mcpoauth.NewService(gdb, sealer)
 		mcpSrvStore = mcpservers.NewStore(gdb, sealer) // shares the process sealer
+		credStore = credentials.NewStore(gdb, sealer)  // per-user vault, same process sealer
+		credResolver = credentials.NewResolver(credStore)
+		moduleSettings = modulesettings.NewStore(gdb, sealer)
+		appSecrets = newPersistedSecretStore(gdb, sealer)
 		pieces.Setup(gdb, sealer)
 	}
 
@@ -276,6 +291,10 @@ func Build(cfg *config.Config) (*Daemon, error) {
 		userSnippets:    usersnippets.NewStore(gdb),
 		mcpOAuth:        mcpOAuth,
 		managedMCP:      mcpSrvStore,
+		creds:           credStore,
+		credResolver:    credResolver,
+		moduleSettings:  moduleSettings,
+		secrets:         appSecrets,
 		mcpHub:          mcphub.NewClient(cfg.Apps.Hub.URL, cfg.Apps.Hub.Timeout, cfg.Apps.Hub.VerifySSL),
 	}
 	// Let the bridge resolve a session's window so a joining client gets the last
@@ -541,7 +560,7 @@ func (d *Daemon) buildEngine() {
 	// Per-app module config delivery : resolve tools.modules.<id>.config for
 	// each call so a shared (in-proc or worker) module reads its app-specific
 	// configuration. The worker proxy forwards it across the boundary.
-	busAdapter.ModuleConfigs = appModuleConfigSource{apps: d.appMgr}
+	busAdapter.ModuleConfigs = appModuleConfigSource{apps: d.appMgr, deltas: d.moduleSettings, secrets: d.ensureSecretStore()}
 	// Wire the EventBus so modules that implement EventEmitter can publish events.
 	busAdapter.EventBus = d.eventBus
 	// In-proc embeddings/rerank : in-proc modules (filesystem code-grep) reach
@@ -571,6 +590,20 @@ func (d *Daemon) buildEngine() {
 	}
 	eng.Blobs = blobStore
 	d.blobStore = blobStore // expose for the inbound upload endpoint (any client)
+
+	// Per-user BYOK key injection: in BYOK mode the engine prefers a key the
+	// user stored in their vault (O(1) cached lookup) over the bundle key.
+	// Guard the assignment so a nil *Resolver never becomes a non-nil interface.
+	if d.credResolver != nil {
+		eng.CredResolver = d.credResolver
+	}
+	eng.AppSecrets = daemonAppSecrets{store: d.ensureSecretStore()}
+
+	// Image/video generation: image/video-kind agents POST to the gateway's
+	// dedicated /v1/{images,videos}/generations endpoints (NOT chat-completions).
+	if gw := strings.TrimSpace(d.cfg.Workers.LLM.GatewayURL); gw != "" {
+		eng.MediaGen = mediagen.New(gw)
+	}
 
 	// Brique 4 (live preview) : the filesystem module signals every write/edit
 	// through this notifier, which debounces per session and pushes the agent's
@@ -724,7 +757,7 @@ func (d *Daemon) buildEngine() {
 		sm := newSummaryMaintainer(d.sessionStore, compactor, d.llmClient, d.logger)
 		sm.Start(workers)
 		d.summaryMaintainer = sm
-		compactor.nonBlocking = true  // apply prepared summary instantly; else truncate
+		compactor.nonBlocking = true // apply prepared summary instantly; else truncate
 		compactor.prepare = sm.Touch
 		eng.PrepareSummary = sm.Touch
 		eng.MicroCompactView = true

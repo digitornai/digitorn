@@ -16,6 +16,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -209,6 +210,7 @@ type PieceEntry struct {
 	Description string   `json:"description"`
 	Icon        string   `json:"icon"`
 	AuthType    string   `json:"auth_type"`
+	Category    string   `json:"category"`
 	PersonalKeys []string `json:"personal_keys"`
 	HostedURL   *string  `json:"hosted_url"`
 	Priority    int      `json:"featured_priority"`
@@ -247,6 +249,47 @@ func (c *Client) PiecesList(ctx context.Context) ([]PieceEntry, error) {
 }
 
 // PiecesGet fetches one piece by ID from the hub catalog.
+type PieceSystemConfig struct {
+	ServerID         string         `json:"server_id"`
+	AuthType         string         `json:"auth_type"`
+	DigitornProvided map[string]any `json:"digitorn_provided"`
+	DefaultEnv       map[string]any `json:"default_env"`
+	EnvMapping       map[string]any `json:"env_mapping"`
+	PersonalKeys     []string       `json:"personal_keys"`
+}
+
+func (c *Client) PiecesSystemConfig(ctx context.Context, id string) (*PieceSystemConfig, error) {
+	key := os.Getenv("DIGITORN_DAEMON_KEY")
+	if key == "" {
+		return nil, fmt.Errorf("mcphub: DIGITORN_DAEMON_KEY not set")
+	}
+	id = strings.ToLower(strings.TrimSpace(id))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		c.base+"/api/v1/pieces/"+url.PathEscape(id)+"/system", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-Daemon-Key", key)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("mcphub: system config for %s returned HTTP %d", id, resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if err != nil {
+		return nil, err
+	}
+	var out PieceSystemConfig
+	if err := json.Unmarshal(body, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 func (c *Client) PiecesGet(ctx context.Context, id string) (PieceEntry, bool, error) {
 	id = strings.ToLower(strings.TrimSpace(id))
 	if list, err := c.PiecesList(ctx); err == nil {

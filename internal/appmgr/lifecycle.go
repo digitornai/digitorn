@@ -113,6 +113,47 @@ func (m *gormManager) SetBYOK(ctx context.Context, appID string, enabled bool) e
 	return nil
 }
 
+// SetDisplayName overrides the displayed label. The trimmed name is stored on
+// a dedicated column that, unlike ShortName, survives reload/upgrade; an empty
+// name clears the override. Republishes the snapshot for an enabled app so the
+// label updates without a restart. Idempotent.
+func (m *gormManager) SetDisplayName(ctx context.Context, appID, name string) error {
+	name = strings.TrimSpace(name)
+	lock := m.lockFor(appID)
+	lock.Lock()
+	defer lock.Unlock()
+
+	var row models.App
+	if err := m.cfg.DB.WithContext(ctx).First(&row, "app_id = ?", appID).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return ErrAppNotFound
+		}
+		return err
+	}
+	if row.DisplayName == name {
+		return nil
+	}
+	row.DisplayName = name
+	row.UpdatedAt = time.Now().UTC()
+	if err := m.cfg.DB.WithContext(ctx).Save(&row).Error; err != nil {
+		return err
+	}
+
+	if row.Enabled {
+		ra, err := m.loadFromDisk(&row)
+		if err != nil {
+			return fmt.Errorf("appmgr: setdisplayname load: %w", err)
+		}
+		m.swapSnapshot(appID, ra)
+	}
+
+	m.cfg.Logger.Info("appmgr: app display name updated",
+		slog.String("app_id", appID),
+		slog.String("display_name", name),
+	)
+	return nil
+}
+
 // Reload recompiles the app from its on-disk source (when the operator
 // edited app.yaml by hand) and replaces app.dgc + snapshot. The DB row
 // metadata is refreshed too (name / version / description / etc).

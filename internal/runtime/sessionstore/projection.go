@@ -79,6 +79,7 @@ func applyLocked(s *SessionState, ev *Event) {
 		parts, content, toolIDs, atts := NormalizeMessageParts(ev.Message)
 		s.Messages = append(s.Messages, Message{
 			Seq:         ev.Seq,
+			StepID:      ev.StepID,
 			Role:        ev.Message.Role,
 			Parts:       parts,
 			Content:     content,
@@ -88,6 +89,7 @@ func applyLocked(s *SessionState, ev *Event) {
 			TsUnixNano:  ev.TsUnixNano,
 			ToolCallIDs: toolIDs,
 			Attachments: atts,
+			TriggerEvent: cloneAnyMap(ev.Message.TriggerEvent),
 		})
 		if ev.Type == EventUserMessage {
 			s.TurnCount++
@@ -178,6 +180,7 @@ func applyLocked(s *SessionState, ev *Event) {
 		}
 		toolMsg := Message{
 			Seq:        ev.Seq,
+			StepID:     ev.StepID,
 			Role:       "tool",
 			TsUnixNano: ev.TsUnixNano,
 			Parts: []MessagePart{{
@@ -496,6 +499,17 @@ func applyLocked(s *SessionState, ev *Event) {
 				}
 				if ev.Meta.MaxContextTokens > 0 {
 					s.EntryModelWindow = ev.Meta.MaxContextTokens
+				}
+				if ev.Meta.ReasoningEffort != "" {
+					if s.EffortOverrides == nil {
+						s.EffortOverrides = map[string]string{}
+					}
+					s.EffortOverrides[ev.Meta.AgentID] = ev.Meta.ReasoningEffort
+					// Keep the legacy session-wide value mirroring the ENTRY agent so
+					// the composer EffortPill + session-detail endpoint stay correct.
+					if s.EntryAgent == "" || ev.Meta.AgentID == s.EntryAgent {
+						s.ReasoningEffort = ev.Meta.ReasoningEffort
+					}
 				}
 			}
 

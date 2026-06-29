@@ -70,7 +70,7 @@ the dispatch sequence both threat models share.
   [Security architecture](../language/11-security.md).
 - The OS sandbox layer (per-platform): on Linux it's Landlock +
   seccomp; on macOS it's Seatbelt; on Windows it's Job Objects:
-  [OS Sandbox](../language/35-sandbox.md).
+  OS Sandbox.
 - Credentials vault, encrypted at rest with envelope-wrapped
   per-row DEKs, hash-chained audit log:
   [Credentials](../reference/runtime/credentials.md).

@@ -83,7 +83,7 @@ Three knobs to know:
   forces the agent to call `WsRead`/`fs.read` to fetch the
   bytes).
 - `brain.vision: true` pins vision-on. Setting it to `null`
-  asks the framework to auto-detect from the model name;
+  asks the runtime to auto-detect from the model name;
   `false` causes images to be converted to a text
   description placeholder (cheaper, lossy).
 - `brain.max_tokens: 4096`. Reasoning models such as
@@ -160,7 +160,7 @@ The `image_ref` is the placeholder that lives in the
 durable conversation log. It carries the metadata the UI
 needs to render a thumbnail (mime, dimensions, alt_text)
 without bloating the message journal with megabytes of
-base64. The framework re-inflates `image_ref` into the
+base64. The runtime re-inflates `image_ref` into the
 full base64 payload at LLM-call time using the image store
 keyed by `image_id`.
 
@@ -174,7 +174,7 @@ keyed by `image_id`.
 ## Going further
 
 - Send multiple images per turn: stick more entries in
-  `images: [...]`. The framework batches them into one
+  `images: [...]`. The runtime batches them into one
   LLM call, capped at `max_images_per_turn`.
 - Add `attachments: [document, image]` to accept PDFs,
   Word docs, etc. Documents are extracted to text before
@@ -184,5 +184,5 @@ keyed by `image_id`.
   bytes. Useful when you want the agent to decide
   whether the image is even worth loading.
 - Image generation (DALL-E, Stable Diffusion via MCP):
-  set `brain.image_generation: true`; the framework
+  set `brain.image_generation: true`; the runtime
   handles image output in tool results and SSE events.

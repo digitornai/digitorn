@@ -187,7 +187,7 @@ or absolute paths. See
 ### Combining both: `direct` + workspace loaded
 
 The `digitorn-chat` production setup uses `direct` mode but
-ALSO loads the workspace module — the daemon mirrors
+ALSO loads the workspace module · the daemon mirrors
 attachments under `attachments/` so the agent can re-read
 specific sections via `WsRead` when it needs precise quotes,
 while still having the full text in the user message for

@@ -30,6 +30,10 @@ type CreateTriggerRequest struct {
 	Context  string `json:"context"`
 	Kind     string `json:"kind"`
 	Reports  bool   `json:"reports"`
+	// RefreshToken is the owner's auth refresh token, handed off so the service
+	// can mint fresh per-user access tokens for this app's background turns
+	// (the LLM gateway requires a real user JWT). Stored, never logged.
+	RefreshToken string `json:"refresh_token,omitempty"`
 	// Config carries adapter-specific config stored in ConfigJSON.
 	// For pieces: {piece, trigger, auth, props, interval, trigger_url}.
 	Config      map[string]any           `json:"config,omitempty"`
@@ -96,6 +100,12 @@ type opsAPI struct {
 	rearm func(context.Context, CreateTriggerRequest) (store.Trigger, error)
 }
 
+// channelOpsAdapters are persistent-listener adapters whose message comes from
+// each inbound event, so a trigger push carries no top-level message.
+var channelOpsAdapters = map[string]bool{
+	"discord": true, "telegram": true, "webhook": true, "rss": true, "whatsapp": true,
+}
+
 // ── Triggers ─────────────────────────────────────────────────────────────────
 
 // createTrigger programs a trigger (cron) at runtime: it persists the trigger AND
@@ -110,12 +120,20 @@ func (a *opsAPI) createTrigger(w http.ResponseWriter, r *http.Request) {
 		writeOps(w, 400, map[string]any{"error": "invalid JSON body"})
 		return
 	}
-	if req.AppID == "" || req.Provider == "" || req.Message == "" {
-		writeOps(w, 400, map[string]any{"error": "app_id, provider and message are required"})
-		return
-	}
 	if req.Adapter == "" {
 		req.Adapter = "cron"
+	}
+	// app_id + provider are always required. A top-level `message` is only needed
+	// for adapters that fire with no inbound payload (a schedule). Channel
+	// adapters (discord/telegram/…) get their message from each event, so they
+	// carry no top-level message — don't reject them.
+	if req.AppID == "" || req.Provider == "" {
+		writeOps(w, 400, map[string]any{"error": "app_id and provider are required"})
+		return
+	}
+	if req.Message == "" && req.Activation == nil && !channelOpsAdapters[req.Adapter] {
+		writeOps(w, 400, map[string]any{"error": "message is required for this adapter"})
+		return
 	}
 	t, err := a.rearm(r.Context(), req)
 	if err != nil {
@@ -316,6 +334,9 @@ func triggerView(t store.Trigger) map[string]any {
 	}
 	if t.Cursor != "" {
 		v["cursor"] = t.Cursor
+	}
+	if s := cfgString(t.ConfigJSON, "activation", "owner"); s != "" {
+		v["owner"] = s
 	}
 	if t.Adapter == "cron" {
 		if next := cronNextRun(t.ConfigJSON); next != nil {

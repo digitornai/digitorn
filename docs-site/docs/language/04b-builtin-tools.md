@@ -148,7 +148,7 @@ Socket.IO, not the OS filesystem.
 | `WsGrep` | `workspace.grep` |
 | `WsDelete` | `workspace.delete` |
 
-See [Workspace & Preview](41-preview.md) for the renderer modes
+See Workspace & Preview for the renderer modes
 (react / vue / latex / slides / code) and the live-preview pipeline.
 
 ## Web-preview tools (gated by `tools.modules.web_preview`)
@@ -168,7 +168,7 @@ session.
 The agent is responsible for spawning dev servers itself
 (`Bash(run_in_background=true)`) and resolving port conflicts. The
 daemon never spawns servers on its own. See
-[Workspace & Preview → web_preview](41-preview.md#toolsmodulesweb_preview---session-scoped-iframe-attachments)
+Workspace & Preview → web_preview
 for the three regimes (proxy / static / declarative) and the
 LLM communication contract.
 
@@ -211,7 +211,7 @@ non-strategic domain tools.
   [modules/index.md](../reference/modules/)
 - Working memory model: [Cognitive Memory](05-memory.md)
 - Spawning specialists: [Multi-Agent](12-multi-agent.md)
-- Live workspace + preview: [Workspace & Preview](41-preview.md)
+- Live workspace + preview: Workspace & Preview
 - Capabilities (grant / approve / deny):
   [App Configuration → tools.capabilities](02-app-config.md#toolscapabilities---grant--approve--deny),
   [Security](11-security.md)

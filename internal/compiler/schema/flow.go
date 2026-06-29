@@ -7,28 +7,28 @@ import (
 )
 
 type FlowConfig struct {
-	ID            string     `yaml:"id,omitempty"`
-	Description   string     `yaml:"description,omitempty"`
-	Entry         string     `yaml:"entry,omitempty"`
-	MaxIterations int        `yaml:"max_iterations,omitempty"`
-	Nodes         []FlowNode `yaml:"nodes,omitempty"`
+	ID            string     `yaml:"id,omitempty" json:"id,omitempty"`
+	Description   string     `yaml:"description,omitempty" json:"description,omitempty"`
+	Entry         string     `yaml:"entry,omitempty" json:"entry,omitempty"`
+	MaxIterations int        `yaml:"max_iterations,omitempty" json:"max_iterations,omitempty"`
+	Nodes         []FlowNode `yaml:"nodes,omitempty" json:"nodes,omitempty"`
 }
 
 type FlowNode struct {
-	ID          string           `yaml:"id"`
-	Type        string           `yaml:"type"`
-	Description string           `yaml:"description,omitempty"`
-	Agent       string           `yaml:"agent,omitempty"`
-	Tool        string           `yaml:"tool,omitempty"`
-	Params      map[string]any   `yaml:"params,omitempty"`
-	Branches    []FlowBranch     `yaml:"branches,omitempty"`
-	Join        *FlowJoinConfig  `yaml:"join,omitempty"`
-	Message     string           `yaml:"message,omitempty"`
-	Choices     []any            `yaml:"choices,omitempty"`
-	Expr        string           `yaml:"expr,omitempty"`
-	Routes      []FlowRoute      `yaml:"routes,omitempty"`
-	OnError     []FlowErrorRoute `yaml:"on_error,omitempty"`
-	MaxIters    int              `yaml:"max_iterations,omitempty"`
+	ID          string           `yaml:"id" json:"id"`
+	Type        string           `yaml:"type" json:"type"`
+	Description string           `yaml:"description,omitempty" json:"description,omitempty"`
+	Agent       string           `yaml:"agent,omitempty" json:"agent,omitempty"`
+	Tool        string           `yaml:"tool,omitempty" json:"tool,omitempty"`
+	Params      map[string]any   `yaml:"params,omitempty" json:"params,omitempty"`
+	Branches    []FlowBranch     `yaml:"branches,omitempty" json:"branches,omitempty"`
+	Join        *FlowJoinConfig  `yaml:"join,omitempty" json:"join,omitempty"`
+	Message     string           `yaml:"message,omitempty" json:"message,omitempty"`
+	Choices     []any            `yaml:"choices,omitempty" json:"choices,omitempty"`
+	Expr        string           `yaml:"expr,omitempty" json:"expr,omitempty"`
+	Routes      []FlowRoute      `yaml:"routes,omitempty" json:"routes,omitempty"`
+	OnError     []FlowErrorRoute `yaml:"on_error,omitempty" json:"on_error,omitempty"`
+	MaxIters    int              `yaml:"max_iterations,omitempty" json:"max_iterations,omitempty"`
 }
 
 // FlowBranch accepts either a bare node ID or {to: node_id}.
@@ -59,19 +59,19 @@ func (b *FlowBranch) UnmarshalYAML(node *yaml.Node) error {
 }
 
 type FlowJoinConfig struct {
-	Type    string  `yaml:"type,omitempty"`
-	Min     int     `yaml:"min,omitempty"`
-	Timeout float64 `yaml:"timeout,omitempty"`
+	Type    string  `yaml:"type,omitempty" json:"type,omitempty"`
+	Min     int     `yaml:"min,omitempty" json:"min,omitempty"`
+	Timeout float64 `yaml:"timeout,omitempty" json:"timeout,omitempty"`
 }
 
 type FlowRoute struct {
-	When    string `yaml:"when,omitempty"`
-	Default bool   `yaml:"default,omitempty"`
-	To      string `yaml:"to"`
+	When    string `yaml:"when,omitempty" json:"when,omitempty"`
+	Default bool   `yaml:"default,omitempty" json:"default,omitempty"`
+	To      string `yaml:"to" json:"to"`
 }
 
 type FlowErrorRoute struct {
-	Match   string `yaml:"match,omitempty"`
-	Default bool   `yaml:"default,omitempty"`
-	To      string `yaml:"to"`
+	Match   string `yaml:"match,omitempty" json:"match,omitempty"`
+	Default bool   `yaml:"default,omitempty" json:"default,omitempty"`
+	To      string `yaml:"to" json:"to"`
 }

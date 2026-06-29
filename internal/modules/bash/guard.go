@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"mvdan.cc/sh/v3/syntax"
 
@@ -302,6 +303,44 @@ func needsPTY(command string) bool {
 		}
 	}
 	return false
+}
+
+// promptGraceWindow is how long a suspected interactive prompt must sit at the
+// tail of a still-running command's output — with NO further output — before we
+// treat it as a genuine blocking prompt (and not a "password:" string that
+// happened to be printed mid-stream). Combined with "must be the last non-empty
+// line" + "process still alive", it makes a false positive very unlikely.
+const promptGraceWindow = 2 * time.Second
+
+// interactivePrompt matches the line a command prints when it stops to wait for
+// human input on a terminal: a sudo/ssh password prompt, a yes/no confirmation,
+// a "press enter" pause, etc. Anchored at end-of-string so it only fires on a
+// TRAILING prompt (the last thing emitted), never on prompt-looking text that
+// is followed by more output.
+var interactivePrompt = regexp.MustCompile(`(?i)(` +
+	`password(\s+for\s+\S+)?\s*:|` +
+	`enter\s+passphrase[^:]*:|passphrase[^:]*:|` +
+	`\[y/n\]\??|\(yes/no(/\[fingerprint\])?\)\??|\[sudo\]|` +
+	`are you sure[^\n]*|press\s+(enter|return|any\s+key)[^\n]*|` +
+	`authenticity of host[^\n]*|` +
+	`continue\?|overwrite\?|proceed\?` +
+	`)\s*$`)
+
+// looksLikePrompt reports whether the LAST non-empty line of a command's output
+// so far looks like an interactive prompt waiting for input. Only the final line
+// matters: a real prompt is the last thing a blocked program prints.
+func looksLikePrompt(output string) bool {
+	if output == "" {
+		return false
+	}
+	tail := strings.TrimRight(output, " \t\r\n")
+	if i := strings.LastIndexAny(tail, "\r\n"); i >= 0 {
+		tail = tail[i+1:]
+	}
+	if tail == "" {
+		return false
+	}
+	return interactivePrompt.MatchString(tail)
 }
 
 var ptyAutoPatterns = []*regexp.Regexp{

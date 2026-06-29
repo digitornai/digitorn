@@ -7,7 +7,10 @@ export function resolveAuthValue(auth: APAuth | undefined): unknown {
   switch (auth.type) {
     case 'secret_text': return auth.value
     case 'basic': return { username: auth.username, password: auth.password }
-    case 'custom': return auth.fields
+    // Activepieces CustomAuth exposes its fields to actions as `auth.props.<field>`
+    // (the connection value, not the bare fields), so the daemon's flat field map
+    // is wrapped under `props` to match what every custom-auth piece reads.
+    case 'custom': return { props: auth.fields }
     case 'oauth2': return {
       type: 'OAUTH2',
       access_token: auth.accessToken,

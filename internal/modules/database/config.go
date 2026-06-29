@@ -14,30 +14,30 @@ import (
 // connections (opened + pooled by the service, so the agent usually only needs
 // `query`) plus the gate for agent-supplied raw DSNs.
 type Config struct {
-	Databases   []DBConn `json:"databases"`
-	AllowRawDSN bool     `json:"allow_raw_dsn"`
+	Databases   []DBConn `json:"databases" jsonschema:"title=Databases,description=Named connections this app can query."`
+	AllowRawDSN bool     `json:"allow_raw_dsn" jsonschema:"title=Allow raw DSN,description=Let agents open ad-hoc connections with a raw DSN."`
 }
 
 type DBConn struct {
-	Name         string         `json:"name"`
-	Kind         string         `json:"kind"`
-	DSN          string         `json:"dsn"`     // direct (less safe)
-	DSNRef       string         `json:"dsn_ref"` // env var name → creds stay server-side
-	SampleValues bool           `json:"sample_values"`
-	Security     SecurityConfig `json:"security"`
-	Schema       SchemaConfig   `json:"schema"`
+	Name         string         `json:"name" jsonschema:"title=Name,description=Connection name referenced by the query tool."`
+	Kind         string         `json:"kind" jsonschema:"title=Engine,enum=postgres,enum=mysql,enum=mongodb,enum=redis"`
+	DSN          string         `json:"dsn" jsonschema:"title=Connection string (DSN),format=password,description=Full connection URL including credentials."`
+	DSNRef       string         `json:"dsn_ref" jsonschema:"title=DSN env var,description=Server-side env var holding the DSN (keeps credentials out of config)."`
+	SampleValues bool           `json:"sample_values" jsonschema:"title=Sample values"`
+	Security     SecurityConfig `json:"security" jsonschema:"title=Security"`
+	Schema       SchemaConfig   `json:"schema" jsonschema:"title=Schema decoration"`
 }
 
 type SecurityConfig struct {
-	Mode              string   `json:"mode"`
-	EnforceDBReadOnly bool     `json:"enforce_db_readonly"`
-	ApplyRole         string   `json:"apply_role"`
-	StatementTimeout  string   `json:"statement_timeout"`
-	DeniedStatements  []string `json:"denied_statements"`
-	AllowedTables     []string `json:"allowed_tables"`
-	MaxRows           int      `json:"max_rows"`
-	SensitiveColumns  []string `json:"sensitive_columns"`
-	Egress            string   `json:"egress"`
+	Mode              string   `json:"mode" jsonschema:"title=Mode,enum=read_only,enum=read_write,enum=read_write_approval"`
+	EnforceDBReadOnly bool     `json:"enforce_db_readonly" jsonschema:"title=Enforce DB read-only"`
+	ApplyRole         string   `json:"apply_role" jsonschema:"title=Apply role"`
+	StatementTimeout  string   `json:"statement_timeout" jsonschema:"title=Statement timeout"`
+	DeniedStatements  []string `json:"denied_statements" jsonschema:"title=Denied statements"`
+	AllowedTables     []string `json:"allowed_tables" jsonschema:"title=Allowed tables"`
+	MaxRows           int      `json:"max_rows" jsonschema:"title=Max rows"`
+	SensitiveColumns  []string `json:"sensitive_columns" jsonschema:"title=Sensitive columns"`
+	Egress            string   `json:"egress" jsonschema:"title=Egress,enum=guarded,enum=open"`
 }
 
 type SchemaConfig struct {

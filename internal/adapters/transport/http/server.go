@@ -41,10 +41,7 @@ func New(opts Options, logger *slog.Logger) *Server {
 	if opts.ReadTimeout == 0 {
 		opts.ReadTimeout = 30 * time.Second
 	}
-	// WriteTimeout intentionally defaults to 0 (disabled): this listener is
-	// shared with Socket.IO and SSE, whose responses are long-lived. A blanket
-	// write deadline would sever those streams. Per-request bounds for the REST
-	// routes come from the chi Timeout middleware below.
+
 	if opts.ShutdownTimeout == 0 {
 		opts.ShutdownTimeout = 30 * time.Second
 	}
@@ -55,9 +52,7 @@ func New(opts Options, logger *slog.Logger) *Server {
 	r.Use(middleware.Recoverer)
 	r.Use(slogRequestLogger(logger))
 	r.Use(middleware.Timeout(60 * time.Second))
-	// A wildcard origin combined with credentialed requests is forbidden by the
-	// browser CORS spec and would silently disable credentials anyway. Only
-	// allow credentials when the origin set is explicit.
+
 	allowCreds := len(opts.CORSOrigins) > 0
 	for _, o := range opts.CORSOrigins {
 		if o == "*" {
@@ -68,9 +63,6 @@ func New(opts Options, logger *slog.Logger) *Server {
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   opts.CORSOrigins,
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"},
-		// Echo whatever headers the (allow-listed) origin requests. The origin
-		// allow-list is the security boundary; restricting headers on top only
-		// breaks legitimate front-ends that send custom headers (X-User-ID, …).
 		AllowedHeaders:   []string{"*"},
 		ExposedHeaders:   []string{"Link", "X-Request-ID"},
 		AllowCredentials: allowCreds,
@@ -91,14 +83,10 @@ func New(opts Options, logger *slog.Logger) *Server {
 	return s
 }
 
-// Router exposes the Chi router for mounting application routes.
 func (s *Server) Router() chi.Router { return s.router }
 
-// HTTPServer returns the underlying *http.Server (useful to share the listener
-// with Socket.IO, which exposes its own handler).
 func (s *Server) HTTPServer() *nethttp.Server { return s.srv }
 
-// Start blocks until the server stops.
 func (s *Server) Start() error {
 	s.logger.Info("http: listening", slog.String("addr", s.opts.Addr))
 	if err := s.srv.ListenAndServe(); err != nil && !errors.Is(err, nethttp.ErrServerClosed) {
@@ -117,8 +105,6 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-// registerSystemRoutes adds /healthz, /readyz, /version. Application routes
-// must be mounted by the caller via Router().
 func (s *Server) registerSystemRoutes() {
 	s.router.Get("/healthz", func(w nethttp.ResponseWriter, r *nethttp.Request) {
 		writeJSON(w, nethttp.StatusOK, map[string]string{"status": "ok"})
@@ -134,8 +120,6 @@ func writeJSON(w nethttp.ResponseWriter, status int, body any) {
 	_ = json.NewEncoder(w).Encode(body)
 }
 
-// slogRequestLogger logs each request with structured fields. Replaces Chi's
-// stdlib-based middleware.Logger.
 func slogRequestLogger(logger *slog.Logger) func(nethttp.Handler) nethttp.Handler {
 	return func(next nethttp.Handler) nethttp.Handler {
 		return nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {

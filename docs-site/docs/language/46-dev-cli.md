@@ -7,7 +7,7 @@ id: dev-cli
 The Go CLI provides commands for developing and testing apps.
 They hit the same HTTP endpoints the chat client / web client
 uses, so every behavior rule, sub-agent,
-tool call, and approval flow runs in production mode — no
+tool call, and approval flow runs in production mode · no
 mocks.
 
 | Command | Purpose |

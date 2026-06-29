@@ -163,8 +163,32 @@ func (d *Daemon) piecesInstall(w http.ResponseWriter, r *http.Request) {
 		authType = "none"
 	}
 
+	// Auto-apply hub system config: merge Digitorn-managed values so the
+	// user only ever supplies what's theirs (personal_keys). System keys
+	// win over anything the client might have sent.
+	creds := req.Credentials
+	if creds == nil {
+		creds = map[string]string{}
+	}
+	if d.mcpHub != nil {
+		if sys, serr := d.mcpHub.PiecesSystemConfig(r.Context(), pieceName); serr == nil && sys != nil {
+			for k, v := range sys.DigitornProvided {
+				switch k {
+				case "auth_type", "category", "oauth_client_id", "oauth_client_secret":
+					continue
+				}
+				if s, ok := v.(string); ok {
+					creds[k] = s
+				}
+			}
+			if sys.AuthType != "" {
+				authType = sys.AuthType
+			}
+		}
+	}
+
 	userID := userIDOf(r.Context())
-	if err := store.Install(r.Context(), userID, pieceName, version, authType, req.Credentials); err != nil {
+	if err := store.Install(r.Context(), userID, pieceName, version, authType, creds); err != nil {
 		writeError(w, http.StatusInternalServerError, "install_failed", err.Error())
 		return
 	}
@@ -387,6 +411,25 @@ func (d *Daemon) piecesStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, status)
 }
 
+// GET /api/pieces/{piece_name}/bridge-auth — reveal the configured _ap_auth
+// wire for the current user. Honors X-Act-As-User so the background runtime
+// can fetch a trigger owner's configured connector credentials in-flight.
+func (d *Daemon) piecesBridgeAuth(w http.ResponseWriter, r *http.Request) {
+	pm := d.piecesModule()
+	if pm == nil || pm.PiecesStore() == nil {
+		writeError(w, http.StatusServiceUnavailable, "pieces_unavailable", "pieces store not initialised")
+		return
+	}
+	pieceName := chi.URLParam(r, "piece_name")
+	userID := userIDOf(r.Context())
+	wire, err := pm.PiecesStore().RevealAuth(r.Context(), userID, pieceName)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "not_configured", "piece not configured for this user")
+		return
+	}
+	writeJSON(w, http.StatusOK, wire)
+}
+
 // POST /api/pieces/{piece_name}/configure — store credentials for a piece.
 func (d *Daemon) piecesConfigure(w http.ResponseWriter, r *http.Request) {
 	pm := d.piecesModule()
@@ -508,6 +551,21 @@ func (d *Daemon) piecesOAuthStart(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = readJSONLenient(r, &req)
 
+	// Prefer the hub's system-managed OAuth app (client_id/secret) so the
+	// user only consents — the secret never transits the browser.
+	clientID := req.ClientID
+	clientSecret := req.ClientSecret
+	if d.mcpHub != nil {
+		if sys, serr := d.mcpHub.PiecesSystemConfig(r.Context(), pieceName); serr == nil && sys != nil {
+			if v, ok := sys.DigitornProvided["oauth_client_id"].(string); ok && v != "" {
+				clientID = v
+			}
+			if v, ok := sys.DigitornProvided["oauth_client_secret"].(string); ok && v != "" {
+				clientSecret = v
+			}
+		}
+	}
+
 	// Get the auth schema from the bridge to find the OAuth2 option.
 	authSchema, err := bridge.GetPieceAuth(pieceName)
 	if err != nil {
@@ -553,12 +611,12 @@ func (d *Daemon) piecesOAuthStart(w http.ResponseWriter, r *http.Request) {
 		AuthorizeURL: authURL,
 		TokenURL:     tokenURL,
 		Scopes:       scopes,
-		ClientID:     req.ClientID,
-		ClientSecret: req.ClientSecret,
+		ClientID:     clientID,
+		ClientSecret: clientSecret,
 	}
 
 	// Start the OAuth flow using the existing mcpoauth service.
-	authURL, state, err := d.mcpOAuth.AuthorizeForPiece(r.Context(), cfg, userID, piecesAppID, pieceName, req.ClientID, req.ClientSecret)
+	authURL, state, err := d.mcpOAuth.AuthorizeForPiece(r.Context(), cfg, userID, piecesAppID, pieceName, clientID, clientSecret)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "oauth_start_failed", err.Error())
 		return

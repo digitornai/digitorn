@@ -739,7 +739,7 @@ ui:
   (Slack tools → `mcp_slack.<action>`).
 - **Per-server sandbox** with `permissions` + `allowed_hosts`
   is mandatory in production
-  ([Sandbox → MCP servers](35-sandbox.md#mcp-servers---deny-by-default)).
+  (Sandbox → MCP servers).
 - Slack tools auto-execute, GitHub tools require approval,
   `delete_repository` is hard-blocked.
 - `SearchTools` (the discovery meta-tool) finds MCP tools the
@@ -914,7 +914,7 @@ ui:
   [Security](11-security.md)
 - OS-level sandbox (Landlock + seccomp + namespaces) + MCP
   per-server permissions:
-  [OS-Level Sandbox](35-sandbox.md)
+  OS-Level Sandbox
 - Credentials vault, OAuth flow, KMS:
   [credentials.md](../reference/runtime/credentials.md)
 - Behavior engine (declarative rules + classifier):

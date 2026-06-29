@@ -31,9 +31,9 @@ func (e *MiddlewareEntry) UnmarshalYAML(node *yaml.Node) error {
 
 	if hasName {
 		type raw struct {
-			Name    string         `yaml:"name"`
-			Enabled *bool          `yaml:"enabled"`
-			Config  map[string]any `yaml:"config"`
+			Name    string         `yaml:"name" json:"name"`
+			Enabled *bool          `yaml:"enabled" json:"enabled"`
+			Config  map[string]any `yaml:"config" json:"config"`
 		}
 		var r raw
 		if err := node.Decode(&r); err != nil {

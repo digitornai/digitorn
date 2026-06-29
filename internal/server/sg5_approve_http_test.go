@@ -181,7 +181,26 @@ func TestSG5_HTTPApprove_PayloadShape(t *testing.T) {
 	decodeBody(t, body, &created)
 	sid := created["session_id"].(string)
 
-	if _, err := h.bus.Append(context.Background(), sessionstore.Event{
+	// Mirror the production path: an approval is always raised mid-turn, AFTER a
+	// user message, and the runtime emits it via AppendDurable (fsync) — see
+	// engine.go:awaitApproval / askuser.go. Using Append (async) on a session
+	// with no user_message instead made this test hit (a) the flush race and
+	// (b) the "empty shell" filter in walkSessionMeta, neither of which happens
+	// in prod. So persist a user message, then the approval, both durably.
+	if _, err := h.bus.AppendDurable(context.Background(), sessionstore.Event{
+		Type:      sessionstore.EventUserMessage,
+		SessionID: sid,
+		AppID:     "app-1",
+		UserID:    "user-A",
+		Message: &sessionstore.MessagePayload{
+			Role:  "user",
+			Parts: []sessionstore.MessagePart{{Text: "Please run the command"}},
+		},
+	}); err != nil {
+		t.Fatalf("inject user message: %v", err)
+	}
+
+	if _, err := h.bus.AppendDurable(context.Background(), sessionstore.Event{
 		Type:      sessionstore.EventApprovalRequest,
 		SessionID: sid,
 		AppID:     "approval-bot",

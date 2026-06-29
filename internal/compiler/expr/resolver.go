@@ -29,13 +29,26 @@ type IncludeResolver interface {
 }
 
 type Engine struct {
-	namespaces map[string]Resolver
-	include    IncludeResolver
-	maxDepth   int
+	namespaces  map[string]Resolver
+	include     IncludeResolver
+	maxDepth    int
+	passthrough map[string]struct{}
 }
 
 func NewEngine() *Engine {
-	return &Engine{namespaces: map[string]Resolver{}, maxDepth: 10}
+	return &Engine{namespaces: map[string]Resolver{}, maxDepth: 10, passthrough: map[string]struct{}{}}
+}
+
+// AddPassthrough registers extra namespaces that are resolved at runtime, not
+// compile time — their `{{ns.path}}` occurrences are left untouched. Used for
+// flow node ids, whose `{{<node>.output.x}}` templates the flow runner fills in.
+func (e *Engine) AddPassthrough(ns ...string) {
+	if e.passthrough == nil {
+		e.passthrough = map[string]struct{}{}
+	}
+	for _, n := range ns {
+		e.passthrough[n] = struct{}{}
+	}
 }
 
 func (e *Engine) Register(namespace string, r Resolver) { e.namespaces[namespace] = r }
@@ -68,6 +81,9 @@ func (e *Engine) Eval(expr Expr) (string, error) {
 		r, ok := e.namespaces[x.Namespace]
 		if !ok {
 			if isRuntimeNamespace(x.Namespace) {
+				return passthrough(x), nil
+			}
+			if _, pt := e.passthrough[x.Namespace]; pt {
 				return passthrough(x), nil
 			}
 			return "", fmt.Errorf("unknown namespace %q", x.Namespace)

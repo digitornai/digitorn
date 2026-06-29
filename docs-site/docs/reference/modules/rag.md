@@ -222,6 +222,6 @@ overridden hook (in):
 - App-config block reference (`tools.modules.rag.config`):
   [App Configuration → tools.modules](../../language/02-app-config.md#toolsmodules---module-configuration)
 - Lower-level vector ops module (no RAG pipeline):
-  [vector reference](vector.md)
+  vector reference
 - System-level workspace index (separate from `rag`):
   [index reference](index_module.md)

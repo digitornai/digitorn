@@ -8,7 +8,7 @@
 // The output .js is a self-contained ESM bundle loadable by the AP bridge.
 // Drop it in DIGITORN_PIECES_DIR and restart the bridge.
 
-import { join, dirname } from 'node:path'
+import { join, dirname, basename } from 'node:path'
 import { existsSync, mkdirSync } from 'node:fs'
 
 const pieceName = process.argv[2]
@@ -20,7 +20,7 @@ if (!pieceName) {
   process.exit(1)
 }
 
-const AP_DEFAULT = join(import.meta.dir, '..', '..', '..', 'activepieces-main', 'activepieces-main')
+const AP_DEFAULT = join(import.meta.dir, '..', '..', '..', 'activepieces-main')
 const apRoot = (process.env.ACTIVEPIECES_DIR ?? AP_DEFAULT).replace(/\\/g, '/')
 
 const entry = join(apRoot, 'packages', 'pieces', 'community', pieceName, 'src', 'index.ts')
@@ -41,9 +41,9 @@ const result = await Bun.build({
   minify: false,
   external: ['node:*', 'bun:*'],
   alias: {
-    '@activepieces/pieces-framework': join(apRoot, 'packages', 'pieces', 'framework', 'dist', 'src', 'index.js'),
-    '@activepieces/pieces-common':    join(apRoot, 'packages', 'pieces', 'common',    'dist', 'src', 'index.js'),
-    '@activepieces/shared':           join(apRoot, 'packages', 'shared',              'dist', 'src', 'index.js'),
+    '@activepieces/pieces-framework': join(apRoot, 'packages', 'pieces', 'framework', 'src', 'index.ts'),
+    '@activepieces/pieces-common':    join(apRoot, 'packages', 'pieces', 'common',    'src', 'index.ts'),
+    '@activepieces/shared':           join(apRoot, 'packages', 'shared',              'src', 'index.ts'),
   },
 })
 
@@ -60,3 +60,29 @@ if (builtPath && builtPath !== outFile) {
 }
 
 process.stdout.write(`built: ${outFile} (${result.outputs[0]?.size ?? '?'} bytes)\n`)
+
+// Emit the sidecar manifest so the lazy loader can list this connector without
+// importing the heavy bundle. Best-effort: a build is still useful without it.
+try {
+  const { writeFileSync } = await import('node:fs')
+  const mod = (await import(outFile)) as Record<string, unknown>
+  const piece = Object.values(mod).find(
+    v => v && typeof v === 'object' && typeof (v as { metadata?: unknown }).metadata === 'function',
+  ) as { metadata(): { displayName?: string; description?: string; logoUrl?: string } } | undefined
+  if (piece) {
+    const meta = piece.metadata()
+    const id = basename(outFile, '.js').toLowerCase().replace(/-/g, '_')
+    const manifest = {
+      id,
+      displayName: meta.displayName ?? '',
+      description: meta.description ?? '',
+      logoUrl: meta.logoUrl ?? '',
+      metadata: JSON.parse(JSON.stringify(meta)),
+    }
+    const metaOut = join(dirname(outFile), `${basename(outFile, '.js')}.meta.json`)
+    writeFileSync(metaOut, JSON.stringify(manifest))
+    process.stdout.write(`manifest: ${metaOut}\n`)
+  }
+} catch (e) {
+  process.stderr.write(`manifest generation skipped: ${e}\n`)
+}

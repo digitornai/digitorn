@@ -1,0 +1,34 @@
+# Local GLPI for glpi-support demo. GLPI UI: http://localhost:8080
+# Digitorn background webhook: http://host.docker.internal:8090/hook/glpi
+name: glpi-demo
+
+services:
+  glpi:
+    image: glpi/glpi:latest
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_started
+    ports:
+      - "8080:80"
+    volumes:
+      - glpi_data:/var/glpi
+    extra_hosts:
+      # Lets the GLPI container reach Digitorn on the host (Linux Docker).
+      - "host.docker.internal:host-gateway"
+
+  db:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_RANDOM_ROOT_PASSWORD: "yes"
+      MYSQL_DATABASE: ${GLPI_DB_NAME}
+      MYSQL_USER: ${GLPI_DB_USER}
+      MYSQL_PASSWORD: ${GLPI_DB_PASSWORD}
+    volumes:
+      - db_data:/var/lib/mysql
+
+volumes:
+  glpi_data:
+  db_data:

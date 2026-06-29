@@ -33,6 +33,13 @@ type Client struct {
 	jwt     string
 	hc      *http.Client
 
+	// userToken, when set, returns a valid per-user access token for a request
+	// made on behalf of that user (X-Act-As-User). When it yields a token the
+	// request authenticates AS the user (real JWT) — so a background turn carries
+	// a UserJWT the LLM gateway accepts — instead of the service-token + act-as
+	// impersonation. nil or "" → falls back to the service JWT + act-as.
+	userToken func(ctx context.Context, userID string) (string, error)
+
 	// pollEvery is how often WaitForReply polls /history. Small enough to feel
 	// live, large enough not to hammer the daemon.
 	pollEvery time.Duration
@@ -40,6 +47,18 @@ type Client struct {
 
 // Option configures a Client.
 type Option func(*Client)
+
+// WithUserTokenProvider wires a per-user access-token source (the userauth
+// manager) so requests on behalf of a user carry that user's real JWT.
+func WithUserTokenProvider(f func(ctx context.Context, userID string) (string, error)) Option {
+	return func(c *Client) { c.userToken = f }
+}
+
+// SetUserTokenProvider sets the per-user token source after construction (the
+// manager needs the DB, opened later in service.New).
+func (c *Client) SetUserTokenProvider(f func(ctx context.Context, userID string) (string, error)) {
+	c.userToken = f
+}
 
 // WithHTTPClient overrides the underlying *http.Client (timeouts, transport).
 func WithHTTPClient(hc *http.Client) Option { return func(c *Client) { c.hc = hc } }
@@ -76,13 +95,16 @@ type CreateSessionRequest struct {
 	Title           string    `json:"title,omitempty"`
 	Workdir         string    `json:"workdir,omitempty"`
 	SessionID       string    `json:"session_id,omitempty"`
-	Message         string    `json:"message,omitempty"`
-	ClientMessageID string    `json:"client_message_id,omitempty"`
-	Mode            string    `json:"mode,omitempty"`
-	EntryAgent      string    `json:"entry_agent,omitempty"`
-	Context         string    `json:"context,omitempty"`
-	Model           string    `json:"model,omitempty"`
+	Message         string `json:"message,omitempty"`
+	ClientMessageID string `json:"client_message_id,omitempty"`
+	Mode            string `json:"mode,omitempty"`
+	EntryAgent      string `json:"entry_agent,omitempty"`
+	Context         string `json:"context,omitempty"`
+	Model           string `json:"model,omitempty"`
 	Attachments     []BlobRef `json:"attachments,omitempty"`
+	// TriggerEvent is the structured inbound event (channels scope) attached to
+	// the inline first message so flow nodes can read {{event.payload.*}}.
+	TriggerEvent map[string]any `json:"trigger_event,omitempty"`
 }
 
 // BlobRef references a stored blob by content hash — the daemon's BlobRef wire shape.
@@ -107,11 +129,12 @@ type CreateSessionResponse struct {
 
 // PostMessageRequest is the body of POST .../messages.
 type PostMessageRequest struct {
-	Message         string    `json:"message,omitempty"`
-	Role            string    `json:"role,omitempty"`
-	ClientMessageID string    `json:"client_message_id,omitempty"`
-	Mode            string    `json:"mode,omitempty"`
-	Attachments     []BlobRef `json:"attachments,omitempty"`
+	Message         string         `json:"message,omitempty"`
+	Role            string         `json:"role,omitempty"`
+	ClientMessageID string         `json:"client_message_id,omitempty"`
+	Mode            string         `json:"mode,omitempty"`
+	Attachments     []BlobRef      `json:"attachments,omitempty"`
+	TriggerEvent    map[string]any `json:"trigger_event,omitempty"`
 }
 
 // PostMessageResponse is the daemon's reply to a posted message.
@@ -537,6 +560,49 @@ func actAsFromCtx(ctx context.Context) string {
 	return v
 }
 
+// PieceAuth fetches the configured _ap_auth wire for an installed piece,
+// acting as the trigger owner so the background runtime uses THAT user's
+// credentials. Returned as a generic map (sent to the bridge as-is).
+func (c *Client) PieceAuth(ctx context.Context, owner, pieceName string) (map[string]any, error) {
+	if owner != "" {
+		ctx = withActAs(ctx, owner)
+	}
+	status, raw, err := c.do(ctx, http.MethodGet,
+		"/api/pieces/"+neturl.PathEscape(pieceName)+"/bridge-auth", nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	if status != http.StatusOK {
+		return nil, &APIError{Op: "piece_auth", Status: status, Message: string(raw)}
+	}
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, &APIError{Op: "piece_auth", Message: err.Error()}
+	}
+	return out, nil
+}
+
+// AppChannelSecret fetches the installation's stored value for one channel
+// secret key (a bot token pasted in the UI), so BuildPlan can resolve a
+// {{secret.X}} placeholder at arm time. Returns "" (no error) when unset.
+func (c *Client) AppChannelSecret(ctx context.Context, appID, key string) (string, error) {
+	status, raw, err := c.do(ctx, http.MethodGet,
+		"/api/apps/"+neturl.PathEscape(appID)+"/channel-secret?key="+neturl.QueryEscape(key), nil, nil)
+	if err != nil {
+		return "", err
+	}
+	if status != http.StatusOK {
+		return "", &APIError{Op: "channel_secret", Status: status, Message: string(raw)}
+	}
+	var out struct {
+		Value string `json:"value"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return "", &APIError{Op: "channel_secret", Message: err.Error()}
+	}
+	return out.Value, nil
+}
+
 // do executes a request, returning (status, body, error). A transport failure
 // returns a Status-0 *APIError (retryable).
 func (c *Client) do(ctx context.Context, method, path string, body io.Reader, headers map[string]string) (int, []byte, error) {
@@ -544,11 +610,23 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader, he
 	if err != nil {
 		return 0, nil, &APIError{Op: "request", Message: err.Error()}
 	}
-	if c.jwt != "" {
-		req.Header.Set("Authorization", "Bearer "+c.jwt)
-	}
+	// On behalf of a user: prefer that user's real access token (so a background
+	// turn carries a UserJWT the gateway accepts). Fall back to the service JWT +
+	// X-Act-As-User impersonation when no per-user token is available.
+	authed := false
 	if u := actAsFromCtx(ctx); u != "" {
-		req.Header.Set("X-Act-As-User", u)
+		if c.userToken != nil {
+			if tok, terr := c.userToken(ctx, u); terr == nil && tok != "" {
+				req.Header.Set("Authorization", "Bearer "+tok)
+				authed = true
+			}
+		}
+		if !authed {
+			req.Header.Set("X-Act-As-User", u)
+		}
+	}
+	if !authed && c.jwt != "" {
+		req.Header.Set("Authorization", "Bearer "+c.jwt)
 	}
 	for k, v := range headers {
 		req.Header.Set(k, v)

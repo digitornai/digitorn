@@ -52,6 +52,7 @@ type Options struct {
 //   - All emitted events carry the same TurnID for correlation.
 type Turn struct {
 	ID        string
+	StepID    string
 	SessionID string
 	AppID     string
 	AgentID   string

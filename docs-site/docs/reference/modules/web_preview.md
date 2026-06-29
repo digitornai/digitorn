@@ -137,7 +137,7 @@ Implications:
   bundle and use the static-bundle attachment path.
 - The agent SHOULD spawn dev servers under a sandboxed user and
   on a port within an allowed range. The OS sandbox
-  ([sandbox](../../language/35-sandbox.md)) gates this when set.
+  (sandbox) gates this when set.
 
 ## Example
 

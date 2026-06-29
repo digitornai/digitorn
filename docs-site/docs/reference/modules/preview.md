@@ -177,8 +177,8 @@ session before dispatching.
 - The 6-action workspace facade agents actually call:
   [workspace reference](workspace.md)
 - Parallel transport for declarative widgets:
-  [widget reference](widget.md)
+  widget reference
 - Workspace + preview YAML reference:
-  [Workspace & Preview](../../language/41-preview.md)
+  Workspace & Preview
 - API integration (Socket.IO defaults, room subscription):
   [API Integration → Real-time](../../language/14-api-integration.md)

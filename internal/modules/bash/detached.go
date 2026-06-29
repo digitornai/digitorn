@@ -7,6 +7,7 @@ import (
 	"io"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode/utf16"
 
@@ -126,23 +127,39 @@ func runDetached(ctx context.Context, kind, path, command, dir string, env []str
 	}
 
 	// Prompt detection: when no input is provided and promptWait > 0, monitor
-	// stdout/stderr for output. If no output for promptWait duration, assume the
-	// command is waiting for interactive input and kill it.
-	var waitingForInput bool
+	// stdout/stderr for a blocking interactive prompt. Two triggers:
+	//   (a) a prompt-looking TRAILING line that then goes quiet for the grace
+	//       window (a sudo/ssh password, a y/n confirmation) — catches the case
+	//       a prompt IS printed (so the old silence-only check missed it), and
+	//   (b) total silence for promptWait (a program reading stdin with no prompt).
+	// On either, kill the tree and report waiting-for-input so the turn can't hang.
+	var waitingForInput int32
 	if input == "" && promptWait > 0 && cmd.Process != nil {
 		done := make(chan struct{})
 		go func() {
-			select {
-			case <-done:
-				return
-			case <-time.After(promptWait):
-				// Check if any output was produced
-				outLen := out.Len()
-				errLen := errb.Len()
-				if outLen == 0 && errLen == 0 {
-					// No output for promptWait seconds - assume waiting for input
-					waitingForInput = true
-					killProcessTree(cmd.Process.Pid)
+			t := time.NewTicker(500 * time.Millisecond)
+			defer t.Stop()
+			lastLen := 0
+			lastGrowth := time.Now()
+			for {
+				select {
+				case <-done:
+					return
+				case <-t.C:
+					cur := out.Len() + errb.Len()
+					if cur != lastLen {
+						lastLen = cur
+						lastGrowth = time.Now()
+					}
+					idle := time.Since(lastGrowth)
+					blockingPrompt := cur > 0 && idle >= promptGraceWindow &&
+						(looksLikePrompt(out.String()) || looksLikePrompt(errb.String()))
+					totalSilence := cur == 0 && idle >= promptWait
+					if blockingPrompt || totalSilence {
+						atomic.StoreInt32(&waitingForInput, 1)
+						killProcessTree(cmd.Process.Pid)
+						return
+					}
 				}
 			}
 		}()
@@ -161,7 +178,7 @@ func runDetached(ctx context.Context, kind, path, command, dir string, env []str
 		}
 	}
 	res := cmdResult{Stdout: trimTrailing(out.String()), Stderr: trimTrailing(errb.String()), ExitCode: exit, Cwd: dir}
-	if waitingForInput {
+	if atomic.LoadInt32(&waitingForInput) == 1 {
 		res.WaitingForInput = true
 		return res, errWaitingForInput
 	}

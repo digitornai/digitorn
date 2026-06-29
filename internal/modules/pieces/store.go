@@ -6,12 +6,23 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"strings"
 	"time"
 
 	"github.com/mbathepaul/digitorn/internal/persistence/models"
 	"github.com/mbathepaul/digitorn/internal/server/mcpoauth"
 	"gorm.io/gorm"
 )
+
+// canonicalPieceName normalises a connector id the same way the bridge does
+// when loading bundles (lowercase, hyphens to underscores). Credentials are
+// keyed by this canonical id so a connector stored from the hub catalog
+// ("telegram-bot") is found when the agent calls its tool, whose piece id is
+// the bridge's canonical form ("telegram_bot"). Without this, multi-word
+// connectors store and reveal under different keys and auth is never injected.
+func canonicalPieceName(s string) string {
+	return strings.ToLower(strings.ReplaceAll(s, "-", "_"))
+}
 
 // Store manages per-user installed piece credentials (sealed at rest).
 type Store struct {
@@ -54,6 +65,7 @@ func (s *Store) Install(ctx context.Context, userID, pieceName, version, authTyp
 	if userID == "" || pieceName == "" {
 		return errors.New("userID and pieceName are required")
 	}
+	pieceName = canonicalPieceName(pieceName)
 	sealed, err := s.seal(creds)
 	if err != nil {
 		return fmt.Errorf("seal credentials: %w", err)
@@ -74,6 +86,7 @@ func (s *Store) Install(ctx context.Context, userID, pieceName, version, authTyp
 
 // Get returns the view for a piece (no raw secrets).
 func (s *Store) Get(ctx context.Context, userID, pieceName string) (*InstalledPieceView, bool, error) {
+	pieceName = canonicalPieceName(pieceName)
 	var row models.InstalledPiece
 	err := s.db.WithContext(ctx).
 		Where("user_id = ? AND piece_name = ?", userID, pieceName).
@@ -102,6 +115,7 @@ func (s *Store) List(ctx context.Context, userID string) ([]InstalledPieceView, 
 
 // Update replaces credentials for an existing piece.
 func (s *Store) Update(ctx context.Context, userID, pieceName string, creds map[string]string) error {
+	pieceName = canonicalPieceName(pieceName)
 	sealed, err := s.seal(creds)
 	if err != nil {
 		return fmt.Errorf("seal credentials: %w", err)
@@ -121,6 +135,7 @@ func (s *Store) Update(ctx context.Context, userID, pieceName string, creds map[
 
 // Delete removes an installed piece.
 func (s *Store) Delete(ctx context.Context, userID, pieceName string) error {
+	pieceName = canonicalPieceName(pieceName)
 	return s.db.WithContext(ctx).
 		Where("user_id = ? AND piece_name = ?", userID, pieceName).
 		Delete(&models.InstalledPiece{}).Error
@@ -128,6 +143,7 @@ func (s *Store) Delete(ctx context.Context, userID, pieceName string) error {
 
 // UpsertOAuth stores OAuth2 credentials for a piece.
 func (s *Store) UpsertOAuth(ctx context.Context, userID, pieceName, accessToken, refreshToken, tokenType string, expiresAt int64, scope string) error {
+	pieceName = canonicalPieceName(pieceName)
 	creds := map[string]string{
 		"access_token":  accessToken,
 		"refresh_token": refreshToken,
@@ -156,6 +172,7 @@ func (s *Store) UpsertOAuth(ctx context.Context, userID, pieceName, accessToken,
 
 // RevealAuth unseals and returns the _ap_auth wire object for the bridge.
 func (s *Store) RevealAuth(ctx context.Context, userID, pieceName string) (*APAuthWire, error) {
+	pieceName = canonicalPieceName(pieceName)
 	var row models.InstalledPiece
 	err := s.db.WithContext(ctx).
 		Where("user_id = ? AND piece_name = ?", userID, pieceName).

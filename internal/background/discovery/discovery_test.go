@@ -102,7 +102,7 @@ func TestBuildPlan(t *testing.T) {
 		}
 		return ""
 	}
-	plan := BuildPlan(apps, env)
+	plan := BuildPlan(apps, env, nil)
 
 	// disabled provider excluded; bad_sched dropped (warned); → 3 active triggers.
 	if len(plan.Triggers) != 3 {
@@ -148,7 +148,7 @@ func TestArm_PersistsTriggers_Idempotent(t *testing.T) {
 	dir := t.TempDir()
 	writeApp(t, dir, "support", channelApp)
 	apps, _ := ScanApps(dir)
-	plan := BuildPlan(apps, func(string) string { return "" })
+	plan := BuildPlan(apps, func(string) string { return "" }, nil)
 	st := newStore(t)
 
 	_, reg, err := Arm(context.Background(), st, plan, "", nil)

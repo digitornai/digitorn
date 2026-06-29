@@ -248,7 +248,7 @@ that encode your project-specific invariants.
 For threats outside the agent's prompt-injection surface (the
 agent itself going rogue, third-party code in tools), pair these
 with the OS sandbox layer
-([Sandbox reference](../language/35-sandbox.md)). Behaviour rules
+(Sandbox reference). Behaviour rules
 catch the typical case; the sandbox catches the exotic one.
 
 ## Going further

@@ -168,6 +168,20 @@ func (m *Module) Init(_ context.Context, cfg map[string]any) error {
 	return nil
 }
 
+// callDefaultHeaders returns per-call default headers from the app's resolved
+// module config (tools.modules.http.config), when the dispatcher attached one.
+func (m *Module) callDefaultHeaders(ctx context.Context) map[string]string {
+	raw := module.ModuleConfigFrom(ctx)
+	if len(raw) == 0 {
+		return nil
+	}
+	var c Config
+	if err := m.BindConfig(raw, &c); err != nil || len(c.DefaultHeaders) == 0 {
+		return nil
+	}
+	return c.DefaultHeaders
+}
+
 type reqParams struct {
 	Method  string            `json:"method"`
 	URL     string            `json:"url"`
@@ -212,6 +226,9 @@ func (m *Module) doRequest(ctx context.Context, method string, raw json.RawMessa
 		return errResult(err), err
 	}
 	for k, v := range m.cfg.DefaultHeaders {
+		req.Header.Set(k, v)
+	}
+	for k, v := range m.callDefaultHeaders(ctx) {
 		req.Header.Set(k, v)
 	}
 	for k, v := range p.Headers {

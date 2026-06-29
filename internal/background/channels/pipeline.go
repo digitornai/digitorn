@@ -41,6 +41,9 @@ type Activation struct {
 	Model           string // per-session model override for the entry agent; "" = app default
 	Reply           string // auto | none | explicit
 	ExposeData      bool
+	// TriggerEvent is the structured inbound event scope (provider, adapter,
+	// source, payload, …) for flow {{event.*}} templates at runtime.
+	TriggerEvent map[string]any
 	// Deliver is the resolved proactive-push destination (nil = reactive: reply to
 	// the inbound originator). When set, the processor delivers the result here.
 	Deliver *Destination
@@ -112,6 +115,7 @@ func Process(ctx context.Context, ev Event, ac ActivationConfig, mod ModuleConfi
 		Model:           strings.TrimSpace(Render(ac.Model, scope)),
 		Reply:           replyOr(ac.Reply),
 		ExposeData:      ac.ExposeData,
+		TriggerEvent:    triggerScope(scope),
 		Deliver:         resolveDeliver(ac.Deliver, scope),
 	}, nil
 }
@@ -184,6 +188,22 @@ func buildScope(ev Event) map[string]any {
 			"metadata":  meta,
 		},
 	}
+}
+
+// triggerScope extracts the event.* map from a render scope for flow/runtime.
+func triggerScope(scope map[string]any) map[string]any {
+	if scope == nil {
+		return nil
+	}
+	ev, ok := scope["event"].(map[string]any)
+	if !ok || len(ev) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(ev))
+	for k, v := range ev {
+		out[k] = v
+	}
+	return out
 }
 
 // evalFilter returns ("", true) if all conditions pass, else (failingField, false).

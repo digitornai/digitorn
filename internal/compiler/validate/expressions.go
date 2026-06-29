@@ -24,6 +24,7 @@ var expressionRoots = map[string]struct{}{
 	"workspace": {}, "ws": {},
 	"steps": {}, "step": {}, "field": {},
 	"previous": {}, "true": {}, "false": {}, "null": {}, "nil": {},
+	"approvals": {}, "tasks": {},
 }
 
 // CheckExpressions lints every expression-typed field in the manifest:
@@ -44,14 +45,22 @@ func CheckExpressions(file string, def *schema.AppDefinition, bag *diagnostic.Ba
 		}
 	}
 	if def.Flow != nil {
+		// Flow node ids are valid expression roots : `{{<node>.output.x}}` and
+		// `<node>.field` references in when/expr resolve against prior nodes.
+		nodeIDs := make(map[string]struct{}, len(def.Flow.Nodes))
+		for _, n := range def.Flow.Nodes {
+			if n.ID != "" {
+				nodeIDs[strings.ToLower(n.ID)] = struct{}{}
+			}
+		}
 		for i, n := range def.Flow.Nodes {
 			for j, r := range n.Routes {
 				if r.When != "" {
-					checkExprString(r.When, fmt.Sprintf("flow.nodes.%d.routes.%d.when", i, j), bag)
+					checkExprStringWith(r.When, fmt.Sprintf("flow.nodes.%d.routes.%d.when", i, j), bag, nodeIDs)
 				}
 			}
 			if n.Expr != "" {
-				checkExprString(n.Expr, fmt.Sprintf("flow.nodes.%d.expr", i), bag)
+				checkExprStringWith(n.Expr, fmt.Sprintf("flow.nodes.%d.expr", i), bag, nodeIDs)
 			}
 		}
 	}
@@ -72,6 +81,10 @@ func checkHookExpr(h schema.Hook, path string, bag *diagnostic.Bag) {
 //   - unbalanced quotes / parens / brackets
 //   - leading identifier of a dotted ref that isn't a known runtime root
 func checkExprString(s, path string, bag *diagnostic.Bag) {
+	checkExprStringWith(s, path, bag, nil)
+}
+
+func checkExprStringWith(s, path string, bag *diagnostic.Bag, extraRoots map[string]struct{}) {
 	if err := balanced(s); err != nil {
 		bag.Add(diagnostic.Errorf(diagnostic.CodeBadPlaceholderSyntax, posUnknown,
 			"%s: %s", path, err.Error()))
@@ -79,6 +92,9 @@ func checkExprString(s, path string, bag *diagnostic.Bag) {
 	}
 	for _, root := range leadingRefs(s) {
 		if _, ok := expressionRoots[root]; ok {
+			continue
+		}
+		if _, ok := extraRoots[root]; ok {
 			continue
 		}
 		// Skip numeric literals and reserved words.

@@ -3,17 +3,17 @@ package schema
 import "gopkg.in/yaml.v3"
 
 type ToolsBlock struct {
-	Modules      map[string]ModuleBlock           `yaml:"modules,omitempty"`
-	Capabilities *CapabilitiesConfig              `yaml:"capabilities,omitempty"`
-	Channels     map[string]ChannelInstanceConfig `yaml:"channels,omitempty"`
+	Modules      map[string]ModuleBlock           `yaml:"modules,omitempty" json:"modules,omitempty"`
+	Capabilities *CapabilitiesConfig              `yaml:"capabilities,omitempty" json:"capabilities,omitempty"`
+	Channels     map[string]ChannelInstanceConfig `yaml:"channels,omitempty" json:"channels,omitempty"`
 }
 
 type ModuleBlock struct {
-	Config      map[string]any   `yaml:"config,omitempty"`
-	Setup       []SetupStep      `yaml:"setup,omitempty"`
-	Constraints map[string]any   `yaml:"constraints,omitempty"`
-	Middleware  []map[string]any `yaml:"middleware,omitempty"`
-	Credential  CredentialRef    `yaml:"credential,omitempty"`
+	Config      map[string]any   `yaml:"config,omitempty" json:"config,omitempty"`
+	Setup       []SetupStep      `yaml:"setup,omitempty" json:"setup,omitempty"`
+	Constraints map[string]any   `yaml:"constraints,omitempty" json:"constraints,omitempty"`
+	Middleware  []map[string]any `yaml:"middleware,omitempty" json:"middleware,omitempty"`
+	Credential  CredentialRef    `yaml:"credential,omitempty" json:"credential,omitempty"`
 }
 
 var moduleBlockKnown = map[string]bool{
@@ -54,6 +54,6 @@ func (b *ModuleBlock) UnmarshalYAML(node *yaml.Node) error {
 }
 
 type SetupStep struct {
-	Action string         `yaml:"action"`
-	Params map[string]any `yaml:"params,omitempty"`
+	Action string         `yaml:"action" json:"action"`
+	Params map[string]any `yaml:"params,omitempty" json:"params,omitempty"`
 }

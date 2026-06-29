@@ -247,6 +247,6 @@ Gates 0, 1b, 3, 5, 6 mostly stay default. Reach for them when:
   [Observability - Audit log](../language/24-observability.md#audit-log).
 - The OS-level sandbox layer (Landlock, seccomp, Job Objects)
   that complements the application-level gates:
-  [OS Sandbox](../language/35-sandbox.md).
+  OS Sandbox.
 - The **approval flow** when gate 4 chooses `approve`:
   [Security 1 - Human-in-the-loop approval](security-01-approval.md).

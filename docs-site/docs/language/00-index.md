@@ -26,8 +26,8 @@ future-proofs against breaking changes.
 | `runtime:` | No (defaults) | Lifecycle - `mode`, `entry_agent`, `max_turns`, `timeout`, `triggers`, `hooks`, `middleware`, `pipeline`, `context`, `workdir`, `default_channel`. | [App Configuration](02-app-config.md), [Triggers](09-triggers.md), [Middleware](17-middleware.md), [Tool Hooks](31-tool-hooks.md), [Context Management](06-context-management.md) |
 | `agents:` | At least 1 in practice | List of agents. Each has `id`, `role`, `brain`, `system_prompt`, `modules`, `pool`, `delegate_to`. | [Agents](03-agents.md), [Multi-Agent](12-multi-agent.md) |
 | `tools:` | No | What the agent can call: `modules` (dict), `capabilities` (grant / deny), `channels` (dict). | [Tools](04-tools.md), [Built-in Tools](04b-builtin-tools.md), [MCP Servers](04d-mcp.md), [Channels](40-channels.md), [Security](11-security.md) |
-| `security:` | No | Runtime boundaries: `behavior`, `sandbox`, `credentials_schema`. | [Behavior Engine](43-behavior.md), [OS Sandbox](35-sandbox.md), [credentials.md](../reference/runtime/credentials.md) |
-| `ui:` | No | Pure display, never read by the daemon: `theme`, `features`, `widgets`, `workspace` (renderer), `slash_commands`, `quick_prompts`, `greeting`. (`ui.preview` is deprecated; use `tools.modules.web_preview` for iframe-preview attachments.) | [Client Manifest](44-client-manifest.md), [Widgets](42-widgets.md), [Workspace & Preview](41-preview.md) |
+| `security:` | No | Runtime boundaries: `behavior`, `sandbox`, `credentials_schema`. | [Behavior Engine](43-behavior.md), OS Sandbox, [credentials.md](../reference/runtime/credentials.md) |
+| `ui:` | No | Pure display, never read by the daemon: `theme`, `features`, `widgets`, `workspace` (renderer), `slash_commands`, `quick_prompts`, `greeting`. (`ui.preview` is deprecated; use `tools.modules.web_preview` for iframe-preview attachments.) | [Client Manifest](44-client-manifest.md), Widgets, Workspace & Preview |
 | `dev:` | No | Developer affordances: `skills`, `variables`, `include` (fragmentation). | [Skills System](21-skills.md), [Bundle namespaces](38-bundle-namespaces.md) |
 | `flow:` | No | Optional declarative orchestration graph for multi-agent apps. Top-level since v2 because it changes how agents coordinate (explicit scenography vs implicit `Agent()` calls). | [Flows](07-flows.md) |
 
@@ -94,7 +94,7 @@ at the top level, the compiler still accepts it via the alias pass. The bidirect
 mirror means both shapes work at read time.
 
 The compiler handles legacy flat-shape YAMLs automatically via the alias
-pass — no migration command needed. The bidirectional
+pass · no migration command needed. The bidirectional
 mirror means both shapes work at read time.
 
 To rewrite a file in-place to the canonical 8-block form, the compiler
@@ -187,15 +187,15 @@ Everything that was under `execution:` (`mode`, `triggers`, `hooks`,
 
 - [Capabilities](11-security.md) - `default_policy`, grant / deny, approve gates
 - [Behavior Engine](43-behavior.md) - declarative runtime rules + classifier
-- [OS Sandbox](35-sandbox.md) - Landlock, seccomp, Seatbelt, Job Objects
+- OS Sandbox - Landlock, seccomp, Seatbelt, Job Objects
 - [Auth](22-auth.md) - JWT, per-user installs
 
 ### UI and client
 
 - [Client Manifest](44-client-manifest.md) - `features`, `theme`, `slash_commands`
-- [Widgets](42-widgets.md) - declarative UI primitives
-- [Workspace & Preview](41-preview.md) - virtual filesystem streamed to the client
-- [Preview SDK](47-preview-sdk.md) - `@digitorn/preview-sdk` React package: hooks, components, host protocol, hidden namespaces
+- Widgets - declarative UI primitives
+- Workspace & Preview - virtual filesystem streamed to the client
+- Preview SDK - `@digitorn/preview-sdk` React package: hooks, components, host protocol, hidden namespaces
 - [Bundle namespaces](38-bundle-namespaces.md) - `{{prompt.X}}`, `{{include:}}`, hot reload
 
 ### Operating and deploying

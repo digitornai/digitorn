@@ -117,6 +117,7 @@ type createSessionRequest struct {
 	ClientMessageID string `json:"client_message_id,omitempty"`
 	Mode            string `json:"mode,omitempty"`
 	Skill           string `json:"skill,omitempty"`
+	Template        string `json:"template_id,omitempty"`
 	// EntryAgent pins which of the app's agents handles this session, and Context
 	// is extra system-prompt text injected for it. Both are optional passthroughs
 	// for non-human launchers (e.g. a background channel trigger); empty for human
@@ -130,6 +131,9 @@ type createSessionRequest struct {
 	// Attachments are inbound media (already in the blob store) the inline first
 	// message carries — the multipart adapter turns them into vision content.
 	Attachments []sessionstore.BlobRef `json:"attachments,omitempty"`
+	// TriggerEvent is the structured inbound event (channels scope) for non-human
+	// launchers. Attached to the user message so flow nodes read {{event.payload.*}}.
+	TriggerEvent map[string]any `json:"trigger_event,omitempty"`
 }
 
 func (d *Daemon) createSession(w http.ResponseWriter, r *http.Request) {
@@ -230,14 +234,20 @@ func (d *Daemon) createSession(w http.ResponseWriter, r *http.Request) {
 			SessionID: sid,
 			AppID:     appID,
 			UserID:    userID,
-			Message:   &sessionstore.MessagePayload{Role: "user", Content: req.Message, ClientMessageID: req.ClientMessageID, Attachments: req.Attachments},
+			Message: &sessionstore.MessagePayload{
+				Role:            "user",
+				Content:         req.Message,
+				ClientMessageID: req.ClientMessageID,
+				Attachments:     req.Attachments,
+				TriggerEvent:    req.TriggerEvent,
+			},
 		})
 		if err != nil {
 			writeError(w, appendErrStatus(err), "append_failed", err.Error())
 			return
 		}
 		firstMsgSeq = mseq
-		d.runTurnAsync(r.Context(), sid, appID, userID, extractBearer(r), req.Mode, req.Skill)
+		d.runTurnAsync(r.Context(), sid, appID, userID, extractBearer(r), req.Mode, req.Skill, req.Template)
 	}
 
 	resp := map[string]any{
@@ -313,6 +323,7 @@ func (d *Daemon) getSession(w http.ResponseWriter, r *http.Request) {
 		"usd_total":     state.UsdTotal,
 		"partial":       state.Partial,
 		"active_mode":   state.ActiveMode,
+		"reasoning_effort": state.ReasoningEffort,
 		"instance_id":   d.envelopeBuilder.InstanceID,
 		"parent_id":     parentID,
 		"agent_id":      agentID,
@@ -526,6 +537,9 @@ type postMessageRequest struct {
 	// (e.g. "/commit"). Non-empty → the engine injects the skill's instructions
 	// as a forced system directive for this turn.
 	Skill string `json:"skill,omitempty"`
+	Template string `json:"template_id,omitempty"`
+	// TriggerEvent is the structured inbound event for non-human launchers.
+	TriggerEvent map[string]any `json:"trigger_event,omitempty"`
 }
 
 func (d *Daemon) postMessage(w http.ResponseWriter, r *http.Request) {
@@ -577,6 +591,7 @@ func (d *Daemon) postMessage(w http.ResponseWriter, r *http.Request) {
 			ClientMessageID: req.ClientMessageID,
 			ToolCallIDs:     req.ToolCallIDs,
 			Attachments:     req.Attachments,
+			TriggerEvent:    req.TriggerEvent,
 		},
 	}
 	ctxApp, cancelApp := appendCtx(r.Context())
@@ -595,7 +610,7 @@ func (d *Daemon) postMessage(w http.ResponseWriter, r *http.Request) {
 	// messages are write-throughs from upstream callers and must NOT
 	// re-enter the runtime (assistant in particular would loop).
 	if role == "user" && d.engine != nil && appID != "" {
-		d.runTurnAsync(r.Context(), sid, appID, userIDOf(r.Context()), extractBearer(r), req.Mode, req.Skill)
+		d.runTurnAsync(r.Context(), sid, appID, userIDOf(r.Context()), extractBearer(r), req.Mode, req.Skill, req.Template)
 	}
 
 	writeJSON(w, http.StatusCreated, map[string]any{
@@ -613,7 +628,7 @@ func (d *Daemon) postMessage(w http.ResponseWriter, r *http.Request) {
 // message and a proactive wake can never run two turns on one session at
 // once. The assistant reply reaches the client via the session-store →
 // Socket.IO bridge ; errors are logged inside the runner.
-func (d *Daemon) runTurnAsync(_ context.Context, sid, appID, userID, userJWT, mode, skill string) {
+func (d *Daemon) runTurnAsync(_ context.Context, sid, appID, userID, userJWT, mode, skill, template string) {
 	if d.sessionRunner == nil {
 		return
 	}
@@ -624,6 +639,34 @@ func (d *Daemon) runTurnAsync(_ context.Context, sid, appID, userID, userJWT, mo
 		UserJWT:   userJWT,
 		Mode:      mode,
 		Skill:     skill,
+		Template:  template,
+	})
+}
+
+// cancelAgent stops ONE running sub-agent (and its subtree) without aborting
+// the whole turn. The {agent_id} URL param is the agent's run id (the web's
+// AgentRow.agentId). The cancelled agent surfaces a clear "aborted by the user"
+// reason in its result so the parent agent is notified it was stopped on
+// purpose rather than failing on its own.
+func (d *Daemon) cancelAgent(w http.ResponseWriter, r *http.Request) {
+	sid := sessionIDParam(r)
+	runID := chi.URLParam(r, "agent_id")
+	if _, err := d.requireOwnedSession(r.Context(), sid); err != nil {
+		writeError(w, errStatus(err), errCode(err), err.Error())
+		return
+	}
+	if d.agents == nil {
+		writeError(w, http.StatusServiceUnavailable, "agents_unavailable", "agent manager not running")
+		return
+	}
+	const reason = "This sub-agent was aborted by the user. Treat its task as intentionally stopped — do not silently retry it; continue without its result or ask the user how to proceed."
+	stopped, err := d.agents.CancelWithReason(sid, runID, reason)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "agent_not_found", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"success": true, "session_id": sid, "agent_id": runID, "cancelled": true, "stopped": stopped,
 	})
 }
 

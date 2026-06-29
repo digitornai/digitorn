@@ -4,7 +4,7 @@ const { themes: prismThemes } = require("prism-react-renderer");
 /** @type {import('@docusaurus/types').Config} */
 const config = {
   title: "Digitorn",
-  tagline: "Declarative AI agent framework",
+  tagline: "Declarative AI agent runtime",
   favicon: "img/favicon.png",
 
   url: "https://docs.digitorn.ai",
@@ -29,7 +29,23 @@ const config = {
     },
   },
 
-  themes: ["@docusaurus/theme-mermaid"],
+  themes: [
+    "@docusaurus/theme-mermaid",
+    [
+      require.resolve("@easyops-cn/docusaurus-search-local"),
+      /** @type {import('@easyops-cn/docusaurus-search-local').PluginOptions} */
+      ({
+        hashed: true,
+        indexBlog: false,
+        indexPages: true,
+        docsRouteBasePath: "/docs",
+        highlightSearchTermsOnTargetPage: true,
+        searchResultLimits: 8,
+        searchBarShortcut: false,
+        searchBarShortcutHint: false,
+      }),
+    ],
+  ],
 
   presets: [
     [
@@ -67,18 +83,18 @@ const config = {
         {
           name: "description",
           content:
-            "Digitorn - declarative AI agent framework. Build production-ready AI apps in YAML: multi-agent runtimes, native MCP support, streaming, hooks, and a credentials gateway.",
+            "Digitorn - declarative AI agent runtime. Build production-ready AI apps in YAML: multi-agent runtimes, native MCP support, streaming, hooks, and a credentials gateway.",
         },
-        { name: "keywords", content: "AI agents, LLM, YAML, MCP, framework, multi-agent, gateway, declarative, OpenAI, Anthropic, DeepSeek" },
+        { name: "keywords", content: "AI agents, LLM, YAML, MCP, multi-agent, gateway, declarative, OpenAI, Anthropic, DeepSeek" },
         { name: "theme-color", content: "#A78BFA" },
         { name: "robots", content: "index, follow" },
         { name: "msvalidate.01", content: "BC6F5335D6247EA4DA70816F635BDD2B" },
         { name: "twitter:card", content: "summary_large_image" },
-        { name: "twitter:title", content: "Digitorn - Declarative AI agent framework" },
+        { name: "twitter:title", content: "Digitorn - Declarative AI agent runtime" },
         { name: "twitter:description", content: "Build production-ready AI apps in YAML. Multi-agent runtimes, native MCP, streaming, hooks." },
         { property: "og:type", content: "website" },
         { property: "og:site_name", content: "Digitorn" },
-        { property: "og:title", content: "Digitorn - Declarative AI agent framework" },
+        { property: "og:title", content: "Digitorn - Declarative AI agent runtime" },
         { property: "og:description", content: "Build production-ready AI apps in YAML. Multi-agent runtimes, native MCP, streaming, hooks." },
       ],
 

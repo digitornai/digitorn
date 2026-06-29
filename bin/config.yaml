@@ -107,7 +107,7 @@ workers:
 # User-scoped automations surface (/api/automations/*) : the daemon relays to
 # the background service's ops API server-side, enforcing per-user ownership.
 background:
-  ops_url: http://127.0.0.1:8091
+  ops_url: http://127.0.0.1:8090  # must match the bg service's DIGITORN_BG_HTTP_ADDR (default :8090)
   # ops_token: set when the bg sets DIGITORN_BG_OPS_TOKEN
 
 runtime:

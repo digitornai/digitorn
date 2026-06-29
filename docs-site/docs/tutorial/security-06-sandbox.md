@@ -188,7 +188,7 @@ the kernel is breakable and building accordingly.
 - The full sandbox reference (per-platform availability matrix,
   fine-tuning each level, troubleshooting Landlock kernel
   versions):
-  [OS Sandbox](../language/35-sandbox.md).
+  OS Sandbox.
 - Per-platform daemon deployment (which kernels Landlock
   requires, how to enable user namespaces in non-root containers,
   Job Objects entitlements on Windows):

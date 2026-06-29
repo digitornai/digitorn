@@ -1,19 +1,42 @@
-import { readdir } from 'node:fs/promises'
+import { readdir, readFile } from 'node:fs/promises'
 import { join, basename, extname } from 'node:path'
-import type { LoadedPiece, PieceInstance, PropDef } from './types.ts'
+import type { LoadedPiece, PieceInstance, PropDef, PieceMetadata } from './types.ts'
 
-// Piece bundles live in DIGITORN_PIECES_DIR. Each file is a self-contained
-// esbuild bundle: <piece-id>.js (e.g. github.js, google_sheets.js).
+// Piece bundles live in DIGITORN_PIECES_DIR. Each connector is a self-contained
+// esbuild bundle <piece-id>.js (e.g. github.js, google_sheets.js), and — when
+// present — a sidecar <piece-id>.meta.json carrying its serialisable metadata
+// (display info + action/trigger/auth definitions, minus the runnable code).
+//
+// The loader is LAZY: at startup it reads only the lightweight manifests to
+// build the tool list and answer metadata/auth queries. The heavy 20+ MB
+// bundle is imported on demand — the first time a connector is actually
+// executed or polled for triggers. This keeps memory proportional to the
+// connectors in use, not to every bundle on disk, so a catalog of hundreds of
+// connectors no longer blows up the process at boot.
+
+// PieceManifest is the serialisable subset of a piece — everything except the
+// run/onEnable/… functions, which are only available after a live import.
+export interface PieceManifest {
+  id: string
+  displayName: string
+  description: string
+  logoUrl: string
+  metadata: PieceMetadata
+}
 
 export class PieceLoader {
-  private pieces = new Map<string, LoadedPiece>()
+  private manifests = new Map<string, PieceManifest>()
+  private bundlePaths = new Map<string, string>()
+  private imported = new Map<string, LoadedPiece>()
   private tools: import('@modelcontextprotocol/sdk/types.js').Tool[] = []
   private loaded = false
 
   constructor(private readonly piecesDir: string) {}
 
   async load(): Promise<void> {
-    this.pieces.clear()
+    this.manifests.clear()
+    this.bundlePaths.clear()
+    this.imported.clear()
     this.tools = []
 
     let files: string[]
@@ -24,39 +47,85 @@ export class PieceLoader {
     }
 
     const bundles = files.filter(f => extname(f) === '.js')
-    await Promise.allSettled(bundles.map(f => this.loadBundle(join(this.piecesDir, f))))
+    await Promise.allSettled(bundles.map(f => this.register(f)))
+    this.rebuildTools()
     this.loaded = true
   }
 
-  private async loadBundle(path: string): Promise<void> {
+  // register records a bundle's path and loads its manifest WITHOUT importing
+  // the bundle. If no sidecar manifest exists it falls back to a one-time
+  // import to derive one (keeps connectors built before manifests existed
+  // working), which is the only place the eager cost remains.
+  private async register(filename: string): Promise<void> {
+    const id = bundleId(basename(filename, '.js'))
+    this.bundlePaths.set(id, join(this.piecesDir, filename))
+
+    const metaPath = join(this.piecesDir, `${basename(filename, '.js')}.meta.json`)
+    try {
+      const raw = await readFile(metaPath, 'utf8')
+      const m = JSON.parse(raw) as PieceManifest
+      m.id = id
+      this.manifests.set(id, m)
+      return
+    } catch {
+      // No manifest — derive it by importing once (legacy bundles).
+    }
+
+    const piece = await this.importBundle(id)
+    if (piece) this.manifests.set(id, toManifest(piece))
+    else process.stderr.write(`pieces-bridge: ${filename} has no manifest and failed to import\n`)
+  }
+
+  // importBundle loads the heavy bundle and caches the live piece (with its run
+  // functions). Idempotent: a second call returns the cached instance.
+  private async importBundle(id: string): Promise<LoadedPiece | undefined> {
+    const cached = this.imported.get(id)
+    if (cached) return cached
+
+    const path = this.bundlePaths.get(id)
+    if (!path) return undefined
+
     let mod: Record<string, unknown>
     try {
       mod = await import(path)
     } catch (e) {
       process.stderr.write(`pieces-bridge: failed to load ${path}: ${e}\n`)
-      return
+      return undefined
     }
 
     const piece = extractPiece(mod)
     if (!piece) {
       process.stderr.write(`pieces-bridge: no piece found in ${path}\n`)
-      return
+      return undefined
     }
 
-    let meta: ReturnType<PieceInstance['metadata']>
+    let meta: PieceMetadata
     try {
       meta = piece.metadata()
     } catch (e) {
       process.stderr.write(`pieces-bridge: metadata() failed for ${path}: ${e}\n`)
-      return
+      return undefined
     }
 
-    const id = bundleId(basename(path, '.js'))
-    const loaded: LoadedPiece = { id, displayName: meta.displayName, description: meta.description ?? '', logoUrl: meta.logoUrl ?? '', instance: piece, metadata: meta, bundlePath: path }
-    this.pieces.set(id, loaded)
+    const loaded: LoadedPiece = {
+      id,
+      displayName: meta.displayName,
+      description: meta.description ?? '',
+      logoUrl: meta.logoUrl ?? '',
+      instance: piece,
+      metadata: meta,
+      bundlePath: path,
+    }
+    this.imported.set(id, loaded)
+    return loaded
+  }
 
-    for (const [actionName, action] of Object.entries(meta.actions ?? {})) {
-      this.tools.push(buildToolSpec(id, actionName, action, meta))
+  private rebuildTools(): void {
+    this.tools = []
+    for (const m of this.manifests.values()) {
+      for (const [actionName, action] of Object.entries(m.metadata.actions ?? {})) {
+        this.tools.push(buildToolSpec(m.id, actionName, action, m.metadata))
+      }
     }
   }
 
@@ -64,12 +133,21 @@ export class PieceLoader {
     return this.tools
   }
 
-  getPiece(id: string): LoadedPiece | undefined {
-    return this.pieces.get(id)
+  // getManifest / getAllManifests serve metadata, auth-schema and listing
+  // queries without importing the bundle.
+  getManifest(id: string): PieceManifest | undefined {
+    return this.manifests.get(id) ?? this.manifests.get(canonicalPieceId(id))
   }
 
-  getAllPieces(): LoadedPiece[] {
-    return Array.from(this.pieces.values())
+  getAllManifests(): PieceManifest[] {
+    return Array.from(this.manifests.values())
+  }
+
+  // getPiece imports the bundle on demand — call it only on the execution /
+  // trigger paths that need the live run functions.
+  async getPiece(id: string): Promise<LoadedPiece | undefined> {
+    const cid = canonicalPieceId(id)
+    return this.imported.get(id) ?? this.imported.get(cid) ?? this.importBundle(cid)
   }
 
   isLoaded(): boolean {
@@ -78,6 +156,18 @@ export class PieceLoader {
 
   reload(): Promise<void> {
     return this.load()
+  }
+}
+
+// toManifest strips the runnable code from a live piece via a JSON round-trip
+// (functions are dropped by JSON.stringify), leaving the serialisable metadata.
+function toManifest(p: LoadedPiece): PieceManifest {
+  return {
+    id: p.id,
+    displayName: p.displayName,
+    description: p.description,
+    logoUrl: p.logoUrl,
+    metadata: JSON.parse(JSON.stringify(p.metadata)) as PieceMetadata,
   }
 }
 
@@ -90,8 +180,16 @@ function extractPiece(mod: Record<string, unknown>): PieceInstance | null {
   return null
 }
 
+// Bundle filenames and piece lookups are canonicalised the same way so a
+// connector is addressable by either form (e.g. "telegram-bot" or
+// "telegram_bot"): lowercased, hyphens to underscores. The hub catalog, the
+// daemon store and the tool names all agree on this canonical id.
+export function canonicalPieceId(id: string): string {
+  return id.toLowerCase().replace(/-/g, '_')
+}
+
 function bundleId(filename: string): string {
-  return filename.toLowerCase().replace(/-/g, '_')
+  return canonicalPieceId(filename)
 }
 
 function buildToolSpec(pieceId: string, actionName: string, action: import('./types.ts').ActionDef, meta: import('./types.ts').PieceMetadata): import('@modelcontextprotocol/sdk/types.js').Tool {

@@ -124,28 +124,28 @@ var AllHookActions = []HookActionType{
 }
 
 type Hook struct {
-	ID    string    `yaml:"id"`
-	On    HookEvent `yaml:"on,omitempty"`
-	Event HookEvent `yaml:"event,omitempty"` // alias for `on`
+	ID    string    `yaml:"id" json:"id"`
+	On    HookEvent `yaml:"on,omitempty" json:"on,omitempty"`
+	Event HookEvent `yaml:"event,omitempty" json:"event,omitempty"` // alias for `on`
 	// OnTrue catches the case where editors save `on:` as bare YAML 1.1 and
 	// it round-trips back as the boolean key `true:`.
-	OnTrue    HookEvent     `yaml:"true,omitempty"`
-	Condition HookCondition `yaml:"condition"`
-	Action    HookAction    `yaml:"action"`
-	Cooldown  float64       `yaml:"cooldown,omitempty"`
-	MaxFires  int           `yaml:"max_fires,omitempty"`
-	Priority  int           `yaml:"priority,omitempty"`
-	Enabled   *bool         `yaml:"enabled,omitempty"`
-	Timeout   float64       `yaml:"timeout,omitempty"`
-	Tags      []string      `yaml:"tags,omitempty"`
+	OnTrue    HookEvent     `yaml:"true,omitempty" json:"true,omitempty"`
+	Condition HookCondition `yaml:"condition" json:"condition"`
+	Action    HookAction    `yaml:"action" json:"action"`
+	Cooldown  float64       `yaml:"cooldown,omitempty" json:"cooldown,omitempty"`
+	MaxFires  int           `yaml:"max_fires,omitempty" json:"max_fires,omitempty"`
+	Priority  int           `yaml:"priority,omitempty" json:"priority,omitempty"`
+	Enabled   *bool         `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	Timeout   float64       `yaml:"timeout,omitempty" json:"timeout,omitempty"`
+	Tags      []string      `yaml:"tags,omitempty" json:"tags,omitempty"`
 }
 
 type HookCondition struct {
-	Type   HookConditionType `yaml:"type"`
-	Params map[string]any    `yaml:",inline"`
+	Type   HookConditionType `yaml:"type" json:"type"`
+	Params map[string]any    `yaml:",inline" json:"-"`
 }
 
 type HookAction struct {
-	Type   HookActionType `yaml:"type"`
-	Params map[string]any `yaml:",inline"`
+	Type   HookActionType `yaml:"type" json:"type"`
+	Params map[string]any `yaml:",inline" json:"-"`
 }

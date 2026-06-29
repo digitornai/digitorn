@@ -49,6 +49,9 @@ type LaunchSpec struct {
 	// final answer. Launch does not wait when this is set — it returns after the
 	// post so the caller can stream from res.UserSeq.
 	StreamReply bool `json:"stream_reply,omitempty"`
+	// TriggerEvent is the structured inbound event (channels scope) for this
+	// launch. Attached to the user message so flow nodes read {{event.payload.*}}.
+	TriggerEvent map[string]any `json:"trigger_event,omitempty"`
 }
 
 // LaunchResult reports what the invocation did.
@@ -100,6 +103,7 @@ func (c *Client) Launch(ctx context.Context, spec LaunchSpec, perJobSessionID st
 			Model:           spec.Model,
 			Attachments:     spec.Attachments,
 			ClientMessageID: perJobSessionID,
+			TriggerEvent:    spec.TriggerEvent,
 		})
 		if err != nil {
 			return LaunchResult{}, err
@@ -125,6 +129,7 @@ func (c *Client) Launch(ctx context.Context, spec LaunchSpec, perJobSessionID st
 			Mode:            spec.Mode,
 			Attachments:     spec.Attachments,
 			ClientMessageID: perJobSessionID,
+			TriggerEvent:    spec.TriggerEvent,
 		})
 		if err != nil {
 			return LaunchResult{}, err

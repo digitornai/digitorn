@@ -6,13 +6,13 @@ title: Concepts
 # Concepts
 
 The mental models behind Digitorn. Read these to understand *why*
-the framework looks the way it does; for *what* each field does,
+the runtime looks the way it does; for *what* each field does,
 go to [Reference](/docs/reference/) or [Language](/docs/language/).
 
 | Concept | Why it matters |
 |---------|---------------|
-| [Widgets](widgets.md) | End-to-end wiring of declarative UI: where the tree lives, how bindings resolve, how actions dispatch back to the agent. |
-| [Widgets](widgets.md) | End-to-end wiring of declarative UI: where the tree lives, how bindings resolve, how actions dispatch back to the agent. |
+| Widgets | End-to-end wiring of declarative UI: where the tree lives, how bindings resolve, how actions dispatch back to the agent. |
+| Widgets | End-to-end wiring of declarative UI: where the tree lives, how bindings resolve, how actions dispatch back to the agent. |
 
 ## Cross-cutting ideas
 

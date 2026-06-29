@@ -26,6 +26,9 @@ func AutoMigrate(gdb *gorm.DB) error {
 	if err := gdb.AutoMigrate(
 		&models.App{},
 		&models.Credential{},
+		&models.UserCredential{},
+		&models.UserModuleConfig{},
+		&models.UserAppSecret{},
 		&models.OAuthState{},
 		&models.OAuthClient{},
 		&models.AuditLog{},

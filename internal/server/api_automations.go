@@ -67,12 +67,35 @@ func ownSchedules(all []opsSchedule, user string) []opsSchedule {
 }
 
 // ownRuns keeps only the runs born from the given trigger ids (the user's
-// schedules). Pure — the ownership chokepoint for the runs read path.
+// schedules + channel triggers they configured). Pure — the ownership
+// chokepoint for the runs read path.
 func ownRuns(all []opsRun, triggers map[string]bool) []opsRun {
 	out := make([]opsRun, 0, len(all))
 	for _, r := range all {
 		if triggers[r.TriggerID] {
 			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// opsTrigger is the slice of a bg /ops/triggers row the daemon consumes.
+type opsTrigger struct {
+	ID      string `json:"id"`
+	AppID   string `json:"app_id"`
+	Owner   string `json:"owner"`
+	Adapter string `json:"adapter"`
+}
+
+// triggerIDsForApp returns every trigger id declared for one app. Channel
+// triggers store owner as a runtime template ({{event.payload.users_id}}), not
+// the configuring user's id — so app-scoped run listing keys off app_id, not
+// owner string equality.
+func triggerIDsForApp(all []opsTrigger, appID string) map[string]bool {
+	out := map[string]bool{}
+	for _, t := range all {
+		if appID == "" || t.AppID == appID {
+			out[t.ID] = true
 		}
 	}
 	return out
@@ -135,6 +158,20 @@ func (c *opsClient) schedules(ctx context.Context) ([]opsSchedule, error) {
 		return nil, err
 	}
 	return env.Schedules, nil
+}
+
+func (c *opsClient) triggers(ctx context.Context, appID string) ([]opsTrigger, error) {
+	q := "/ops/triggers"
+	if appID != "" {
+		q += "?app=" + appID
+	}
+	var env struct {
+		Triggers []opsTrigger `json:"triggers"`
+	}
+	if err := c.do(ctx, http.MethodGet, q, nil, &env); err != nil {
+		return nil, err
+	}
+	return env.Triggers, nil
 }
 
 // userSchedule loads ONE schedule and enforces ownership : a schedule that is
@@ -264,9 +301,15 @@ func (d *Daemon) listAutomationRuns(w http.ResponseWriter, r *http.Request) {
 	for _, s := range ownSchedules(all, user) {
 		mine[s.ID] = true
 	}
+	appFilter := r.URL.Query().Get("app")
+	if appFilter != "" {
+		if trigs, terr := c.triggers(r.Context(), appFilter); terr == nil {
+			mine = triggerIDsForApp(trigs, appFilter)
+		}
+	}
 	q := "/ops/runs?limit=" + fmt.Sprint(parseIntQuery(r, "limit", 50))
-	if app := r.URL.Query().Get("app"); app != "" {
-		q += "&app_id=" + app
+	if appFilter != "" {
+		q += "&app_id=" + appFilter
 	}
 	var env struct {
 		Runs []opsRun `json:"runs"`

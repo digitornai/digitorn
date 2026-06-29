@@ -174,7 +174,7 @@ to reconstruct activity.
 - App-config block reference (`tools.modules.shell`):
   [App Configuration → tools.modules](../../language/02-app-config.md#toolsmodules---module-configuration)
 - OS-level sandbox (seccomp blocks `execve` if `shell` isn't
-  loaded): [OS-Level Sandbox → seccomp](../../language/35-sandbox.md#2-seccomp-bpf---syscalls)
+  loaded): OS-Level Sandbox → seccomp
 - Behaviour engine (built-in `confirm_destructive` rule blocks
   `rm -rf`, `git reset --hard`, ...):
   [Behavior Engine](../../language/43-behavior.md#prohibition-rules)

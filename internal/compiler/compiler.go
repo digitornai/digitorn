@@ -143,6 +143,9 @@ func (c *Compiler) compileBundle(b *bundle.Bundle) (*Result, error) {
 	meta := preScanAppMeta(pf.Document)
 	vars := preScanDevVariables(pf.Document)
 	engine := c.newEngine(b, meta, vars)
+	// Flow node ids are runtime namespaces : `{{<node>.output.x}}` templates in
+	// flow params/messages are filled by the flow runner, not the compiler.
+	engine.AddPassthrough(preScanFlowNodeIDs(pf.Document)...)
 	expr.ResolveInTree(b.Entry, pf.Document, engine, bag)
 
 	_ = parse.StrictDecode(b.Entry, pf.Document, def, "", bag)
@@ -150,6 +153,7 @@ func (c *Compiler) compileBundle(b *bundle.Bundle) (*Result, error) {
 	captureModesOrder(pf.Document, def)
 	foldLegacyAliases(def)
 	mergeIncludedAgents(b, def, bag)
+	mergeTemplatesFragment(b, def)
 	injectAutoCompact(def) // runtime.context.auto_compact → synthetic compaction hook
 	normalizeModuleAliases(def) // legacy module ids (workspace → filesystem) before any validation
 	cat, err := c.loadCatalog()
@@ -238,6 +242,35 @@ func normaliseHookOn(h *schema.Hook) {
 		case h.OnTrue != "":
 			h.On = h.OnTrue
 		}
+	}
+}
+
+// mergeTemplatesFragment loads a sibling `templates.yaml` (convention file,
+// mirroring the legacy daemon) into def.Templates when not declared inline.
+func mergeTemplatesFragment(b *bundle.Bundle, def *schema.AppDefinition) {
+	for _, name := range []string{"templates.yaml", "templates.yml"} {
+		data, err := os.ReadFile(filepath.Join(b.Root, name))
+		if err != nil {
+			continue
+		}
+		var frag struct {
+			Templates []schema.TemplateBlock `yaml:"templates"`
+		}
+		if err := yaml.Unmarshal(data, &frag); err != nil {
+			return
+		}
+		seen := map[string]bool{}
+		for _, t := range def.Templates {
+			seen[t.ID] = true
+		}
+		for _, t := range frag.Templates {
+			if t.ID == "" || seen[t.ID] {
+				continue
+			}
+			seen[t.ID] = true
+			def.Templates = append(def.Templates, t)
+		}
+		return
 	}
 }
 
@@ -427,6 +460,43 @@ func preScanAppMeta(doc *yaml.Node) map[string]string {
 		}
 	}
 	return out
+}
+
+// preScanFlowNodeIDs reads flow.nodes[].id before decode so the template engine
+// can treat them as runtime passthrough namespaces.
+func preScanFlowNodeIDs(doc *yaml.Node) []string {
+	if !parse.IsMapping(doc) {
+		return nil
+	}
+	flowNode := func() *yaml.Node {
+		if _, n, ok := parse.FindKey(doc, "flow"); ok {
+			return n
+		}
+		// Legacy: runtime.flow
+		if _, rt, ok := parse.FindKey(doc, "runtime"); ok && parse.IsMapping(rt) {
+			if _, n, ok := parse.FindKey(rt, "flow"); ok {
+				return n
+			}
+		}
+		return nil
+	}()
+	if flowNode == nil || !parse.IsMapping(flowNode) {
+		return nil
+	}
+	_, nodes, ok := parse.FindKey(flowNode, "nodes")
+	if !ok || nodes.Kind != yaml.SequenceNode {
+		return nil
+	}
+	var ids []string
+	for _, n := range nodes.Content {
+		if !parse.IsMapping(n) {
+			continue
+		}
+		if _, idNode, ok := parse.FindKey(n, "id"); ok && parse.IsScalar(idNode) {
+			ids = append(ids, idNode.Value)
+		}
+	}
+	return ids
 }
 
 func preScanDevVariables(doc *yaml.Node) map[string]string {

@@ -105,3 +105,8 @@ digitorn-worker-tokenizer.exe
 digitorn-background.exe
 digitorn-voice.exe
 activepieces-main/
+bin/digitorn-bifrost-smoke
+bin/repomap-probe
+bin/streamprobe
+bin/voice-test-client
+bin/zzverify_evict

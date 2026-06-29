@@ -93,10 +93,11 @@ type BusAdapter struct {
 	EventBus ports.EventBus
 }
 
-// ModuleConfigSource resolves the per-app config block for a module.
-// Returning nil/empty means "no config for this (app, module)".
+// ModuleConfigSource resolves the effective config block for a module on a
+// call: the per-app YAML defaults, deep-merged with the calling user's saved
+// deltas when the app is in BYOK mode. Returning nil/empty means "no config".
 type ModuleConfigSource interface {
-	ModuleConfig(appID, moduleID string) map[string]any
+	ModuleConfig(appID, userID, moduleID string) map[string]any
 }
 
 // ToolPipeline wraps a terminal module call in the per-app onion. params is
@@ -239,7 +240,7 @@ func (a *BusAdapter) Dispatch(ctx context.Context, call runtime.ToolInvocation) 
 	// app-specific configuration on this call (in-proc reads it from ctx ;
 	// the worker proxy forwards it across the boundary).
 	if a.ModuleConfigs != nil {
-		if cfg := a.ModuleConfigs.ModuleConfig(call.AppID, moduleID); len(cfg) > 0 {
+		if cfg := a.ModuleConfigs.ModuleConfig(call.AppID, call.UserID, moduleID); len(cfg) > 0 {
 			ctx = pkgmodule.WithModuleConfig(ctx, cfg)
 		}
 	}

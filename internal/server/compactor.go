@@ -235,11 +235,11 @@ func contextMessageBudget(cfg *schema.ContextConfig, brain schema.Brain, snap se
 		window = cfg.MaxTokens
 		reserved = cfg.OutputReserved
 	}
-	if window <= 0 {
-		window = contextcompact.ContextWindowFor(brain.Provider, brain.Model)
-	}
-	if snap.EntryModelWindow > 0 && window == contextcompact.ContextWindowFor(brain.Provider, brain.Model) {
+	if window <= 0 && snap.EntryModelWindow > 0 {
 		window = snap.EntryModelWindow
+	}
+	if window <= 0 {
+		window = contextcompact.DefaultContextWindow
 	}
 	if reserved <= 0 {
 		reserved = 4096

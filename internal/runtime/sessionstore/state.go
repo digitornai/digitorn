@@ -127,7 +127,13 @@ type SessionState struct {
 	// entry agent's selected model, persisted from EventModelChanged so the
 	// background recount resolves the real window without a gateway call.
 	EntryModelWindow int
-	TurnCount        int
+	ReasoningEffort  string
+	// EffortOverrides maps an agent's logical id → the per-session reasoning
+	// effort the user pinned for it, mirroring ModelOverrides. ReasoningEffort
+	// stays as the legacy session-wide value (entry agent) and the fallback when
+	// an agent has no override.
+	EffortOverrides map[string]string
+	TurnCount       int
 	Interrupted      bool
 	// LastUserMessage is the verbatim text of the most recent user message.
 	// Updated by every EventUserMessage projection — survives compaction so
@@ -175,6 +181,7 @@ type ToolSpec struct {
 // long as they accept that it's only the text portion of the message.
 type Message struct {
 	Seq         uint64        `json:"seq"`
+	StepID      string        `json:"step_id,omitempty"`
 	Role        string        `json:"role"`
 	Parts       []MessagePart `json:"parts,omitempty"`
 	Content     string        `json:"content"`
@@ -184,6 +191,9 @@ type Message struct {
 	TsUnixNano  int64         `json:"ts"`
 	ToolCallIDs []string      `json:"tool_call_ids,omitempty"`
 	Attachments []BlobRef     `json:"attachments,omitempty"`
+	// TriggerEvent mirrors MessagePayload.TriggerEvent — the structured inbound
+	// event for this user turn (webhook payload, etc.). Used by the flow runner.
+	TriggerEvent map[string]any `json:"trigger_event,omitempty"`
 }
 
 type ToolCallState struct {
@@ -425,6 +435,8 @@ func (s *SessionState) Snapshot() SessionSnapshot {
 			ContextExtra:             s.ContextExtra,
 			ModelOverrides:           s.ModelOverrides,
 			EntryModelWindow:         s.EntryModelWindow,
+			ReasoningEffort:          s.ReasoningEffort,
+			EffortOverrides:          s.EffortOverrides,
 		CurrentTurnID:            s.CurrentTurnID,
 		CurrentTurnPhase:         s.CurrentTurnPhase,
 		CurrentTurnStartedAtNano: s.CurrentTurnStartedAtNano,

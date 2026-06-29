@@ -48,4 +48,4 @@ A multi-agent app that:
 The tutorial is opinionated and linear. Once you've finished it,
 work from [Reference](/docs/reference/) and [Language](/docs/language/)
 directly - those are the canonical surfaces. Come back to
-[Concepts](/docs/concepts/) any time the framework's *why* is unclear.
+[Concepts](/docs/concepts/) any time the runtime's *why* is unclear.

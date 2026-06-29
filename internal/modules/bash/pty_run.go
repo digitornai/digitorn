@@ -30,7 +30,7 @@ func stripANSI(s string) string {
 // stdout and stderr are merged (PTY has a single output stream); ANSI escape
 // sequences are stripped before returning. Falls back to runDetached silently
 // if PTY allocation fails (headless CI, containers without /dev/ptmx, etc.).
-func runWithPTY(ctx context.Context, kind, shellPath, command, dir string, env []string, maxOut int, timeout time.Duration) cmdResult {
+func runWithPTY(ctx context.Context, kind, shellPath, command, dir string, env []string, maxOut int, timeout time.Duration, promptWait time.Duration) cmdResult {
 	var cctx context.Context
 	var cancel context.CancelFunc
 	if timeout > 0 {
@@ -43,7 +43,7 @@ func runWithPTY(ctx context.Context, kind, shellPath, command, dir string, env [
 	pt, err := gopty.New()
 	if err != nil {
 		// PTY unavailable (headless container, CI without /dev/ptmx, etc.).
-		res, _ := runDetached(ctx, kind, shellPath, command, dir, env, maxOut, "", timeout, 0)
+		res, _ := runDetached(ctx, kind, shellPath, command, dir, env, maxOut, "", timeout, promptWait)
 		if res.Stderr != "" {
 			res.Stderr = "[pty unavailable, ran without tty] " + res.Stderr
 		} else {
@@ -68,7 +68,7 @@ func runWithPTY(ctx context.Context, kind, shellPath, command, dir string, env [
 	cmd.Env = env
 
 	if err := cmd.Start(); err != nil {
-		res, _ := runDetached(ctx, kind, shellPath, command, dir, env, maxOut, "", timeout, 0)
+		res, _ := runDetached(ctx, kind, shellPath, command, dir, env, maxOut, "", timeout, promptWait)
 		return res
 	}
 
@@ -93,11 +93,52 @@ func runWithPTY(ctx context.Context, kind, shellPath, command, dir string, env [
 	waitCh := make(chan error, 1)
 	go func() { waitCh <- cmd.Wait() }()
 
+	// Prompt watchdog : in a PTY isatty() is true, so a program that wants a
+	// password / y-n answer prints its prompt and blocks forever (until the
+	// timeout — up to 15 min by default). We detect that — a prompt-looking
+	// TRAILING line that then goes quiet, or total silence — and stop the
+	// command so the turn never hangs. promptWait <= 0 disables the watchdog
+	// (used for background tasks, which run off the turn loop and may sit quiet
+	// legitimately).
+	promptCh := make(chan struct{}, 1)
+	watchDone := make(chan struct{})
+	if promptWait > 0 {
+		go func() {
+			t := time.NewTicker(500 * time.Millisecond)
+			defer t.Stop()
+			lastLen := 0
+			lastGrowth := time.Now()
+			for {
+				select {
+				case <-watchDone:
+					return
+				case <-t.C:
+					cur := buf.String()
+					if len(cur) != lastLen {
+						lastLen = len(cur)
+						lastGrowth = time.Now()
+					}
+					idle := time.Since(lastGrowth)
+					blockingPrompt := len(cur) > 0 && looksLikePrompt(stripANSI(cur)) && idle >= promptGraceWindow
+					totalSilence := len(cur) == 0 && idle >= promptWait
+					if blockingPrompt || totalSilence {
+						select {
+						case promptCh <- struct{}{}:
+						default:
+						}
+						return
+					}
+				}
+			}
+		}()
+	}
+
 	var exitCode int
-	var timedOut, cancelled bool
+	var timedOut, cancelled, waitingForInput bool
 
 	select {
 	case waitErr := <-waitCh:
+		close(watchDone)
 		if waitErr != nil {
 			if ps := cmd.ProcessState; ps != nil {
 				exitCode = ps.ExitCode()
@@ -114,7 +155,20 @@ func runWithPTY(ctx context.Context, kind, shellPath, command, dir string, env [
 		case <-time.After(300 * time.Millisecond):
 		}
 
+	case <-promptCh:
+		// A blocking interactive prompt was detected. Kill the process tree
+		// (cancel the context the Cmd was started with) and report it as
+		// waiting-for-input so the agent retries non-interactively / with input.
+		waitingForInput = true
+		cancel()
+		pt.Close()
+		<-waitCh
+		if exitCode == 0 {
+			exitCode = 130
+		}
+
 	case <-cctx.Done():
+		close(watchDone)
 		if ctx.Err() != nil {
 			cancelled = true
 		} else {
@@ -133,12 +187,13 @@ func runWithPTY(ctx context.Context, kind, shellPath, command, dir string, env [
 	out = strings.ReplaceAll(out, "\r", "\n")
 
 	return cmdResult{
-		Stdout:    trimTrailing(out),
-		Stderr:    "",
-		ExitCode:  exitCode,
-		Cwd:       dir,
-		TimedOut:  timedOut,
-		Cancelled: cancelled,
+		Stdout:          trimTrailing(out),
+		Stderr:          "",
+		ExitCode:        exitCode,
+		Cwd:             dir,
+		TimedOut:        timedOut,
+		Cancelled:       cancelled,
+		WaitingForInput: waitingForInput,
 	}
 }
 

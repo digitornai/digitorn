@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -106,12 +107,29 @@ type Plan struct {
 // {{env.X}} / {{secret.X}} placeholders in adapter config values (so secrets
 // stay out of the manifest). A provider with a fatal adapter-config error is
 // skipped with a warning — never aborts the whole plan.
-func BuildPlan(apps []AppChannels, env func(string) string) Plan {
+func BuildPlan(apps []AppChannels, env func(string) string, secret func(appID, key string) string) Plan {
 	if env == nil {
 		env = func(string) string { return "" }
 	}
 	var p Plan
 	for _, app := range apps {
+		// Per-app resolver: a {{secret.X}} placeholder (delivered to the resolver
+		// as "DIGITORN_BG_SECRET_X") is fetched from the daemon's per-app secret
+		// store first, so a token pasted in the UI works with no env var; env
+		// vars remain the fallback. {{env.X}} keeps resolving from the env.
+		appID := app.AppID
+		env := env
+		if secret != nil {
+			base := env
+			env = func(name string) string {
+				if key, ok := strings.CutPrefix(name, "DIGITORN_BG_SECRET_"); ok {
+					if v := secret(appID, key); v != "" {
+						return v
+					}
+				}
+				return base(name)
+			}
+		}
 		for _, name := range sortedKeys(app.Config.Providers) {
 			pc := app.Config.Providers[name]
 			if !pc.IsEnabled() {
@@ -380,7 +398,7 @@ func Rescan(ctx context.Context, mgr *processor.Manager, dir string, every time.
 			if err != nil {
 				continue
 			}
-			plan := BuildPlan(apps, env)
+			plan := BuildPlan(apps, env, nil)
 			for _, tr := range plan.Triggers {
 				_, _ = mgr.Arm(ctx, tr)
 			}
@@ -434,6 +452,55 @@ func NewBaseRegistry(ca *cron.Adapter, pa *pieces.Adapter) *adapter.Registry {
 		reg.Register(pa)
 	}
 	return reg
+}
+
+// channelAdapterNames are the persistent-listener adapters discovered from app
+// YAML by ScanApps/BuildPlan. cron + pieces are intentionally excluded: those
+// are scheduled jobs armed from the DB (ArmFromDB), so leaving them out here
+// keeps the two paths from fighting over the same adapter name.
+var channelAdapterNames = map[string]bool{
+	"discord":  true,
+	"telegram": true,
+	"webhook":  true,
+	"rss":      true,
+	"whatsapp": true,
+}
+
+// RegisterChannelAdapters adds a plan's channel listeners (discord/telegram/…)
+// to an existing registry, leaving cron/pieces (the DB path) untouched. Call it
+// before the manager is created so Manager.Start launches the listeners.
+func RegisterChannelAdapters(reg *adapter.Registry, plan Plan, st *store.Store, log *slog.Logger) {
+	if log == nil {
+		log = slog.Default()
+	}
+	if len(plan.Webhooks) > 0 {
+		reg.Register(webhook.New(plan.Webhooks))
+	}
+	if len(plan.Feeds) > 0 {
+		reg.Register(rss.New(plan.Feeds, storeCursors{st: st}, log))
+	}
+	if len(plan.Telegrams) > 0 {
+		reg.Register(telegram.New(plan.Telegrams, storeCursors{st: st}, log))
+	}
+	if len(plan.WhatsApps) > 0 {
+		reg.Register(whatsapp.New(plan.WhatsApps, log))
+	}
+	if len(plan.Discords) > 0 {
+		reg.Register(discord.New(plan.Discords, log))
+	}
+}
+
+// ChannelTriggers filters a plan down to the triggers whose adapter is a
+// persistent channel listener — the ones to arm alongside (not instead of) the
+// DB-scheduled cron/pieces triggers.
+func ChannelTriggers(plan Plan) []processor.TriggerSpec {
+	out := make([]processor.TriggerSpec, 0, len(plan.Triggers))
+	for _, t := range plan.Triggers {
+		if channelAdapterNames[t.Adapter] {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // ArmFromDB reads all enabled triggers from the DB and arms them in the manager.

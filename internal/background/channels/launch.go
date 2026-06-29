@@ -18,5 +18,6 @@ func (a Activation) ToLaunchSpec(appID string) daemonclient.LaunchSpec {
 		Model:        a.Model,
 		WaitForReply: a.Reply == ReplyAuto,
 		StreamReply:  a.Reply == ReplyStream,
+		TriggerEvent: a.TriggerEvent,
 	}
 }

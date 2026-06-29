@@ -6,7 +6,7 @@ sidebar_label: "Advanced 14: Red-team report"
 
 This page documents five concrete attacks against the daemon,
 with verbatim transcripts of what worked and what didn't. The
-goal is a precise map of where the framework's guarantees hold
+goal is a precise map of where the runtime's guarantees hold
 and where they leak.
 
 Each attack ran against a live daemon with real LLM calls and
@@ -135,12 +135,12 @@ The file `authority.txt` contains:
 The agent didn't just refuse silently, it actively
 identified the attack pattern in plain English. This is partly
 DeepSeek's instruction-following training and partly the
-framework's framing (file content is delivered as a tool
+runtime's framing (file content is delivered as a tool
 result, which the LLM treats as untrusted external input).
 
 **Caveat**: this is one model on three injection styles. A
 weaker, base-model LLM or a cleverer multi-turn social
-engineering attack might succeed. The framework doesn't
+engineering attack might succeed. The runtime doesn't
 add a content sanitizer on tool results - the prompt-injection
 defense is the LLM's own training plus structural framing of
 the result as `tool_result` not `system`.
@@ -303,7 +303,7 @@ bug; the daemon's cleanup is fast and complete. Fix is to make
 
 ## What this report tells you
 
-The framework has **strong** guarantees on:
+The runtime has **strong** guarantees on:
 
 - **Multi-tenant isolation**. Cross-user access genuinely
   doesn't work, even with the right session IDs.
@@ -313,9 +313,9 @@ The framework has **strong** guarantees on:
   orphans, no leaked processes.
 - **Prompt injection** (against well-aligned LLMs in
   conversational settings). This is mostly the model doing
-  the work, but the framework's framing helps.
+  the work, but the runtime's framing helps.
 
-The framework has **weak / missing** guarantees on:
+The runtime has **weak / missing** guarantees on:
 
 - **Behavior rules using `param_contains`**. They are *only*
   as strong as the substring you pick - and shell commands
@@ -328,7 +328,7 @@ The framework has **weak / missing** guarantees on:
 
 If you're building anything user-facing on top of Digitorn:
 **add a behavior rule denying absolute paths in
-`filesystem.write` until the framework patches it natively**,
+`filesystem.write` until the runtime patches it natively**,
 and **don't trust `param_contains` to catch dangerous shell
 patterns - use regex or shell-tokenize the command**.
 

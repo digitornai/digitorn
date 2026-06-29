@@ -17,10 +17,20 @@ import (
 type liveAgentAdapter struct{ m *agent.Manager }
 
 func (a liveAgentAdapter) Spawn(ctx context.Context, req meta.AgentSpawnRequest) (string, error) {
-	return a.m.Spawn(ctx, agent.SpawnRequest{
+	return a.m.Spawn(ctx, liveSpawnReq(req))
+}
+func (a liveAgentAdapter) SpawnBatch(ctx context.Context, reqs []meta.AgentSpawnRequest) ([]string, error) {
+	out := make([]agent.SpawnRequest, len(reqs))
+	for i, r := range reqs {
+		out[i] = liveSpawnReq(r)
+	}
+	return a.m.SpawnBatch(ctx, out)
+}
+func liveSpawnReq(req meta.AgentSpawnRequest) agent.SpawnRequest {
+	return agent.SpawnRequest{
 		AppID: req.AppID, RootSession: req.RootSession, UserID: req.UserID, UserJWT: req.UserJWT,
 		AgentID: req.AgentID, Task: req.Task, MemorySeed: req.MemorySeed, ParentRunID: req.ParentRunID,
-	})
+	}
 }
 func (a liveAgentAdapter) Wait(ctx context.Context, root, runID string, secs float64) (meta.AgentSnapshot, error) {
 	s, err := a.m.Wait(ctx, root, runID, time.Duration(secs*float64(time.Second)))
@@ -47,6 +57,8 @@ func (a liveAgentAdapter) List(root string) []meta.AgentSnapshot {
 	return out
 }
 func (a liveAgentAdapter) Cancel(root, runID string) error { return a.m.Cancel(root, runID) }
+
+func (a liveAgentAdapter) CancelTree(root, runID string) int { return a.m.CancelTree(root, runID) }
 
 func liveToMetaSnap(s agent.Snapshot) meta.AgentSnapshot {
 	return meta.AgentSnapshot{

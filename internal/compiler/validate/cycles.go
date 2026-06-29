@@ -39,7 +39,10 @@ func (v *validator) checkFlowCycles() {
 		for _, r := range n.Routes {
 			graph[n.ID] = append(graph[n.ID], r.To)
 		}
-		if n.MaxIters > 0 {
+		for _, b := range n.Branches {
+			graph[n.ID] = append(graph[n.ID], b.To)
+		}
+		if n.MaxIters > 0 || v.def.Flow.MaxIterations > 0 {
 			allowsLoop[n.ID] = true
 		}
 	}

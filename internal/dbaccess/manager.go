@@ -3,7 +3,9 @@ package dbaccess
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -39,11 +41,37 @@ func NewManager(maxConns int, ttl time.Duration) *Manager {
 
 func key(app, id string) string { return app + "\x00" + id }
 
+// connKey is the pool key for a config-declared (Named) connection. It binds
+// the logical name to the connection's IDENTITY — the data source (kind, DSN)
+// plus its security policy — so two callers using the SAME name but DIFFERENT
+// connections (the per-user BYOK case: each user overrides the DSN) never share
+// a pooled socket. Identical configs still collapse to one entry (efficient).
+func connKey(app string, cfg ConnConfig) string {
+	return key(app, cfg.Name) + "\x00" + connFingerprint(cfg)
+}
+
+// connFingerprint hashes the fields that determine what a connection talks to
+// and what it may do. Same source + same policy → same fingerprint → shared
+// pool entry; any difference → a distinct entry.
+func connFingerprint(cfg ConnConfig) string {
+	ident := struct {
+		Kind     string         `json:"k"`
+		DSN      string         `json:"d"`
+		Security SecurityPolicy `json:"s"`
+	}{cfg.Kind, cfg.DSN, cfg.Security}
+	b, err := json.Marshal(ident)
+	if err != nil {
+		b = []byte(cfg.Kind + "\x00" + cfg.DSN)
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:12])
+}
+
 // Named returns the app's config-declared connection by name, opening it on
 // first use and pooling it thereafter. This is what powers the "DB already
 // connected at startup, agent only needs query" case.
 func (m *Manager) Named(ctx context.Context, app string, cfg ConnConfig) (DB, error) {
-	k := key(app, cfg.Name)
+	k := connKey(app, cfg)
 	m.mu.Lock()
 	if e, ok := m.conns[k]; ok {
 		e.usedAt = time.Now()
@@ -82,12 +110,27 @@ func (m *Manager) Get(app, id string) (DB, bool) {
 	return nil, false
 }
 
-// Close closes and removes one connection (agent `disconnect`).
+// Close closes and removes one connection (agent `disconnect`). `id` is an
+// ephemeral connection id (exact key) or a config-declared connection name —
+// the latter is stored under a fingerprinted key, so we fall back to matching
+// any entry for that (app, name). disconnect is agent-initiated and rare, so
+// the scan is not on any hot path.
 func (m *Manager) Close(app, id string) error {
-	k := key(app, id)
 	m.mu.Lock()
+	k := key(app, id)
 	e := m.conns[k]
-	delete(m.conns, k)
+	if e != nil {
+		delete(m.conns, k)
+	} else {
+		prefix := k + "\x00"
+		for ck, ce := range m.conns {
+			if len(ck) > len(prefix) && ck[:len(prefix)] == prefix {
+				k, e = ck, ce
+				delete(m.conns, ck)
+				break
+			}
+		}
+	}
 	m.mu.Unlock()
 	if e == nil {
 		return fmt.Errorf("no such connection %q", id)

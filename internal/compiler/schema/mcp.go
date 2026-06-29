@@ -3,73 +3,73 @@ package schema
 import "gopkg.in/yaml.v3"
 
 type McpModuleConfig struct {
-	Workspace   string           `yaml:"workspace,omitempty"`
-	Servers     any              `yaml:"servers,omitempty"`
-	Cache       MCPCacheConfig   `yaml:"cache,omitempty"`
-	Middleware  []map[string]any `yaml:"middleware,omitempty"`
-	AutoInstall bool             `yaml:"auto_install,omitempty"`
+	Workspace   string           `yaml:"workspace,omitempty" json:"workspace,omitempty"`
+	Servers     any              `yaml:"servers,omitempty" json:"servers,omitempty"`
+	Cache       MCPCacheConfig   `yaml:"cache,omitempty" json:"cache,omitempty"`
+	Middleware  []map[string]any `yaml:"middleware,omitempty" json:"middleware,omitempty"`
+	AutoInstall bool             `yaml:"auto_install,omitempty" json:"auto_install,omitempty"`
 }
 
 type MCPServerConfig struct {
-	Transport      MCPTransport      `yaml:"transport,omitempty"`
-	Command        string            `yaml:"command,omitempty"`
-	Args           []string          `yaml:"args,omitempty"`
-	Env            map[string]string `yaml:"env,omitempty"`
-	URL            string            `yaml:"url,omitempty"`
-	Headers        map[string]string `yaml:"headers,omitempty"`
-	Timeout        float64           `yaml:"timeout,omitempty"`
-	BufferSize     int               `yaml:"buffer_size,omitempty"`
-	Auth           *MCPAuthConfig    `yaml:"auth,omitempty"`
-	Examples       map[string]any    `yaml:"examples,omitempty"`
-	RateLimitRPM   int               `yaml:"rate_limit_rpm,omitempty"`
-	Via            string            `yaml:"via,omitempty"`
-	SmitheryKey    string            `yaml:"smithery_key,omitempty"`
-	SmitheryNS     string            `yaml:"smithery_namespace,omitempty"`
-	SmitherySlug   string            `yaml:"smithery_slug,omitempty"`
-	Sandbox        *MCPServerSandbox `yaml:"sandbox,omitempty"`
-	Middleware     []map[string]any  `yaml:"middleware,omitempty"`
-	CacheTTL       float64           `yaml:"cache_ttl,omitempty"`
-	CacheableTools []string          `yaml:"cacheable_tools,omitempty"`
-	Extra          map[string]any    `yaml:",inline"`
+	Transport      MCPTransport      `yaml:"transport,omitempty" json:"transport,omitempty"`
+	Command        string            `yaml:"command,omitempty" json:"command,omitempty"`
+	Args           []string          `yaml:"args,omitempty" json:"args,omitempty"`
+	Env            map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
+	URL            string            `yaml:"url,omitempty" json:"url,omitempty"`
+	Headers        map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
+	Timeout        float64           `yaml:"timeout,omitempty" json:"timeout,omitempty"`
+	BufferSize     int               `yaml:"buffer_size,omitempty" json:"buffer_size,omitempty"`
+	Auth           *MCPAuthConfig    `yaml:"auth,omitempty" json:"auth,omitempty"`
+	Examples       map[string]any    `yaml:"examples,omitempty" json:"examples,omitempty"`
+	RateLimitRPM   int               `yaml:"rate_limit_rpm,omitempty" json:"rate_limit_rpm,omitempty"`
+	Via            string            `yaml:"via,omitempty" json:"via,omitempty"`
+	SmitheryKey    string            `yaml:"smithery_key,omitempty" json:"smithery_key,omitempty"`
+	SmitheryNS     string            `yaml:"smithery_namespace,omitempty" json:"smithery_namespace,omitempty"`
+	SmitherySlug   string            `yaml:"smithery_slug,omitempty" json:"smithery_slug,omitempty"`
+	Sandbox        *MCPServerSandbox `yaml:"sandbox,omitempty" json:"sandbox,omitempty"`
+	Middleware     []map[string]any  `yaml:"middleware,omitempty" json:"middleware,omitempty"`
+	CacheTTL       float64           `yaml:"cache_ttl,omitempty" json:"cache_ttl,omitempty"`
+	CacheableTools []string          `yaml:"cacheable_tools,omitempty" json:"cacheable_tools,omitempty"`
+	Extra          map[string]any    `yaml:",inline" json:"-"`
 }
 
 type MCPServerSandbox struct {
-	Permissions  []string        `yaml:"permissions,omitempty"`
-	Paths        MCPSandboxPaths `yaml:"paths,omitempty"`
-	AllowedHosts []string        `yaml:"allowed_hosts,omitempty"`
-	Extra        map[string]any  `yaml:",inline"`
+	Permissions  []string        `yaml:"permissions,omitempty" json:"permissions,omitempty"`
+	Paths        MCPSandboxPaths `yaml:"paths,omitempty" json:"paths,omitempty"`
+	AllowedHosts []string        `yaml:"allowed_hosts,omitempty" json:"allowed_hosts,omitempty"`
+	Extra        map[string]any  `yaml:",inline" json:"-"`
 }
 
 type MCPSandboxPaths struct {
-	Read  []string `yaml:"read,omitempty"`
-	Write []string `yaml:"write,omitempty"`
+	Read  []string `yaml:"read,omitempty" json:"read,omitempty"`
+	Write []string `yaml:"write,omitempty" json:"write,omitempty"`
 }
 
 type MCPCacheConfig struct {
-	TTL     int   `yaml:"ttl,omitempty"`
-	MaxSize int   `yaml:"max_size,omitempty"`
-	Enabled *bool `yaml:"enabled,omitempty"`
+	TTL     int   `yaml:"ttl,omitempty" json:"ttl,omitempty"`
+	MaxSize int   `yaml:"max_size,omitempty" json:"max_size,omitempty"`
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 }
 
 type MCPAuthConfig struct {
-	Type            string         `yaml:"type,omitempty"`
-	Provider        string         `yaml:"provider,omitempty"`
-	ClientID        string         `yaml:"client_id,omitempty"`
-	ClientSecret    string         `yaml:"client_secret,omitempty"`
-	Scopes          []string       `yaml:"scopes,omitempty"`
-	RedirectURI     string         `yaml:"redirect_uri,omitempty"`
-	AuthorizeURL    string         `yaml:"authorize_url,omitempty"`
-	TokenURL        string         `yaml:"token_url,omitempty"`
-	RevokeURL       string         `yaml:"revoke_url,omitempty"`
-	PKCE            *bool          `yaml:"pkce,omitempty"`
-	TokenAuthMethod string         `yaml:"token_auth_method,omitempty"`
-	ExtraParams     map[string]any `yaml:"extra_params,omitempty"`
-	EnvTokenVar     string         `yaml:"env_token_var,omitempty"`
+	Type            string         `yaml:"type,omitempty" json:"type,omitempty"`
+	Provider        string         `yaml:"provider,omitempty" json:"provider,omitempty"`
+	ClientID        string         `yaml:"client_id,omitempty" json:"client_id,omitempty"`
+	ClientSecret    string         `yaml:"client_secret,omitempty" json:"client_secret,omitempty"`
+	Scopes          []string       `yaml:"scopes,omitempty" json:"scopes,omitempty"`
+	RedirectURI     string         `yaml:"redirect_uri,omitempty" json:"redirect_uri,omitempty"`
+	AuthorizeURL    string         `yaml:"authorize_url,omitempty" json:"authorize_url,omitempty"`
+	TokenURL        string         `yaml:"token_url,omitempty" json:"token_url,omitempty"`
+	RevokeURL       string         `yaml:"revoke_url,omitempty" json:"revoke_url,omitempty"`
+	PKCE            *bool          `yaml:"pkce,omitempty" json:"pkce,omitempty"`
+	TokenAuthMethod string         `yaml:"token_auth_method,omitempty" json:"token_auth_method,omitempty"`
+	ExtraParams     map[string]any `yaml:"extra_params,omitempty" json:"extra_params,omitempty"`
+	EnvTokenVar     string         `yaml:"env_token_var,omitempty" json:"env_token_var,omitempty"`
 	// Resource is the RFC 8707 resource indicator — the protected MCP server's
 	// canonical URI. The MCP auth spec requires it on the authorize + token
 	// requests so the issued token is bound to this resource. Auto-filled from
 	// discovery; rarely set by hand.
-	Resource string `yaml:"resource,omitempty"`
+	Resource string `yaml:"resource,omitempty" json:"resource,omitempty"`
 }
 
 func defaultBareSandbox() *MCPServerSandbox {

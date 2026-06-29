@@ -11,6 +11,17 @@ app:
   author: "you@example.com"
   category: "coding"
 
+ui:
+  activity:
+    enabled: true
+    title: "Agents"
+    show_running: true
+    show_recent: true
+    show_stats: true
+    show_bg_tasks: true
+  tool_calls:
+    inject_intent: false
+
 dev:
   allow_user_skills: true
 

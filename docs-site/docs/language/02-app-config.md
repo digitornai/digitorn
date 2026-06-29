@@ -496,7 +496,7 @@ context:
 | `text` | string | Verbatim text. |
 | `template` | string | Text with `{{path}}` placeholders filled from the turn data bag. |
 | `file` | string | Load one file from disk (relative to workdir or absolute). |
-| `files` | list | Load multiple files — merged with `file:` in order. |
+| `files` | list | Load multiple files · merged with `file:` in order. |
 | `dir` | string | Load all `.md` files from a directory (`MEMORY.md` first, then alphabetical). |
 | `optional` | bool | Silently skip missing/unreadable files (default `false`). |
 | `writable` | bool | Inject the memory writing directive when `file:`/`dir:` is used (default `false`). |
@@ -527,7 +527,7 @@ when: "session.context_pct >= 60"
 template: "Turn {{session.turn}} · Context {{session.context_pct}}% · Cost ${{session.cost_usd}}"
 ```
 
-**`session.*`** — populated from the live session snapshot:
+**`session.*`** · populated from the live session snapshot:
 
 | Variable | Description |
 |----------|-------------|
@@ -544,7 +544,7 @@ template: "Turn {{session.turn}} · Context {{session.context_pct}}% · Cost ${{
 | `{{session.facts_count}}` | Remembered facts count |
 | `{{session.todos_count}}` | Active tasks count |
 
-**`env.*`** — populated from the daemon's runtime:
+**`env.*`** · populated from the daemon's runtime:
 
 | Variable | Description |
 |----------|-------------|
@@ -728,7 +728,7 @@ security:
 | Field | Type | Source | Doc |
 |-------|------|--------|-----|
 | `behavior` | BehaviorConfig\|None | `null` | [Behavior Engine](43-behavior.md) |
-| `sandbox` | SandboxConfig\|None | `null` | [OS Sandbox](35-sandbox.md) |
+| `sandbox` | SandboxConfig\|None | `null` | OS Sandbox |
 | `credentials_schema` | CredentialsSchemaConfig\|None | `null` | [credentials.md](../reference/runtime/credentials.md) |
 
 ## `ui:` - Display layer (daemon never reads)
@@ -851,7 +851,7 @@ ui:
 | --- | --- | --- | --- | --- |
 | `theme.accent` | hex string | `""` | Reserved | The active accent today is sourced from `visual.accent`, falling back to `app.color`. |
 | `theme.background` | hex string | `""` | Reserved | Client theming hook, no consumer today. |
-| `widgets` | `WidgetsConfig \| null` | `null` | Wired | See [Widgets](42-widgets.md). |
+| `widgets` | `WidgetsConfig \| null` | `null` | Wired | See Widgets. |
 | `slash_commands` | `list[SlashCommand]` | `[]` | Wired | `/`-palette entries. Same shape as `ui.slash_commands` further down (preferred location). |
 | `quick_prompts` | `list[QuickPrompt]` | `[]` | Wired | Mirror of `app.quick_prompts`; the client merges both. |
 | `greeting` | `str` | `""` | Reserved | Cut from the empty-state hero in a 2026-05-07 refresh that kept only the app name + quick prompts + composer. The field is still parsed; a future client release may surface it again. |
@@ -920,7 +920,7 @@ historical defaults.
 
 High-level preset intended to pre-fill any sub-block the YAML did
 not define. Parsed by the client but **not consumed by the current
-premium composer** — no preset-driven default kicks in today.
+premium composer** · no preset-driven default kicks in today.
 Setting it is a no-op until a future client release wires the preset
 cascade. Until then, every sub-block (`thinking`, `tool_calls`,
 `composer`, ...) is read from its own typed values.
@@ -928,7 +928,7 @@ cascade. Until then, every sub-block (`thinking`, `tool_calls`,
 #### `ui.density` (Wired)
 
 `str`, default `"comfortable"`. Allowed: `compact`, `comfortable`.
-Controls message-bubble spacing — compact halves the vertical gap
+Controls message-bubble spacing · compact halves the vertical gap
 between bubbles, comfortable keeps the default spacing.
 
 #### `ui.thinking` (Wired)
@@ -1232,7 +1232,7 @@ Each slot is a `SlotEntry` with two fields:
   supports `inline` only. Phase 4 will add `chart`,
   `data_table`, `iframe` as native kinds.
 - `ref: str` (default `""`) - name of the inline widget to
-  render. Must exist in [`ui.widgets.inline.<ref>`](42-widgets.md)
+  render. Must exist in `ui.widgets.inline.<ref>`
   when `kind: inline`.
 
 The footer pair is the "no-extra-row" override mechanism:
@@ -1363,7 +1363,7 @@ flow:
 > **Backward compatibility.** A YAML that still declares `flow:`
 > nested under `runtime:` is accepted by the compiler's alias pass
 > which lifts it to top-level before
-> validation — no migration command needed.
+> validation · no migration command needed.
 
 See [Flows](07-flows.md) for the full node-type surface, route
 expressions, error handling (`on_error`), the daemon's reachability
@@ -1525,8 +1525,8 @@ The compiler's alias pass accepts the legacy flat shape and reshapes
 it to canonical before validation runs.
 The migration table is in [the index](/docs/language/#migration-from-the-legacy-flat-shape).
 
-The compiler's alias pass handles legacy shapes automatically —
-no migration command is needed.
+The compiler's alias pass handles legacy shapes automatically.
+No migration command is needed.
 
 Two cosmetic renames the migrator applies (no compat retention):
 
@@ -1618,10 +1618,10 @@ dev:
   [Multi-Agent](12-multi-agent.md), [Channels](40-channels.md)
 - Security: [Capabilities](11-security.md),
   [Behavior Engine](43-behavior.md),
-  [OS Sandbox](35-sandbox.md), [credentials.md](../reference/runtime/credentials.md)
+  OS Sandbox, [credentials.md](../reference/runtime/credentials.md)
 - UI: [Client Manifest](44-client-manifest.md),
-  [Widgets](42-widgets.md),
-  [Workspace & Preview](41-preview.md)
+  Widgets,
+  Workspace & Preview
 - Dev: [Skills System](21-skills.md),
   [Bundle namespaces](38-bundle-namespaces.md)
 
@@ -1629,6 +1629,6 @@ dev:
 > auto-schema injection, business annotations, channel built-in
 > types, sandbox detail) covers topics that belong in their dedicated
 > reference docs ([modules/reference/database.md](../reference/modules/database.md),
-> [40-channels.md](40-channels.md), [35-sandbox.md](35-sandbox.md)).
+> [40-channels.md](40-channels.md), 35-sandbox.md).
 > Those sections are being relocated in a follow-up pass; this page
 > is now strictly the 8-block configuration reference.

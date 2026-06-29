@@ -337,10 +337,8 @@ func paramsToJSONSchema(params []tool.ParamSpec) map[string]any {
 }
 
 func paramToSchema(p tool.ParamSpec) map[string]any {
-	m := map[string]any{
-		"type":        p.Type,
-		"description": p.Description,
-	}
+	m := jsonSchemaType(p.Type)
+	m["description"] = p.Description
 	if p.Default != nil {
 		m["default"] = p.Default
 	}
@@ -348,6 +346,36 @@ func paramToSchema(p tool.ParamSpec) map[string]any {
 		m["enum"] = p.Enum
 	}
 	return m
+}
+
+// jsonSchemaType maps a Digitorn param type to a VALID JSON Schema fragment.
+// Provider function-calling validators (DeepSeek, OpenAI) reject non-standard
+// type names, so internal types like "string_list" must be translated, not
+// passed through verbatim.
+func jsonSchemaType(t string) map[string]any {
+	switch t {
+	case "string_list":
+		return map[string]any{"type": "array", "items": map[string]any{"type": "string"}}
+	case "string_or_string_list":
+		return map[string]any{"anyOf": []any{
+			map[string]any{"type": "string"},
+			map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+		}}
+	case "int", "integer":
+		return map[string]any{"type": "integer"}
+	case "float", "number", "double":
+		return map[string]any{"type": "number"}
+	case "bool", "boolean":
+		return map[string]any{"type": "boolean"}
+	case "array", "list":
+		return map[string]any{"type": "array"}
+	case "object", "map", "dict":
+		return map[string]any{"type": "object"}
+	case "regex", "string", "":
+		return map[string]any{"type": "string"}
+	default:
+		return map[string]any{"type": "string"}
+	}
 }
 
 // indexOf is a tiny strings.IndexByte replacement to avoid the
