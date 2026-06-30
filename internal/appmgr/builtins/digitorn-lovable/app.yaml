@@ -963,6 +963,10 @@ tools:
     # [npm, npx, node, pnpm, yarn] (see tools.modules.shell.constraints), so
     # raising the ceiling to ``high`` is safe — it can't run arbitrary bash.
     max_risk_level: high
+    # Interactive app-builder: the user reviews each Write/Edit/Bash approval by
+    # hand, which routinely takes longer than the 5-min default. Raise it to the
+    # max (1h) so a pending approval doesn't time out mid-review.
+    approval_timeout: 3600
     grant:
       - module: context_builder
         actions: [ask_user]
