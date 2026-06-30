@@ -392,22 +392,20 @@ func (s *Server) installRootHandlers() {
 
 // corsFromOrigins builds the *types.Cors that socket.io expects.
 func corsFromOrigins(origins []string) *siotypes.Cors {
-	// A wildcard origin with credentials is rejected by browsers (CORS spec):
-	// `Access-Control-Allow-Origin: *` cannot be combined with
-	// `Access-Control-Allow-Credentials: true`. Mirror the HTTP CORS handler —
-	// drop credentials when "*" is present. The socket carries its token in the
-	// handshake `auth` payload (not a cookie), so credentials aren't needed.
-	creds := true
+	// Wildcard handling has TWO traps with this socket.io lib:
+	//  1. IsOriginAllowed treats a STRING "*" as allow-all, but a []string{"*"}
+	//     is matched LITERALLY — so a real Origin never matches and the
+	//     handshake is rejected with HTTP 403. Pass the bare "*" string.
+	//  2. `Access-Control-Allow-Origin: *` + `Allow-Credentials: true` is
+	//     rejected by browsers, so credentials must be off for the wildcard.
+	// The socket carries its token in the handshake `auth` payload (not a
+	// cookie), so credentials aren't needed anyway.
 	for _, o := range origins {
 		if o == "*" {
-			creds = false
-			break
+			return &siotypes.Cors{Origin: "*", Credentials: false}
 		}
 	}
-	return &siotypes.Cors{
-		Origin:      origins,
-		Credentials: creds,
-	}
+	return &siotypes.Cors{Origin: origins, Credentials: true}
 }
 
 var _ ports.RealtimeServer = (*Server)(nil)
