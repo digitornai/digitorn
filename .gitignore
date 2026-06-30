@@ -3,6 +3,10 @@
 #
 # Binaries for programs and plugins
 *.exe
+# Exception: the busybox-w32 binary is //go:embed'd into the Windows daemon
+# build (GNU coreutils for the Windows bash backend) and MUST be present at
+# build time, incl. in CI. GPLv2 — see the sibling NOTICE.
+!internal/modules/bash/goshell/busybox.exe
 *.exe~
 *.dll
 *.so
