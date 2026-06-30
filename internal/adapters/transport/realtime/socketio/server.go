@@ -392,9 +392,21 @@ func (s *Server) installRootHandlers() {
 
 // corsFromOrigins builds the *types.Cors that socket.io expects.
 func corsFromOrigins(origins []string) *siotypes.Cors {
+	// A wildcard origin with credentials is rejected by browsers (CORS spec):
+	// `Access-Control-Allow-Origin: *` cannot be combined with
+	// `Access-Control-Allow-Credentials: true`. Mirror the HTTP CORS handler —
+	// drop credentials when "*" is present. The socket carries its token in the
+	// handshake `auth` payload (not a cookie), so credentials aren't needed.
+	creds := true
+	for _, o := range origins {
+		if o == "*" {
+			creds = false
+			break
+		}
+	}
 	return &siotypes.Cors{
 		Origin:      origins,
-		Credentials: true,
+		Credentials: creds,
 	}
 }
 
