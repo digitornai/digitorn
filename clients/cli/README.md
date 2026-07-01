@@ -5,7 +5,7 @@ sessions, install apps — all from the shell.
 
 ## Architectural contract (NON-NEGOTIABLE)
 
-This client is a **separate Go module** (`github.com/mbathepaul/digitorn-cli`)
+This client is a **separate Go module** (`github.com/digitornai/digitorn-cli`)
 that lives alongside the daemon module (`github.com/digitornai/digitorn`)
 but **shares zero Go-level coupling with it**. The compiler enforces
 this because they have different `go.mod` files.

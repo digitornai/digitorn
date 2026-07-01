@@ -1,4 +1,4 @@
-module github.com/mbathepaul/digitorn-cli
+module github.com/digitornai/digitorn-cli
 
 go 1.26.2
 
