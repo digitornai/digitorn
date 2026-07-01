@@ -1,6 +1,6 @@
 [Unit]
 Description=Digitorn Go Daemon
-Documentation=https://github.com/mbathe/digitorn
+Documentation=https://github.com/digitornai/digitorn
 After=network-online.target redis-server.service postgresql.service
 Wants=network-online.target redis-server.service
 

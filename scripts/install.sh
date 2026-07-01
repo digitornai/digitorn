@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Digitorn Installer — https://github.com/mbathe/digitorn
-# Usage: curl -fsSL https://github.com/mbathe/digitorn/releases/latest/download/install.sh | bash
+# Digitorn Installer — https://github.com/digitornai/digitorn
+# Usage: curl -fsSL https://github.com/digitornai/digitorn/releases/latest/download/install.sh | bash
 set -euo pipefail
 
-REPO="mbathe/digitorn"
+REPO="digitornai/digitorn"
 INSTALL_DIR="${DIGITORN_DIR:-$HOME/.local/digitorn}"
 BIN_DIR="${HOME}/.local/bin"
 VERSION="${DIGITORN_VERSION:-latest}"

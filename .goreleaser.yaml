@@ -12,8 +12,8 @@ builds:
     flags: [-trimpath]
     ldflags: &ldflags
       - -s -w
-      - -X github.com/mbathepaul/digitorn/internal/version.Version={{ .Version }}
-      - -X github.com/mbathepaul/digitorn/internal/version.BuildDate={{ .Date }}
+      - -X github.com/digitornai/digitorn/internal/version.Version={{ .Version }}
+      - -X github.com/digitornai/digitorn/internal/version.BuildDate={{ .Date }}
     tags: [treesitter]
     goos: [linux, darwin, windows]
     goarch: [amd64, arm64]
@@ -107,7 +107,7 @@ checksum:
 
 release:
   github:
-    owner: mbathe
+    owner: digitornai
     name: digitorn
   header: |
     ## Digitorn {{ .Version }}

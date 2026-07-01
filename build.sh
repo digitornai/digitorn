@@ -24,7 +24,7 @@ for arg in "$@"; do
   esac
 done
 
-PKG='github.com/mbathepaul/digitorn'
+PKG='github.com/digitornai/digitorn'
 VERSION=$(git describe --tags --always --dirty 2>/dev/null || true)
 [ -z "$VERSION" ] && VERSION='dev'
 DATE=$(date -u '+%Y-%m-%dT%H:%M:%SZ')

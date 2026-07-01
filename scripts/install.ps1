@@ -1,14 +1,14 @@
 <#
 .SYNOPSIS
   Digitorn Installer for Windows
-  Usage: iex "& { $(irm https://github.com/mbathe/digitorn/releases/latest/download/install.ps1) }"
+  Usage: iex "& { $(irm https://github.com/digitornai/digitorn/releases/latest/download/install.ps1) }"
 #>
 param(
     [string]$Version = "latest"
 )
 
 $ErrorActionPreference = "Stop"
-$Repo = "mbathe/digitorn"
+$Repo = "digitornai/digitorn"
 
 # ── Detection ──
 function Detect-Platform {

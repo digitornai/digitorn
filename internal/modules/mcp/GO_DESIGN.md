@@ -48,7 +48,7 @@ Every file to create (NEW) or edit (EDIT). All paths under `C:\Users\ASUS\Docume
 
 | File | EDIT | Change |
 |---|---|---|
-| `cmd/digitorn-worker/main.go` | EDIT | Add one side-effect import `_ "github.com/mbathepaul/digitorn/internal/modules/mcp"` (alphabetical, ~line 31-35). |
+| `cmd/digitorn-worker/main.go` | EDIT | Add one side-effect import `_ "github.com/digitornai/digitorn/internal/modules/mcp"` (alphabetical, ~line 31-35). |
 
 ### 1.4 Worker↔daemon contract — dynamic `Tools()` RPC
 

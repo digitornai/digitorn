@@ -10,7 +10,7 @@ worker executables as subprocesses. All binaries must be deployed together.
 
 ## Download a release
 
-Pre-built binaries are available on the [GitHub Releases page](https://github.com/mbathepaul/digitorn/releases).
+Pre-built binaries are available on the [GitHub Releases page](https://github.com/digitornai/digitorn/releases).
 
 Each release ships a bundle containing:
 
@@ -28,7 +28,7 @@ Deploy the **whole folder** · do not split the binaries.
 
 ```bash
 # Download and extract the latest bundle for your platform
-curl -fsSL https://github.com/mbathepaul/digitorn/releases/latest/download/digitorn-linux-amd64.tar.gz | tar xz
+curl -fsSL https://github.com/digitornai/digitorn/releases/latest/download/digitorn-linux-amd64.tar.gz | tar xz
 cd digitorn-*
 ```
 
@@ -36,7 +36,7 @@ cd digitorn-*
 
 ```powershell
 # Download the latest Windows bundle
-Invoke-WebRequest -Uri https://github.com/mbathepaul/digitorn/releases/latest/download/digitorn-windows-amd64.zip -OutFile digitorn.zip
+Invoke-WebRequest -Uri https://github.com/digitornai/digitorn/releases/latest/download/digitorn-windows-amd64.zip -OutFile digitorn.zip
 Expand-Archive -Path digitorn.zip -DestinationPath digitorn
 cd digitorn
 ```
@@ -44,7 +44,7 @@ cd digitorn
 ## Build from source
 
 ```bash
-git clone https://github.com/mbathepaul/digitorn
+git clone https://github.com/digitornai/digitorn
 cd digitorn
 
 # Build everything (daemon + CLI + workers)

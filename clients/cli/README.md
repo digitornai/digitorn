@@ -6,7 +6,7 @@ sessions, install apps — all from the shell.
 ## Architectural contract (NON-NEGOTIABLE)
 
 This client is a **separate Go module** (`github.com/mbathepaul/digitorn-cli`)
-that lives alongside the daemon module (`github.com/mbathepaul/digitorn`)
+that lives alongside the daemon module (`github.com/digitornai/digitorn`)
 but **shares zero Go-level coupling with it**. The compiler enforces
 this because they have different `go.mod` files.
 
@@ -14,8 +14,8 @@ What this means concretely :
 
 | Allowed | Forbidden |
 |---|---|
-| Importing `github.com/charmbracelet/*` | Importing `github.com/mbathepaul/digitorn/internal/*` |
-| Importing `github.com/spf13/cobra` | Importing `github.com/mbathepaul/digitorn/pkg/*` (when those exist) |
+| Importing `github.com/charmbracelet/*` | Importing `github.com/digitornai/digitorn/internal/*` |
+| Importing `github.com/spf13/cobra` | Importing `github.com/digitornai/digitorn/pkg/*` (when those exist) |
 | Hitting the daemon over REST `/api/*` | Calling daemon Go functions directly |
 | Subscribing to Socket.IO events | Reading daemon DB / sessionstore files directly |
 | Reading JSON event shapes from the wire | Importing daemon event type definitions |

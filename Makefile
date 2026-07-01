@@ -4,7 +4,7 @@
 
 BINARY_DAEMON := digitornd
 BINARY_CLI    := digitorn
-PKG           := github.com/mbathepaul/digitorn
+PKG           := github.com/digitornai/digitorn
 VERSION       := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 BUILD_DATE    := $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 LDFLAGS       := -s -w \

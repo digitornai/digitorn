@@ -14,8 +14,8 @@ permissions:
 
 env:
   GO_VERSION_FILE: go.mod
-  PKG: github.com/mbathepaul/digitorn
-  CLI_PKG: github.com/mbathepaul/digitorn-cli
+  PKG: github.com/digitornai/digitorn
+  CLI_PKG: github.com/digitornai/digitorn-cli
 
 jobs:
   # ── Build TUI binaries once, share via artifact ─────────────────────
@@ -27,7 +27,7 @@ jobs:
 
       - uses: actions/checkout@v4
         with:
-          repository: mbathe/digitorn-tui
+          repository: digitornai/digitorn-tui
           ref: main
           path: digitorn-tui-src
           token: ${{ secrets.TUI_TOKEN }}

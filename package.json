@@ -3,7 +3,7 @@
   "private": true,
   "description": "Go build scripts — npm run <script> wrappers for the digitorn project",
   "scripts": {
-    "build": "go build -trimpath -ldflags \"-s -w -X github.com/mbathepaul/digitorn/internal/version.Version=dev -X github.com/mbathepaul/digitorn/internal/version.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)\" -o bin/digitornd ./cmd/digitornd",
+    "build": "go build -trimpath -ldflags \"-s -w -X github.com/digitornai/digitorn/internal/version.Version=dev -X github.com/digitornai/digitorn/internal/version.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)\" -o bin/digitornd ./cmd/digitornd",
     "build:cli": "go build -trimpath -ldflags \"-s -w -X main.version=dev\" -o bin/digitorn ./cmd/digitorn",
     "test": "go test -race -cover ./...",
     "lint": "go vet ./..."

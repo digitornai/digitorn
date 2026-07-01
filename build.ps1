@@ -17,7 +17,7 @@ param([switch]$Run, [switch]$NoStop)
 $ErrorActionPreference = 'Stop'
 Set-Location (Split-Path -Parent $MyInvocation.MyCommand.Path)
 
-$pkg = 'github.com/mbathepaul/digitorn'
+$pkg = 'github.com/digitornai/digitorn'
 $version = (git describe --tags --always --dirty 2>$null)
 if (-not $version) { $version = 'dev' }
 $date = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')

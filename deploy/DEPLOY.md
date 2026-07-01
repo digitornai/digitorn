@@ -48,7 +48,7 @@ on the first deploy.
 
 ## 2. GitHub repo secrets (Settings → Secrets and variables → Actions)
 
-The Go repo (`mbathe/digitorn`) needs its own copy — secrets are per-repo:
+The Go repo (`digitornai/digitorn`) needs its own copy — secrets are per-repo:
 
 | Secret | Value |
 |---|---|
