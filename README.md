@@ -109,10 +109,13 @@ DIGITORN_DATABASE__URL=postgres://user:pass@localhost/digitorn
 
 ## License
 
-Business Source License 1.1 (BSL). See [LICENSE](LICENSE).
+Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
 
-Digitorn is **source-available**: free to read, modify, self-host and use
-for non-production purposes. Production use is governed by the Additional
-Use Grant in the license. Each release converts to Apache-2.0 on its Change
-Date (four years after publication). For commercial production licensing,
-contact the maintainer.
+The Digitorn **runtime is free and open source** — use it, self-host it, build
+your own clients against its API, bring your own models and keys. The hosted
+Digitorn platform (account gateway, Hub, cloud and premium clients) is a
+separate, proprietary offering.
+
+The bundled `busybox` binary (`internal/modules/bash/goshell/busybox.exe`) is a
+separate, independent work under its own GPL-2.0 license; it is merely
+aggregated with Digitorn and is not part of the Digitorn work (see NOTICE).

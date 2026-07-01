@@ -1,0 +1,12 @@
+Digitorn
+Copyright 2026 Paul Mbathé
+
+Licensed under the Apache License, Version 2.0 (see the LICENSE file).
+
+This distribution bundles the following separately-licensed component. It is an
+independent work, merely aggregated with Digitorn, and is NOT covered by the
+Apache License above:
+
+  * busybox  (internal/modules/bash/goshell/busybox.exe)
+    GNU General Public License, version 2 (GPL-2.0).
+    Source: https://busybox.net/
