@@ -31,6 +31,10 @@ go.work.sum
 # env file
 .env
 
+# Google OAuth client secrets — never commit
+client_secret_*.json
+*.apps.googleusercontent.com.json
+
 # SQLite databases (daemon state lives in ~/.digitorn, never the repo — but a
 # stray relative-path db must never be committed).
 *.db
