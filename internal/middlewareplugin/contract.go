@@ -8,7 +8,7 @@
 // a plugin ; Go authors use Module() for a few-line implementation.
 package middlewareplugin
 
-import "github.com/mbathepaul/digitorn/internal/ports"
+import "github.com/digitornai/digitorn/internal/ports"
 
 // Tool names the plugin module must expose.
 const (

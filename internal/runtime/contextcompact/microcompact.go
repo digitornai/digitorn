@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
+	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
 )
 
 // MicroCompact (CTX-8 Phase 2) shrinks the model's VIEW cheaply, with NO LLM

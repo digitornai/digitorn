@@ -8,7 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
-	"github.com/mbathepaul/digitorn-cli/internal/theme"
+	"github.com/digitornai/digitorn-cli/internal/theme"
 )
 
 // PickerItem is one row in the picker. ID is returned on selection ;

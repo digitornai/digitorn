@@ -22,7 +22,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/llm"
+	"github.com/digitornai/digitorn/internal/llm"
 )
 
 // Client POSTs to a gateway's OpenAI-style media endpoints.

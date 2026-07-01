@@ -8,7 +8,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
+	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
 )
 
 const (

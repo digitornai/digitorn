@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
+	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
 )
 
 // A persisted assistant message's reasoning trace must be replayed onto the

@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	dbmod "github.com/mbathepaul/digitorn/internal/modules/database"
-	"github.com/mbathepaul/digitorn/pkg/module"
+	dbmod "github.com/digitornai/digitorn/internal/modules/database"
+	"github.com/digitornai/digitorn/pkg/module"
 )
 
 // The database module's generated schema must mark the DSN as a password so the

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/domain/tool"
+	"github.com/digitornai/digitorn/internal/domain/tool"
 )
 
 // TestS8_ReadPromptDoesNotDeadlockTheTurn proves the audit-flagged S8 case:

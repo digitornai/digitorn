@@ -1,0 +1,71 @@
+//#region src/locale/ko-KR.ts
+const locale = { "sheets-formula-ui": {
+	shortcut: { "quick-sum": "빠른 합계" },
+	insert: {
+		tooltip: "함수",
+		common: "자주 쓰는 함수"
+	},
+	prompt: {
+		helpExample: "예제",
+		helpAbstract: "정보",
+		required: "필수.",
+		optional: "선택."
+	},
+	error: {
+		title: "오류",
+		divByZero: "0으로 나누기 오류",
+		name: "잘못된 이름 오류",
+		value: "값 오류",
+		num: "숫자 오류",
+		na: "사용할 수 없는 값 오류",
+		cycle: "순환 참조 오류",
+		ref: "잘못된 셀 참조 오류",
+		spill: "분산 범위가 비어 있지 않음",
+		calc: "계산 오류",
+		error: "오류",
+		connect: "데이터 가져오는 중",
+		null: "Null 오류"
+	},
+	functionType: {
+		financial: "재무",
+		date: "날짜 및 시간",
+		math: "수학 및 삼각 함수",
+		statistical: "통계",
+		lookup: "찾기 및 참조",
+		database: "데이터베이스",
+		text: "텍스트",
+		logical: "논리",
+		information: "정보",
+		engineering: "공학",
+		cube: "큐브",
+		compatibility: "호환성",
+		web: "웹",
+		array: "배열",
+		univer: "Univer",
+		user: "사용자 정의",
+		definedname: "정의된 이름"
+	},
+	moreFunctions: {
+		confirm: "확인",
+		prev: "이전",
+		next: "다음",
+		searchFunctionPlaceholder: "함수 검색",
+		allFunctions: "모든 함수",
+		syntax: "구문"
+	},
+	operation: {
+		copyFormulaOnly: "수식만 복사",
+		pasteFormula: "수식 붙여넣기"
+	},
+	rangeSelector: {
+		title: "데이터 범위 선택",
+		addAnotherRange: "범위 추가",
+		buttonTooltip: "데이터 범위 선택",
+		placeHolder: "범위를 선택하거나 입력하세요.",
+		confirm: "확인",
+		cancel: "취소"
+	}
+} };
+
+//#endregion
+export { locale as default };

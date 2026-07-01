@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/embeddings"
+	"github.com/digitornai/digitorn/internal/embeddings"
 )
 
 // =====================================================================

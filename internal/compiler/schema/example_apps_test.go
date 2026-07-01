@@ -15,6 +15,8 @@ func TestExampleApps_Parse(t *testing.T) {
 	for _, rel := range []string{
 		"../../../examples/claude_code.yaml",
 		"../../appmgr/builtins/digitorn-code/app.yaml",
+		"../../appmgr/builtins/support-desk/app.yaml",
+		"../../appmgr/builtins/ops-alert/app.yaml",
 	} {
 		data, err := os.ReadFile(filepath.Clean(rel))
 		if err != nil {

@@ -1,6 +1,6 @@
 package channels
 
-import "github.com/mbathepaul/digitorn/internal/background/daemonclient"
+import "github.com/digitornai/digitorn/internal/background/daemonclient"
 
 // ToLaunchSpec maps a resolved Activation onto a daemon-client launch for the
 // given app. The per-session entry agent + extra context ride the createSession

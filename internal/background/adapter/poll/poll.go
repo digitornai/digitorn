@@ -11,7 +11,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/background/adapter"
+	"github.com/digitornai/digitorn/internal/background/adapter"
 )
 
 // Item is one fetched entry. ID is stable per item (guid / message-id / link)

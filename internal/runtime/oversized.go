@@ -3,7 +3,7 @@ package runtime
 import (
 	"fmt"
 
-	"github.com/mbathepaul/digitorn/internal/llm"
+	"github.com/digitornai/digitorn/internal/llm"
 )
 
 // maxMessageBytes caps a single message's text in the prompt. A message far

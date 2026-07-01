@@ -45,13 +45,13 @@ func runUpgrade(ctx context.Context, checkOnly bool) error {
 		current = "v" + current
 	}
 
-	repo := selfupdate.NewRepositorySlug("mbathe", "digitorn")
+	repo := selfupdate.NewRepositorySlug("digitornai", "digitorn")
 	latest, found, err := selfupdate.DetectLatest(ctx, repo)
 	if err != nil {
 		return fmt.Errorf("checking for updates: %w", err)
 	}
 	if !found {
-		fmt.Println("No releases found for mbathepaul/digitorn")
+		fmt.Println("No releases found for digitornai/digitorn")
 		return nil
 	}
 
@@ -73,7 +73,7 @@ func runUpgrade(ctx context.Context, checkOnly bool) error {
 
 	versionDir := strings.TrimPrefix(latestVer, "v")
 	assetName := fmt.Sprintf("digitorn-%s-%s-%s.tar.gz", versionDir, runtime.GOOS, runtime.GOARCH)
-	downloadURL := fmt.Sprintf("https://github.com/mbathe/digitorn/releases/download/%s/%s", latestVer, assetName)
+	downloadURL := fmt.Sprintf("https://github.com/digitornai/digitorn/releases/download/%s/%s", latestVer, assetName)
 
 	instDir, err := installDir()
 	if err != nil {

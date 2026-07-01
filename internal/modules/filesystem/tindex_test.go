@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	csindex "github.com/mbathepaul/digitorn/internal/csearch/index"
+	csindex "github.com/digitornai/digitorn/internal/csearch/index"
 )
 
 // buildIndexNow constructs an isolated tindex over root and builds it

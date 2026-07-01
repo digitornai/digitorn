@@ -16,7 +16,7 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/mbathepaul/digitorn/internal/domain/tool"
+	"github.com/digitornai/digitorn/internal/domain/tool"
 )
 
 // CallContext is the per-call identity + params handed to every layer. It is

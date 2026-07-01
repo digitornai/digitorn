@@ -1,8 +1,8 @@
 // Package version exposes build identity, injected at link time via
 //
-//	-ldflags "-X github.com/mbathepaul/digitorn/internal/version.Version=v1.2.3 \
-//	          -X github.com/mbathepaul/digitorn/internal/version.Commit=abc1234 \
-//	          -X github.com/mbathepaul/digitorn/internal/version.Date=2026-05-31"
+//	-ldflags "-X github.com/digitornai/digitorn/internal/version.Version=v1.2.3 \
+//	          -X github.com/digitornai/digitorn/internal/version.Commit=abc1234 \
+//	          -X github.com/digitornai/digitorn/internal/version.Date=2026-05-31"
 //
 // Unset, it reports a dev build.
 package version

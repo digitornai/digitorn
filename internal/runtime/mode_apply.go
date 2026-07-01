@@ -6,13 +6,13 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/mbathepaul/digitorn/internal/appmgr"
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
-	"github.com/mbathepaul/digitorn/internal/llm"
-	"github.com/mbathepaul/digitorn/internal/runtime/mode"
-	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
-	"github.com/mbathepaul/digitorn/internal/runtime/toolname"
-	"github.com/mbathepaul/digitorn/internal/runtime/turn"
+	"github.com/digitornai/digitorn/internal/appmgr"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/llm"
+	"github.com/digitornai/digitorn/internal/runtime/mode"
+	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
+	"github.com/digitornai/digitorn/internal/runtime/toolname"
+	"github.com/digitornai/digitorn/internal/runtime/turn"
 )
 
 // modeGuard is the per-turn tool allow-list enforced at dispatch time

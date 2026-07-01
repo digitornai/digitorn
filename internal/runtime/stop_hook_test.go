@@ -5,11 +5,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
-	"github.com/mbathepaul/digitorn/internal/llm"
-	runtime "github.com/mbathepaul/digitorn/internal/runtime"
-	"github.com/mbathepaul/digitorn/internal/runtime/hooks"
-	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/llm"
+	runtime "github.com/digitornai/digitorn/internal/runtime"
+	"github.com/digitornai/digitorn/internal/runtime/hooks"
+	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
 )
 
 // The built-in task-completion stop guard must hold the turn open when the

@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	csindex "github.com/mbathepaul/digitorn/internal/csearch/index"
-	csregexp "github.com/mbathepaul/digitorn/internal/csearch/regexp"
+	csindex "github.com/digitornai/digitorn/internal/csearch/index"
+	csregexp "github.com/digitornai/digitorn/internal/csearch/regexp"
 )
 
 // tindex.go : the trigram-index layer that turns grep from an O(corpus) rescan

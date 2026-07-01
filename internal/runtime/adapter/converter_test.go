@@ -6,9 +6,9 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/llm"
-	"github.com/mbathepaul/digitorn/internal/runtime/adapter"
-	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
+	"github.com/digitornai/digitorn/internal/llm"
+	"github.com/digitornai/digitorn/internal/runtime/adapter"
+	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
 )
 
 // anyBlobLoader returns deterministic bytes for any hash, so image parts

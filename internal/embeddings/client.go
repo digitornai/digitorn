@@ -8,8 +8,8 @@ import (
 
 	"google.golang.org/grpc"
 
-	ctxembed "github.com/mbathepaul/digitorn/internal/runtime/context/embeddings"
-	"github.com/mbathepaul/digitorn/internal/worker"
+	ctxembed "github.com/digitornai/digitorn/internal/runtime/context/embeddings"
+	"github.com/digitornai/digitorn/internal/worker"
 )
 
 // Client is a handle to the embeddings service. Two construction paths :

@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/position"
+	"github.com/digitornai/digitorn/internal/compiler/position"
 )
 
 type FormatOptions struct {

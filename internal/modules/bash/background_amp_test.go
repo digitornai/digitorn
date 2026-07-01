@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/modules/bash/goshell"
+	"github.com/digitornai/digitorn/internal/modules/bash/goshell"
 )
 
 // TestBackgroundAmpGuard proves the trailing-`&` guard: an orphaning background

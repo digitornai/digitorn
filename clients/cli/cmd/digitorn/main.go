@@ -17,7 +17,7 @@ import (
 	"github.com/charmbracelet/fang"
 	"github.com/spf13/cobra"
 
-	"github.com/mbathepaul/digitorn-cli/internal/commands"
+	"github.com/digitornai/digitorn-cli/internal/commands"
 )
 
 // version is set at build time via -ldflags "-X main.version=..."

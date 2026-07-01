@@ -4,11 +4,11 @@ import (
 	"context"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/appmgr"
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
-	domainmodule "github.com/mbathepaul/digitorn/internal/domain/module"
-	"github.com/mbathepaul/digitorn/internal/domain/tool"
-	"github.com/mbathepaul/digitorn/pkg/module"
+	"github.com/digitornai/digitorn/internal/appmgr"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
+	domainmodule "github.com/digitornai/digitorn/internal/domain/module"
+	"github.com/digitornai/digitorn/internal/domain/tool"
+	"github.com/digitornai/digitorn/pkg/module"
 )
 
 type fakeMCPModule struct {

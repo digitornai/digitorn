@@ -21,8 +21,8 @@ import (
 	"context"
 	"encoding/json"
 
-	domainmodule "github.com/mbathepaul/digitorn/internal/domain/module"
-	"github.com/mbathepaul/digitorn/internal/domain/tool"
+	domainmodule "github.com/digitornai/digitorn/internal/domain/module"
+	"github.com/digitornai/digitorn/internal/domain/tool"
 )
 
 // InvokeRequest is the payload sent by the daemon to a worker. The

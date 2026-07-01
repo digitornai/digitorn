@@ -1,6 +1,6 @@
 package policy
 
-import "github.com/mbathepaul/digitorn/internal/compiler/schema"
+import "github.com/digitornai/digitorn/internal/compiler/schema"
 
 // Gate4Policy implements gate 4 of the documented security sequence
 // — the policy resolver — as specified verbatim in

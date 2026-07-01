@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/domain/tool"
+	"github.com/digitornai/digitorn/internal/domain/tool"
 )
 
 // RecentCall is one entry of the per-session recent-output trail that

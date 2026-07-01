@@ -6,7 +6,7 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/safehttp"
+	"github.com/digitornai/digitorn/internal/safehttp"
 )
 
 func blockedIP(ip net.IP) bool { return safehttp.BlockedIP(ip) }

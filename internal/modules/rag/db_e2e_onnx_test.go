@@ -12,8 +12,8 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 
-	"github.com/mbathepaul/digitorn/internal/embeddings"
-	"github.com/mbathepaul/digitorn/internal/indexer"
+	"github.com/digitornai/digitorn/internal/embeddings"
+	"github.com/digitornai/digitorn/internal/indexer"
 )
 
 // End-to-end : index a REAL remote MySQL product catalog through the shared

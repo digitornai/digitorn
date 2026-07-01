@@ -14,7 +14,7 @@ import (
 	"regexp/syntax"
 	"sort"
 
-	"github.com/mbathepaul/digitorn/internal/csearch/sparse"
+	"github.com/digitornai/digitorn/internal/csearch/sparse"
 )
 
 // A matcher holds the state for running regular expression search.

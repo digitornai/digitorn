@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
 )
 
 // execResult is the outcome of running one node. Routing happens afterwards in

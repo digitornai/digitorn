@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
+	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
 )
 
 // ----- Stress isolation : 100 users × 10 sessions × 100 events -----

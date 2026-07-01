@@ -7,7 +7,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/mbathepaul/digitorn/internal/domain/tool"
+	"github.com/digitornai/digitorn/internal/domain/tool"
 )
 
 // audit logs every tool call with timing and outcome, and keeps lock-free

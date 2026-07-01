@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/ports"
-	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
+	"github.com/digitornai/digitorn/internal/ports"
+	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
 )
 
 // fakeRealtime is a minimal in-memory ports.RealtimeServer used to verify

@@ -1,8 +1,8 @@
 package policy
 
 import (
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
-	"github.com/mbathepaul/digitorn/internal/domain/tool"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/domain/tool"
 )
 
 // Gate2Risk implements gate 2 of the documented security sequence

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
+	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
 )
 
 // TestRenderTranscript_DescribesToolCalls: the summariser input must describe the

@@ -8,7 +8,7 @@ import (
 
 	"mvdan.cc/sh/v3/syntax"
 
-	"github.com/mbathepaul/digitorn/internal/modules/bash/goshell"
+	"github.com/digitornai/digitorn/internal/modules/bash/goshell"
 )
 
 func backgroundAmpHint(command string) string {

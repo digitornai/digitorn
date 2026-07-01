@@ -10,8 +10,8 @@ import (
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
-	"github.com/mbathepaul/digitorn/internal/persistence/models"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/persistence/models"
 )
 
 func newTestService(t *testing.T) *Service {

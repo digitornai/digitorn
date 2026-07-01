@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/background/daemonclient"
+	"github.com/digitornai/digitorn/internal/background/daemonclient"
 )
 
 func main() {

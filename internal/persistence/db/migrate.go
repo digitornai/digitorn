@@ -7,7 +7,7 @@ import (
 
 	"gorm.io/gorm"
 
-	"github.com/mbathepaul/digitorn/internal/persistence/models"
+	"github.com/digitornai/digitorn/internal/persistence/models"
 )
 
 // AutoMigrate runs GORM's AutoMigrate over metadata-only tables. Session

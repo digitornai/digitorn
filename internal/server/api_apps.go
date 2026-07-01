@@ -12,7 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/mbathepaul/digitorn/internal/appmgr"
+	"github.com/digitornai/digitorn/internal/appmgr"
 )
 
 // osReadDir aliases os.ReadDir so we keep the os dependency local to

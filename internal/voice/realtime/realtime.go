@@ -18,7 +18,7 @@ import (
 	"log/slog"
 	"sync"
 
-	"github.com/mbathepaul/digitorn/internal/voice"
+	"github.com/digitornai/digitorn/internal/voice"
 )
 
 // Conn is one realtime session's event channel to the gateway proxy. Events are the

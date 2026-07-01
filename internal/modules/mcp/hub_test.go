@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/mcphub"
+	"github.com/digitornai/digitorn/internal/mcphub"
 )
 
 func TestResolveInstallHub_SplitsSecrets(t *testing.T) {

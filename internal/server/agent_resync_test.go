@@ -8,11 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/runtime"
-	"github.com/mbathepaul/digitorn/internal/runtime/agent"
-	"github.com/mbathepaul/digitorn/internal/runtime/background"
-	"github.com/mbathepaul/digitorn/internal/runtime/context/meta"
-	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
+	"github.com/digitornai/digitorn/internal/runtime"
+	"github.com/digitornai/digitorn/internal/runtime/agent"
+	"github.com/digitornai/digitorn/internal/runtime/background"
+	"github.com/digitornai/digitorn/internal/runtime/context/meta"
+	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
 )
 
 // blockingBGDispatcher blocks until its context is cancelled — a stand-in for a

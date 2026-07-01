@@ -12,10 +12,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/mbathepaul/digitorn/internal/compiler"
-	"github.com/mbathepaul/digitorn/internal/compiler/codegen"
-	"github.com/mbathepaul/digitorn/internal/compiler/diagnostic"
-	"github.com/mbathepaul/digitorn/internal/version"
+	"github.com/digitornai/digitorn/internal/compiler"
+	"github.com/digitornai/digitorn/internal/compiler/codegen"
+	"github.com/digitornai/digitorn/internal/compiler/diagnostic"
+	"github.com/digitornai/digitorn/internal/version"
 )
 
 func main() {

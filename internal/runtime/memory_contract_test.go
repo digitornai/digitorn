@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
-	"github.com/mbathepaul/digitorn/internal/llm"
-	"github.com/mbathepaul/digitorn/internal/runtime"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/llm"
+	"github.com/digitornai/digitorn/internal/runtime"
 )
 
 // TestEngineMemory_YAMLContractGatesTools : memory is OPT-IN per the documented

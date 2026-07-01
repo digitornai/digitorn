@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/runtime/tokencount"
-	"github.com/mbathepaul/digitorn/internal/tokenizer"
-	"github.com/mbathepaul/digitorn/internal/worker"
+	"github.com/digitornai/digitorn/internal/runtime/tokencount"
+	"github.com/digitornai/digitorn/internal/tokenizer"
+	"github.com/digitornai/digitorn/internal/worker"
 )
 
 // buildTokenizerWorker compiles cmd/digitorn-worker-tokenizer to a temp path.
@@ -25,7 +25,7 @@ func buildTokenizerWorker(t *testing.T) string {
 		exe += ".exe"
 	}
 	cmd := exec.Command("go", "build", "-o", exe,
-		"github.com/mbathepaul/digitorn/cmd/digitorn-worker-tokenizer")
+		"github.com/digitornai/digitorn/cmd/digitorn-worker-tokenizer")
 	cmd.Stdout = io.Discard
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {

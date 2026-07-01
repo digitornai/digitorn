@@ -5,7 +5,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 
-	"github.com/mbathepaul/digitorn-cli/internal/theme"
+	"github.com/digitornai/digitorn-cli/internal/theme"
 )
 
 // ConnState is the current connection status to the daemon. Drawn as

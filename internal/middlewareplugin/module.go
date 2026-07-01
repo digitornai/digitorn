@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 
-	domainmodule "github.com/mbathepaul/digitorn/internal/domain/module"
-	"github.com/mbathepaul/digitorn/internal/domain/tool"
+	domainmodule "github.com/digitornai/digitorn/internal/domain/module"
+	"github.com/digitornai/digitorn/internal/domain/tool"
 )
 
 // BeforeFunc / AfterFunc are the plugin author's hooks. Before may mutate the

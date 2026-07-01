@@ -12,8 +12,8 @@ import (
 	"fmt"
 	"sync"
 
-	domainmodule "github.com/mbathepaul/digitorn/internal/domain/module"
-	"github.com/mbathepaul/digitorn/internal/domain/tool"
+	domainmodule "github.com/digitornai/digitorn/internal/domain/module"
+	"github.com/digitornai/digitorn/internal/domain/tool"
 )
 
 type Base struct {

@@ -6,7 +6,7 @@ import (
 
 	socket "github.com/zishang520/socket.io/servers/socket/v3"
 
-	"github.com/mbathepaul/digitorn/internal/ports"
+	"github.com/digitornai/digitorn/internal/ports"
 )
 
 // client wraps a *socket.Socket and implements ports.RealtimeClient.

@@ -10,7 +10,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
-	"github.com/mbathepaul/digitorn/internal/persistence/models"
+	"github.com/digitornai/digitorn/internal/persistence/models"
 )
 
 // Token is the decrypted OAuth token bundle. Access AND refresh are encrypted

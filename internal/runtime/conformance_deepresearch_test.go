@@ -8,10 +8,10 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
-	"github.com/mbathepaul/digitorn/internal/domain/tool"
-	"github.com/mbathepaul/digitorn/internal/llm"
-	"github.com/mbathepaul/digitorn/internal/runtime"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/domain/tool"
+	"github.com/digitornai/digitorn/internal/llm"
+	"github.com/digitornai/digitorn/internal/runtime"
 )
 
 // Conformance proof against a REAL old-daemon app.

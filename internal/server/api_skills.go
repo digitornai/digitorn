@@ -7,9 +7,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/mbathepaul/digitorn/internal/runtime"
-	"github.com/mbathepaul/digitorn/internal/runtime/context/meta"
-	"github.com/mbathepaul/digitorn/internal/userskills"
+	"github.com/digitornai/digitorn/internal/runtime"
+	"github.com/digitornai/digitorn/internal/runtime/context/meta"
+	"github.com/digitornai/digitorn/internal/userskills"
 )
 
 // skillContentAdapter bridges the meta-package SkillLoader (returns

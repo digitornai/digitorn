@@ -14,7 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/background/store"
+	"github.com/digitornai/digitorn/internal/background/store"
 )
 
 // Processor handles one claimed job. Returning nil completes it; returning a

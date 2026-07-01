@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/modules/bash/goshell"
+	"github.com/digitornai/digitorn/internal/modules/bash/goshell"
 )
 
 // runGoShell executes a command with the built-in pure-Go bash interpreter and

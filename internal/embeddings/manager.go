@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/mbathepaul/digitorn/internal/embeddings/backend"
-	"github.com/mbathepaul/digitorn/internal/embeddings/loader"
-	"github.com/mbathepaul/digitorn/internal/embeddings/models"
+	"github.com/digitornai/digitorn/internal/embeddings/backend"
+	"github.com/digitornai/digitorn/internal/embeddings/loader"
+	"github.com/digitornai/digitorn/internal/embeddings/models"
 )
 
 // Mode selects how the manager builds a backend for a model.

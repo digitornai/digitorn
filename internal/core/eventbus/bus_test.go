@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/ports"
+	"github.com/digitornai/digitorn/internal/ports"
 )
 
 func TestPublishSubscribe(t *testing.T) {

@@ -18,7 +18,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
 )
 
 type Engine struct {

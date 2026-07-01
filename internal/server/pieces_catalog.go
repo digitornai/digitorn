@@ -5,13 +5,13 @@ import (
 	"log/slog"
 	"sync"
 
-	"github.com/mbathepaul/digitorn/internal/appmgr"
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
-	domainmodule "github.com/mbathepaul/digitorn/internal/domain/module"
-	"github.com/mbathepaul/digitorn/internal/domain/tool"
-	"github.com/mbathepaul/digitorn/internal/runtime/policy"
-	"github.com/mbathepaul/digitorn/internal/runtime/toolname"
-	"github.com/mbathepaul/digitorn/pkg/module"
+	"github.com/digitornai/digitorn/internal/appmgr"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
+	domainmodule "github.com/digitornai/digitorn/internal/domain/module"
+	"github.com/digitornai/digitorn/internal/domain/tool"
+	"github.com/digitornai/digitorn/internal/runtime/policy"
+	"github.com/digitornai/digitorn/internal/runtime/toolname"
+	"github.com/digitornai/digitorn/pkg/module"
 )
 
 // piecesCatalog materializes pieces bridge tools into native AvailableAction /

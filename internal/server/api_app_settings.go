@@ -7,7 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/mbathepaul/digitorn/internal/modulesettings"
+	"github.com/digitornai/digitorn/internal/modulesettings"
 )
 
 // secretSentinel is returned in place of a stored secret value: the UI shows

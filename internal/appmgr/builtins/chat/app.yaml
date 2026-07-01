@@ -10,7 +10,7 @@ app:
   icon: "💬"
   color: "#6366F1"
   version: "0.1.0"
-  description: "Minimal chat agent with filesystem read access."
+  description: "General-purpose assistant with read-only codebase access. Zero setup — chat in the web app or CLI."
   author: "you@example.com"
   category: "coding"
 

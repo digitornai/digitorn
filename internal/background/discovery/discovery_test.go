@@ -9,8 +9,8 @@ import (
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 
-	"github.com/mbathepaul/digitorn/internal/background/processor"
-	"github.com/mbathepaul/digitorn/internal/background/store"
+	"github.com/digitornai/digitorn/internal/background/processor"
+	"github.com/digitornai/digitorn/internal/background/store"
 )
 
 const channelApp = `

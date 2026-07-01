@@ -30,8 +30,8 @@ import (
 
 	"google.golang.org/grpc"
 
-	"github.com/mbathepaul/digitorn/internal/embeddings"
-	"github.com/mbathepaul/digitorn/internal/worker"
+	"github.com/digitornai/digitorn/internal/embeddings"
+	"github.com/digitornai/digitorn/internal/worker"
 )
 
 func main() {

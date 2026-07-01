@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/worker"
+	"github.com/digitornai/digitorn/internal/worker"
 )
 
 func main() {

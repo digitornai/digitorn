@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/llm"
-	"github.com/mbathepaul/digitorn/internal/worker"
+	"github.com/digitornai/digitorn/internal/llm"
+	"github.com/digitornai/digitorn/internal/worker"
 )
 
 func TestClient_ListProviders_SimpleCall(t *testing.T) {

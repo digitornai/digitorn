@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/embeddings"
-	"github.com/mbathepaul/digitorn/internal/indexer"
+	"github.com/digitornai/digitorn/internal/embeddings"
+	"github.com/digitornai/digitorn/internal/indexer"
 )
 
 // End-to-end : crawl a REAL website (qdrant docs) via the indexation service

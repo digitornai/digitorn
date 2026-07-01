@@ -8,10 +8,10 @@ import (
 	"runtime/debug"
 	"strings"
 
-	"github.com/mbathepaul/digitorn/internal/runtime"
-	"github.com/mbathepaul/digitorn/internal/runtime/context/index"
-	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
-	"github.com/mbathepaul/digitorn/internal/runtime/toolname"
+	"github.com/digitornai/digitorn/internal/runtime"
+	"github.com/digitornai/digitorn/internal/runtime/context/index"
+	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
+	"github.com/digitornai/digitorn/internal/runtime/toolname"
 )
 
 // MetaDispatcher implements runtime.ToolDispatcher by intercepting

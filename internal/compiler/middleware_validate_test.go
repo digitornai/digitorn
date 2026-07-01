@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/diagnostic"
+	"github.com/digitornai/digitorn/internal/compiler/diagnostic"
 )
 
 func composerMiddlewareApp(mwBlock string) string {

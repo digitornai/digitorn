@@ -1,8 +1,8 @@
 package policy
 
 import (
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
-	"github.com/mbathepaul/digitorn/internal/domain/tool"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/domain/tool"
 )
 
 // BuildAgentToolset is the documented PRIMARY defence layer of the

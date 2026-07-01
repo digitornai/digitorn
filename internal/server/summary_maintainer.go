@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/runtime/contextcompact"
-	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
-	"github.com/mbathepaul/digitorn/internal/safego"
+	"github.com/digitornai/digitorn/internal/runtime/contextcompact"
+	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
+	"github.com/digitornai/digitorn/internal/safego"
 )
 
 // contextBGSummaryDisabled is the kill-switch. Default ON — set

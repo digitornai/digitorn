@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/config"
+	"github.com/digitornai/digitorn/internal/config"
 )
 
 // H4 — Hardening config : YAML parsing, env override, defaults,

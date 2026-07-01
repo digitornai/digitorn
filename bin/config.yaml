@@ -34,7 +34,7 @@ auth:
   # JWKS and identifies the user from the token (no more X-User-ID dev pinning).
   # Values matched to the actual token : iss="digitorn", user id in the "sub" claim,
   # no "aud" claim (audience left empty → audience check skipped).
-  enabled: true
+  enabled: false
   dev_mode: true
   issuer: digitorn
   jwks_url: https://auth.digitorn.ai/.well-known/jwks.json

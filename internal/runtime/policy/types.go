@@ -37,8 +37,8 @@ package policy
 import (
 	"strings"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
-	"github.com/mbathepaul/digitorn/internal/domain/tool"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/domain/tool"
 )
 
 // CallerKind identifies WHO is invoking a tool. The gates bypass

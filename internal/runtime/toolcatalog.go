@@ -1,8 +1,8 @@
 package runtime
 
 import (
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
-	"github.com/mbathepaul/digitorn/internal/llm"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/llm"
 )
 
 // ToolCatalog is what the runtime depends on to translate an agent's

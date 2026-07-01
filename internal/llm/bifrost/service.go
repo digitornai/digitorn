@@ -17,7 +17,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/mbathepaul/digitorn/internal/llm"
+	"github.com/digitornai/digitorn/internal/llm"
 )
 
 // llmRequestLog is set once at startup. Set DIGITORN_LOG_LLM_REQUEST=1 to

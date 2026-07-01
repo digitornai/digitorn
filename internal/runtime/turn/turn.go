@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
+	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
 )
 
 // EventSink is the minimal slice of sessionstore.Bus the Turn needs.

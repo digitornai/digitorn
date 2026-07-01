@@ -12,7 +12,7 @@ import (
 	"strings"
 	"unsafe"
 
-	"github.com/mbathepaul/digitorn/internal/csearch/sparse"
+	"github.com/digitornai/digitorn/internal/csearch/sparse"
 )
 
 // Index writing.  See read.go for details of on-disk format.

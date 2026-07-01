@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
+	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
 )
 
 // appendWaitBudget caps how long a REST handler waits for queue space

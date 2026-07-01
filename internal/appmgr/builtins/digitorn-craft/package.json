@@ -1,6 +1,6 @@
 {
-  "name": "digitorn-lovable",
+  "name": "digitorn-craft",
   "version": "0.1.0",
-  "description": "Builtin Digitorn app: Lovable-style AI builder. Pick a template or describe an app, the agent ships it live in a sandboxed iframe.",
+  "description": "Builtin Digitorn app: React + Vite AI builder. Pick a template or describe an app; the agent writes code, installs deps, and ships a production build.",
   "private": true
 }

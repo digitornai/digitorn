@@ -5,12 +5,12 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/compiler"
-	"github.com/mbathepaul/digitorn/internal/compiler/catalog"
-	"github.com/mbathepaul/digitorn/internal/compiler/diagnostic"
-	"github.com/mbathepaul/digitorn/pkg/module"
+	"github.com/digitornai/digitorn/internal/compiler"
+	"github.com/digitornai/digitorn/internal/compiler/catalog"
+	"github.com/digitornai/digitorn/internal/compiler/diagnostic"
+	"github.com/digitornai/digitorn/pkg/module"
 
-	_ "github.com/mbathepaul/digitorn/internal/modules/filesystem"
+	_ "github.com/digitornai/digitorn/internal/modules/filesystem"
 )
 
 // notRoutedApp declares two hooks : one on a ROUTED event (session_start,

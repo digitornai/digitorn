@@ -3,7 +3,7 @@ package catalog_test
 import (
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/catalog"
+	"github.com/digitornai/digitorn/internal/compiler/catalog"
 )
 
 // TestSystemModulesSeeded locks in that the compiler recognises the

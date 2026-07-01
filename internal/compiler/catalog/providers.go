@@ -1,6 +1,6 @@
 package catalog
 
-import "github.com/mbathepaul/digitorn/internal/compiler/schema"
+import "github.com/digitornai/digitorn/internal/compiler/schema"
 
 func defaultProviders() []string {
 	extra := []string{"openrouter", "minimax", "featherless", "claude_code"}

@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mbathepaul/digitorn-cli/internal/client"
-	"github.com/mbathepaul/digitorn-cli/internal/theme"
+	"github.com/digitornai/digitorn-cli/internal/client"
+	"github.com/digitornai/digitorn-cli/internal/theme"
 )
 
 // Replays a realistic streamed turn through handleEnvelope and asserts

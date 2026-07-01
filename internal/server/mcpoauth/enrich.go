@@ -5,7 +5,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
 )
 
 // discoveryCallbackPath is the app-agnostic OAuth callback for the discovery

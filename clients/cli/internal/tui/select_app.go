@@ -4,8 +4,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
-	"github.com/mbathepaul/digitorn-cli/internal/client"
-	"github.com/mbathepaul/digitorn-cli/internal/theme"
+	"github.com/digitornai/digitorn-cli/internal/client"
+	"github.com/digitornai/digitorn-cli/internal/theme"
 )
 
 // SelectApp runs a standalone fullscreen picker over the installed apps

@@ -11,8 +11,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/mbathepaul/digitorn/internal/modules/rag"
-	pkgmodule "github.com/mbathepaul/digitorn/pkg/module"
+	"github.com/digitornai/digitorn/internal/modules/rag"
+	pkgmodule "github.com/digitornai/digitorn/pkg/module"
 )
 
 // sindex.go : the EPHEMERAL semantic index that makes grep code-aware.

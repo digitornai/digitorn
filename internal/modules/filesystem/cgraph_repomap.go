@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/mbathepaul/digitorn/internal/codeast"
-	"github.com/mbathepaul/digitorn/internal/runtime/context/repomap"
+	"github.com/digitornai/digitorn/internal/codeast"
+	"github.com/digitornai/digitorn/internal/runtime/context/repomap"
 )
 
 const repoMapMaxBytes = 1 << 20

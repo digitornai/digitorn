@@ -5,14 +5,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/appmgr"
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
-	"github.com/mbathepaul/digitorn/internal/domain/tool"
-	"github.com/mbathepaul/digitorn/internal/llm"
-	dgruntime "github.com/mbathepaul/digitorn/internal/runtime"
-	"github.com/mbathepaul/digitorn/internal/runtime/context/wiring"
-	"github.com/mbathepaul/digitorn/internal/runtime/policy"
-	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
+	"github.com/digitornai/digitorn/internal/appmgr"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/domain/tool"
+	"github.com/digitornai/digitorn/internal/llm"
+	dgruntime "github.com/digitornai/digitorn/internal/runtime"
+	"github.com/digitornai/digitorn/internal/runtime/context/wiring"
+	"github.com/digitornai/digitorn/internal/runtime/policy"
+	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
 )
 
 // =====================================================================

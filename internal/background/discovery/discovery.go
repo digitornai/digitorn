@@ -19,18 +19,18 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/mbathepaul/digitorn/internal/background/adapter"
-	"github.com/mbathepaul/digitorn/internal/background/adapter/cron"
-	"github.com/mbathepaul/digitorn/internal/background/adapter/discord"
-	"github.com/mbathepaul/digitorn/internal/background/adapter/pieces"
-	"github.com/mbathepaul/digitorn/internal/background/adapter/primitives"
-	"github.com/mbathepaul/digitorn/internal/background/adapter/rss"
-	"github.com/mbathepaul/digitorn/internal/background/adapter/telegram"
-	"github.com/mbathepaul/digitorn/internal/background/adapter/webhook"
-	"github.com/mbathepaul/digitorn/internal/background/adapter/whatsapp"
-	"github.com/mbathepaul/digitorn/internal/background/channels"
-	"github.com/mbathepaul/digitorn/internal/background/processor"
-	"github.com/mbathepaul/digitorn/internal/background/store"
+	"github.com/digitornai/digitorn/internal/background/adapter"
+	"github.com/digitornai/digitorn/internal/background/adapter/cron"
+	"github.com/digitornai/digitorn/internal/background/adapter/discord"
+	"github.com/digitornai/digitorn/internal/background/adapter/pieces"
+	"github.com/digitornai/digitorn/internal/background/adapter/primitives"
+	"github.com/digitornai/digitorn/internal/background/adapter/rss"
+	"github.com/digitornai/digitorn/internal/background/adapter/telegram"
+	"github.com/digitornai/digitorn/internal/background/adapter/webhook"
+	"github.com/digitornai/digitorn/internal/background/adapter/whatsapp"
+	"github.com/digitornai/digitorn/internal/background/channels"
+	"github.com/digitornai/digitorn/internal/background/processor"
+	"github.com/digitornai/digitorn/internal/background/store"
 )
 
 // appManifest is the slice of an app.yaml we care about: the app id and the

@@ -19,9 +19,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
-	"github.com/mbathepaul/digitorn/internal/runtime/policy"
-	"github.com/mbathepaul/digitorn/internal/runtime/toolname"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/runtime/policy"
+	"github.com/digitornai/digitorn/internal/runtime/toolname"
 )
 
 // EffectiveTurn is the per-turn config produced by Resolve.

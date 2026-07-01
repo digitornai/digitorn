@@ -7,7 +7,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 
-	"github.com/mbathepaul/digitorn-cli/internal/theme"
+	"github.com/digitornai/digitorn-cli/internal/theme"
 )
 
 // Sidebar is the right rail. CLI-3 = char counter + key hints. CLI-4

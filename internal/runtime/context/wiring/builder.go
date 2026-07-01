@@ -27,15 +27,15 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
-	domainmodule "github.com/mbathepaul/digitorn/internal/domain/module"
-	"github.com/mbathepaul/digitorn/internal/llm"
-	"github.com/mbathepaul/digitorn/internal/runtime"
-	"github.com/mbathepaul/digitorn/internal/runtime/context/embeddings"
-	"github.com/mbathepaul/digitorn/internal/runtime/context/index"
-	"github.com/mbathepaul/digitorn/internal/runtime/context/injection"
-	"github.com/mbathepaul/digitorn/internal/runtime/context/prompt"
-	"github.com/mbathepaul/digitorn/internal/runtime/policy"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
+	domainmodule "github.com/digitornai/digitorn/internal/domain/module"
+	"github.com/digitornai/digitorn/internal/llm"
+	"github.com/digitornai/digitorn/internal/runtime"
+	"github.com/digitornai/digitorn/internal/runtime/context/embeddings"
+	"github.com/digitornai/digitorn/internal/runtime/context/index"
+	"github.com/digitornai/digitorn/internal/runtime/context/injection"
+	"github.com/digitornai/digitorn/internal/runtime/context/prompt"
+	"github.com/digitornai/digitorn/internal/runtime/policy"
 )
 
 // AvailableActions returns every (module, action, spec) tuple the

@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
 )
 
 // Capability policy (gate 4) written on the umbrella `mcp` module must cover

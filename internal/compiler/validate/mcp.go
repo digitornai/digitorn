@@ -5,9 +5,9 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/diagnostic"
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
-	"github.com/mbathepaul/digitorn/internal/compiler/suggest"
+	"github.com/digitornai/digitorn/internal/compiler/diagnostic"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/compiler/suggest"
 )
 
 var mcpServerIDRe = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)

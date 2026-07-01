@@ -29,12 +29,12 @@ import (
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
-	"github.com/mbathepaul/digitorn/internal/domain/tool"
-	mcp "github.com/mbathepaul/digitorn/internal/modules/mcp"
-	"github.com/mbathepaul/digitorn/internal/persistence/models"
-	"github.com/mbathepaul/digitorn/internal/server/mcpoauth"
-	pkgmodule "github.com/mbathepaul/digitorn/pkg/module"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/domain/tool"
+	mcp "github.com/digitornai/digitorn/internal/modules/mcp"
+	"github.com/digitornai/digitorn/internal/persistence/models"
+	"github.com/digitornai/digitorn/internal/server/mcpoauth"
+	pkgmodule "github.com/digitornai/digitorn/pkg/module"
 )
 
 const realToken = "REALTOKEN-xyz"

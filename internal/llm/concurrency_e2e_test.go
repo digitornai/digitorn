@@ -45,8 +45,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/llm"
-	"github.com/mbathepaul/digitorn/internal/worker"
+	"github.com/digitornai/digitorn/internal/llm"
+	"github.com/digitornai/digitorn/internal/worker"
 )
 
 // percentiles computes p50/p95/p99/p999 from a sorted slice of latencies.

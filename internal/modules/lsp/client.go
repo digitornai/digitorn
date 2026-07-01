@@ -14,7 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/safego"
+	"github.com/digitornai/digitorn/internal/safego"
 )
 
 // client is a minimal JSON-RPC 2.0 client speaking the Language Server

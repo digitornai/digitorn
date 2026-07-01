@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mbathepaul/digitorn-cli/internal/client"
-	"github.com/mbathepaul/digitorn-cli/internal/theme"
+	"github.com/digitornai/digitorn-cli/internal/client"
+	"github.com/digitornai/digitorn-cli/internal/theme"
 )
 
 // A streaming tool_call fires DURING the stream (low seq), but the assistant

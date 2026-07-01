@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/persistence/models"
+	"github.com/digitornai/digitorn/internal/persistence/models"
 )
 
 // LLMModel is one model a stored credential's key unlocks (BYOK). Shaped to map

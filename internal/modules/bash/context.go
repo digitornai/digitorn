@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/modules/bash/goshell"
+	"github.com/digitornai/digitorn/internal/modules/bash/goshell"
 )
 
 // enrich attaches cwd/duration/files-changed/git context to a finished command

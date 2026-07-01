@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/background/adapter"
-	"github.com/mbathepaul/digitorn/internal/background/adapter/webhook"
-	"github.com/mbathepaul/digitorn/internal/background/channels"
-	"github.com/mbathepaul/digitorn/internal/background/daemonclient"
+	"github.com/digitornai/digitorn/internal/background/adapter"
+	"github.com/digitornai/digitorn/internal/background/adapter/webhook"
+	"github.com/digitornai/digitorn/internal/background/channels"
+	"github.com/digitornai/digitorn/internal/background/daemonclient"
 )
 
 // TestManager_WebhookIngress proves the real inbound ingress: a webhook POST is

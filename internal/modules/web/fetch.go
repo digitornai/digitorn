@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/domain/tool"
-	"github.com/mbathepaul/digitorn/internal/flexjson"
+	"github.com/digitornai/digitorn/internal/domain/tool"
+	"github.com/digitornai/digitorn/internal/flexjson"
 )
 
 // fetchCache is a concurrency-safe, TTL-bounded, size-capped cache of fetched

@@ -5,8 +5,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/runtime"
-	"github.com/mbathepaul/digitorn/internal/runtime/context/meta"
+	"github.com/digitornai/digitorn/internal/runtime"
+	"github.com/digitornai/digitorn/internal/runtime/context/meta"
 )
 
 // =====================================================================

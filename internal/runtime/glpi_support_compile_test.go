@@ -3,11 +3,11 @@ package runtime_test
 import (
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/compiler"
-	"github.com/mbathepaul/digitorn/internal/compiler/catalog"
-	_ "github.com/mbathepaul/digitorn/internal/modules/filesystem"
-	_ "github.com/mbathepaul/digitorn/internal/modules/http"
-	"github.com/mbathepaul/digitorn/pkg/module"
+	"github.com/digitornai/digitorn/internal/compiler"
+	"github.com/digitornai/digitorn/internal/compiler/catalog"
+	_ "github.com/digitornai/digitorn/internal/modules/filesystem"
+	_ "github.com/digitornai/digitorn/internal/modules/http"
+	"github.com/digitornai/digitorn/pkg/module"
 )
 
 // TestGLPISupportCompiles is a non-live guard: the flagship examples/glpi-support

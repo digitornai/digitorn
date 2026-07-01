@@ -6,7 +6,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 
-	"github.com/mbathepaul/digitorn-cli/internal/theme"
+	"github.com/digitornai/digitorn-cli/internal/theme"
 )
 
 // sidebarTodoMax caps how many tasks the right rail shows at once : a long plan

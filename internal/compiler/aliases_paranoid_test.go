@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
 )
 
 // fullAliasDef builds a definition that uses the legacy `workspace` id in EVERY

@@ -31,7 +31,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
+	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
 )
 
 // ErrNotFound is returned by Get / Stat when the requested hash isn't

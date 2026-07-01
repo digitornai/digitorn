@@ -18,15 +18,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/config"
-	dgruntime "github.com/mbathepaul/digitorn/internal/runtime"
-	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
-	"github.com/mbathepaul/digitorn/internal/server"
+	"github.com/digitornai/digitorn/internal/config"
+	dgruntime "github.com/digitornai/digitorn/internal/runtime"
+	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
+	"github.com/digitornai/digitorn/internal/server"
 
 	// In-proc module registrations are not consumed in this test (we use
 	// worker pools for filesystem), but importing them here keeps the
 	// in-proc registry warm in case the worker pool ever falls back.
-	_ "github.com/mbathepaul/digitorn/internal/modules/filesystem"
+	_ "github.com/digitornai/digitorn/internal/modules/filesystem"
 )
 
 // =====================================================================
@@ -66,8 +66,8 @@ func buildHTTPE2EBinaries(t *testing.T) string {
 			return
 		}
 		for _, pkg := range []string{
-			"github.com/mbathepaul/digitorn/cmd/digitorn-worker",
-			"github.com/mbathepaul/digitorn/cmd/digitorn-worker-llm",
+			"github.com/digitornai/digitorn/cmd/digitorn-worker",
+			"github.com/digitornai/digitorn/cmd/digitorn-worker-llm",
 		} {
 			name := filepath.Base(pkg)
 			if runtime.GOOS == "windows" {

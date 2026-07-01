@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/background/adapter"
+	"github.com/digitornai/digitorn/internal/background/adapter"
 )
 
 // Schedule is a parsed 5-field cron expression.

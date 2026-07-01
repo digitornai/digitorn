@@ -5,7 +5,7 @@ package backend
 import (
 	"errors"
 
-	"github.com/mbathepaul/digitorn/internal/embeddings/models"
+	"github.com/digitornai/digitorn/internal/embeddings/models"
 )
 
 // NewONNX is the no-op stub used when the binary is built WITHOUT

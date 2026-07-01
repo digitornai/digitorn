@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
 )
 
 type Data struct {

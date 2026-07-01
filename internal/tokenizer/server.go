@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/runtime/tokencount"
+	"github.com/digitornai/digitorn/internal/runtime/tokencount"
 )
 
 // Server is the production Service implementation : it wraps a tokencount

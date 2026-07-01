@@ -3,7 +3,7 @@ package validate
 import (
 	"regexp"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/diagnostic"
+	"github.com/digitornai/digitorn/internal/compiler/diagnostic"
 )
 
 var (

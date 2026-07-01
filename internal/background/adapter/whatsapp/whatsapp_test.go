@@ -13,7 +13,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/background/adapter"
+	"github.com/digitornai/digitorn/internal/background/adapter"
 )
 
 func sign(secret, body string) string {

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/codeast"
+	"github.com/digitornai/digitorn/internal/codeast"
 )
 
 // graphStats summarises a built graph : how many files carry definitions,

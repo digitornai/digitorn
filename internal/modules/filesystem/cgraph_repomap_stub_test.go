@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/runtime/context/repomap"
+	"github.com/digitornai/digitorn/internal/runtime/context/repomap"
 )
 
 func TestFallbackRepoMap(t *testing.T) {

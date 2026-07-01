@@ -5,10 +5,10 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/appmgr"
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
-	"github.com/mbathepaul/digitorn/internal/runtime"
-	"github.com/mbathepaul/digitorn/internal/runtime/hooks"
+	"github.com/digitornai/digitorn/internal/appmgr"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/runtime"
+	"github.com/digitornai/digitorn/internal/runtime/hooks"
 )
 
 // =====================================================================

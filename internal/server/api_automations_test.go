@@ -10,7 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/mbathepaul/digitorn/internal/config"
+	"github.com/digitornai/digitorn/internal/config"
 )
 
 // fakeOps is a minimal bg /ops server : two users' schedules, a run for each,

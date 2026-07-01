@@ -6,8 +6,8 @@ import (
 	"encoding/json"
 	"sort"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/catalog"
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/compiler/catalog"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
 )
 
 // VersionHash combines the catalog snapshot, the compiler version, and the

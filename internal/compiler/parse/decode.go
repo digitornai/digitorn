@@ -6,7 +6,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/diagnostic"
+	"github.com/digitornai/digitorn/internal/compiler/diagnostic"
 )
 
 // StrictDecode populates target from node using yaml.v3 and reports the

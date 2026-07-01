@@ -17,8 +17,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
-	"github.com/mbathepaul/digitorn/internal/runtime/workdir"
+	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
+	"github.com/digitornai/digitorn/internal/runtime/workdir"
 )
 
 // previewKey lazily loads the HMAC key for preview tokens. STABLE across daemon

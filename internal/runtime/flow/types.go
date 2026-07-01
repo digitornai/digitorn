@@ -1,6 +1,6 @@
 package flow
 
-import "github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
+import "github.com/digitornai/digitorn/internal/runtime/sessionstore"
 
 // FlowResult is what Run() returns to the engine.
 type FlowResult struct {

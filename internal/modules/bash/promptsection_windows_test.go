@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	domainmodule "github.com/mbathepaul/digitorn/internal/domain/module"
+	domainmodule "github.com/digitornai/digitorn/internal/domain/module"
 )
 
 // TestPromptSection_WindowsDialect verifies the agent is told, up front and

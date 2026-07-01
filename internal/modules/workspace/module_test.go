@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/gitrepo"
+	"github.com/digitornai/digitorn/internal/gitrepo"
 )
 
 func mj(v any) json.RawMessage {

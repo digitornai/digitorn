@@ -11,7 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/mbathepaul/digitorn/internal/codeast"
+	"github.com/digitornai/digitorn/internal/codeast"
 )
 
 // cgraph.go : the per-workdir dependency graph (callers / imports /

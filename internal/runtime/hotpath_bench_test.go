@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/llm"
-	runtimepkg "github.com/mbathepaul/digitorn/internal/runtime"
-	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
-	"github.com/mbathepaul/digitorn/internal/runtime/turn"
+	"github.com/digitornai/digitorn/internal/llm"
+	runtimepkg "github.com/digitornai/digitorn/internal/runtime"
+	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
+	"github.com/digitornai/digitorn/internal/runtime/turn"
 )
 
 // BenchmarkRuntime_FullTurn measures a REAL completed turn (1 LLM → 1 tool

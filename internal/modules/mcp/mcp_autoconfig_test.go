@@ -5,7 +5,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
 )
 
 // Auth is inferred purely from declared env-var NAMES: OAuth needs both a

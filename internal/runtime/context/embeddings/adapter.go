@@ -3,7 +3,7 @@ package embeddings
 import (
 	"context"
 
-	"github.com/mbathepaul/digitorn/internal/runtime/context/index"
+	"github.com/digitornai/digitorn/internal/runtime/context/index"
 )
 
 type Adapter struct {

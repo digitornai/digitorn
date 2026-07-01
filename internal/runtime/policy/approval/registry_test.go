@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/runtime/policy/approval"
+	"github.com/digitornai/digitorn/internal/runtime/policy/approval"
 )
 
 // TestRegistry_ResolveBeforeWait_LeavesDanglingResolution : the

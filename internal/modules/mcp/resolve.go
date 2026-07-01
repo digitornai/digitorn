@@ -6,7 +6,7 @@ import (
 	"os/exec"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
 )
 
 // resolveServer turns a (possibly bare) server config into a full launch spec,

@@ -3,7 +3,7 @@ package bifrost
 import (
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/llm"
+	"github.com/digitornai/digitorn/internal/llm"
 )
 
 // TestMarkStablePrefix_NoBreakpointsWhenNothingStable: an empty

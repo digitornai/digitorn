@@ -9,7 +9,7 @@ import (
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 
-	"github.com/mbathepaul/digitorn/internal/persistence/models"
+	"github.com/digitornai/digitorn/internal/persistence/models"
 )
 
 type fakeSealer struct{}

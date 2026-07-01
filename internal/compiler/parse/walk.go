@@ -7,7 +7,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/diagnostic"
+	"github.com/digitornai/digitorn/internal/compiler/diagnostic"
 )
 
 var yamlUnmarshalerType = reflect.TypeOf((*yaml.Unmarshaler)(nil)).Elem()

@@ -14,8 +14,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/mbathepaul/digitorn/internal/runtime/policy/approval"
-	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
+	"github.com/digitornai/digitorn/internal/runtime/policy/approval"
+	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
 )
 
 // TestSG5_HTTPApprove_SignalsRegistry : the final E2E claim of the

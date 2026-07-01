@@ -16,11 +16,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/core/servicebus"
-	domainmodule "github.com/mbathepaul/digitorn/internal/domain/module"
-	"github.com/mbathepaul/digitorn/internal/domain/tool"
-	"github.com/mbathepaul/digitorn/internal/module/service"
-	pkgmodule "github.com/mbathepaul/digitorn/pkg/module"
+	"github.com/digitornai/digitorn/internal/core/servicebus"
+	domainmodule "github.com/digitornai/digitorn/internal/domain/module"
+	"github.com/digitornai/digitorn/internal/domain/tool"
+	"github.com/digitornai/digitorn/internal/module/service"
+	pkgmodule "github.com/digitornai/digitorn/pkg/module"
 )
 
 // moduleService implements service.Service by dispatching through a

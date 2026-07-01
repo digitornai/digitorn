@@ -1,0 +1,29 @@
+{
+  "name": "univer-demo",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build"
+  },
+  "dependencies": {
+    "@univerjs/preset-sheets-conditional-formatting": "^0.25.0",
+    "@univerjs/preset-sheets-core": "^0.25.0",
+    "@univerjs/preset-sheets-data-validation": "^0.25.0",
+    "@univerjs/preset-sheets-drawing": "^0.25.0",
+    "@univerjs/preset-sheets-filter": "^0.25.0",
+    "@univerjs/preset-sheets-find-replace": "^0.25.0",
+    "@univerjs/preset-sheets-hyper-link": "^0.25.0",
+    "@univerjs/preset-sheets-note": "^0.25.0",
+    "@univerjs/preset-sheets-sort": "^0.25.0",
+    "@univerjs/preset-sheets-table": "^0.25.0",
+    "@univerjs/presets": "^0.25.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^6.0.3"
+  }
+}

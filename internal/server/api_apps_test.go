@@ -18,11 +18,11 @@ import (
 	"github.com/go-chi/chi/v5"
 	"gorm.io/gorm"
 
-	"github.com/mbathepaul/digitorn/internal/appmgr"
-	"github.com/mbathepaul/digitorn/internal/compiler"
-	"github.com/mbathepaul/digitorn/internal/compiler/catalog"
-	"github.com/mbathepaul/digitorn/internal/config"
-	"github.com/mbathepaul/digitorn/internal/persistence/db"
+	"github.com/digitornai/digitorn/internal/appmgr"
+	"github.com/digitornai/digitorn/internal/compiler"
+	"github.com/digitornai/digitorn/internal/compiler/catalog"
+	"github.com/digitornai/digitorn/internal/config"
+	"github.com/digitornai/digitorn/internal/persistence/db"
 )
 
 // repoManifestsDirForServer walks up to find manifests/ from the

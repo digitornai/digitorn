@@ -6,9 +6,9 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/mbathepaul/digitorn/internal/background/adapter"
-	"github.com/mbathepaul/digitorn/internal/background/channels"
-	"github.com/mbathepaul/digitorn/internal/background/daemonclient"
+	"github.com/digitornai/digitorn/internal/background/adapter"
+	"github.com/digitornai/digitorn/internal/background/channels"
+	"github.com/digitornai/digitorn/internal/background/daemonclient"
 )
 
 // FuzzToolBody asserts the channel-facing approval renderer never panics and always

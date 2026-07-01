@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/catalog"
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/compiler/catalog"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
 )
 
 // =====================================================================

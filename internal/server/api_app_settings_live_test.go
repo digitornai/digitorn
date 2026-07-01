@@ -10,15 +10,15 @@ import (
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 
-	"github.com/mbathepaul/digitorn/internal/appmgr"
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
-	"github.com/mbathepaul/digitorn/internal/core/servicebus"
-	"github.com/mbathepaul/digitorn/internal/modules/database"
-	"github.com/mbathepaul/digitorn/internal/modulesettings"
-	"github.com/mbathepaul/digitorn/internal/persistence/models"
-	"github.com/mbathepaul/digitorn/internal/runtime"
-	"github.com/mbathepaul/digitorn/internal/runtime/dispatch"
-	"github.com/mbathepaul/digitorn/internal/server/mcpoauth"
+	"github.com/digitornai/digitorn/internal/appmgr"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/core/servicebus"
+	"github.com/digitornai/digitorn/internal/modules/database"
+	"github.com/digitornai/digitorn/internal/modulesettings"
+	"github.com/digitornai/digitorn/internal/persistence/models"
+	"github.com/digitornai/digitorn/internal/runtime"
+	"github.com/digitornai/digitorn/internal/runtime/dispatch"
+	"github.com/digitornai/digitorn/internal/server/mcpoauth"
 )
 
 type fakeAppGetter struct {

@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/mbathepaul/digitorn/internal/runtime/context/repomap"
+	"github.com/digitornai/digitorn/internal/runtime/context/repomap"
 )
 
 type Builtin func(d Data) string

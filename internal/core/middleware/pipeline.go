@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/mbathepaul/digitorn/internal/ports"
+	"github.com/digitornai/digitorn/internal/ports"
 )
 
 // Pipeline is an ordered chain of middlewares applied around an LLM call.

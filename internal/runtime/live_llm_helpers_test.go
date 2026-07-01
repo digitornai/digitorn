@@ -15,21 +15,21 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/appmgr"
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
-	"github.com/mbathepaul/digitorn/internal/core/servicebus"
-	"github.com/mbathepaul/digitorn/internal/domain/tool"
-	"github.com/mbathepaul/digitorn/internal/llm"
-	fsmod "github.com/mbathepaul/digitorn/internal/modules/filesystem"
-	dgruntime "github.com/mbathepaul/digitorn/internal/runtime"
-	"github.com/mbathepaul/digitorn/internal/runtime/agent"
-	"github.com/mbathepaul/digitorn/internal/runtime/context/index"
-	"github.com/mbathepaul/digitorn/internal/runtime/context/meta"
-	"github.com/mbathepaul/digitorn/internal/runtime/context/wiring"
-	"github.com/mbathepaul/digitorn/internal/runtime/dispatch"
-	"github.com/mbathepaul/digitorn/internal/runtime/policy"
-	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
-	"github.com/mbathepaul/digitorn/internal/worker"
+	"github.com/digitornai/digitorn/internal/appmgr"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/core/servicebus"
+	"github.com/digitornai/digitorn/internal/domain/tool"
+	"github.com/digitornai/digitorn/internal/llm"
+	fsmod "github.com/digitornai/digitorn/internal/modules/filesystem"
+	dgruntime "github.com/digitornai/digitorn/internal/runtime"
+	"github.com/digitornai/digitorn/internal/runtime/agent"
+	"github.com/digitornai/digitorn/internal/runtime/context/index"
+	"github.com/digitornai/digitorn/internal/runtime/context/meta"
+	"github.com/digitornai/digitorn/internal/runtime/context/wiring"
+	"github.com/digitornai/digitorn/internal/runtime/dispatch"
+	"github.com/digitornai/digitorn/internal/runtime/policy"
+	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
+	"github.com/digitornai/digitorn/internal/worker"
 )
 
 // =====================================================================
@@ -143,7 +143,7 @@ func buildLiveLLMWorker(t *testing.T) string {
 			exe += ".exe"
 		}
 		cmd := exec.Command("go", "build", "-o", exe,
-			"github.com/mbathepaul/digitorn/cmd/digitorn-worker-llm")
+			"github.com/digitornai/digitorn/cmd/digitorn-worker-llm")
 		cmd.Stdout = io.Discard
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {

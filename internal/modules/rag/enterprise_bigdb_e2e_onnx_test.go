@@ -18,8 +18,8 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 
-	"github.com/mbathepaul/digitorn/internal/embeddings"
-	"github.com/mbathepaul/digitorn/internal/indexer"
+	"github.com/digitornai/digitorn/internal/embeddings"
+	"github.com/digitornai/digitorn/internal/indexer"
 )
 
 // Enterprise production test : a LARGE remote MySQL knowledge base is indexed

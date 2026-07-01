@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/indexer"
+	"github.com/digitornai/digitorn/internal/indexer"
 )
 
 // cursorStore returns the most durable cursor available, in order : a shared

@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/config"
-	"github.com/mbathepaul/digitorn/internal/server"
+	"github.com/digitornai/digitorn/internal/config"
+	"github.com/digitornai/digitorn/internal/server"
 )
 
 // ----- One-time build of the digitorn-worker binary -----
@@ -43,7 +43,7 @@ func buildWorkerBinaryForD5(t *testing.T) string {
 			exe += ".exe"
 		}
 		cmd := exec.Command("go", "build", "-o", exe,
-			"github.com/mbathepaul/digitorn/cmd/digitorn-worker")
+			"github.com/digitornai/digitorn/cmd/digitorn-worker")
 		cmd.Stdout = io.Discard
 		cmd.Stderr = io.Discard
 		if err := cmd.Run(); err != nil {

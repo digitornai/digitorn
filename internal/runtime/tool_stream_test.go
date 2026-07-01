@@ -5,9 +5,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/llm"
-	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
-	"github.com/mbathepaul/digitorn/internal/runtime/turn"
+	"github.com/digitornai/digitorn/internal/llm"
+	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
+	"github.com/digitornai/digitorn/internal/runtime/turn"
 )
 
 // capturingSessions is a minimal SessionAccess that records appended events so a

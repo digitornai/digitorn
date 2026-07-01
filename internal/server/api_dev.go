@@ -5,9 +5,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/core/servicebus"
-	"github.com/mbathepaul/digitorn/internal/domain/tool"
-	"github.com/mbathepaul/digitorn/internal/module/proxy"
+	"github.com/digitornai/digitorn/internal/core/servicebus"
+	"github.com/digitornai/digitorn/internal/domain/tool"
+	"github.com/digitornai/digitorn/internal/module/proxy"
 )
 
 // devInvokeRequest is what POST /api/_dev/invoke accepts. Used by

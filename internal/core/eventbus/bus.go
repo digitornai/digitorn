@@ -15,7 +15,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/mbathepaul/digitorn/internal/ports"
+	"github.com/digitornai/digitorn/internal/ports"
 )
 
 var ErrBusClosed = errors.New("eventbus: bus is closed")

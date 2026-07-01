@@ -20,7 +20,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/background/adapter"
+	"github.com/digitornai/digitorn/internal/background/adapter"
 )
 
 // Adapter polls the daemon's /api/events/recent endpoint for events published

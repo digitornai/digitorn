@@ -4,7 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 
-	"github.com/mbathepaul/digitorn/internal/llm/toolcall"
+	"github.com/digitornai/digitorn/internal/llm/toolcall"
 )
 
 // NormalizeTextToolCalls recovers tool calls from a response whose model emitted

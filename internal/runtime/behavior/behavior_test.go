@@ -3,7 +3,7 @@ package behavior
 import (
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
 )
 
 func ruleActive(defs []ruleDef, id string) bool {

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
 )
 
 // reCache memoises compiled hook-condition regexes. Patterns come from the

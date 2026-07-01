@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
+	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
 )
 
 // newCompactorTestBusWithPaths is newCompactorTestBus but returns the on-disk

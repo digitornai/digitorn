@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/embeddings/loader"
-	"github.com/mbathepaul/digitorn/internal/embeddings/models"
+	"github.com/digitornai/digitorn/internal/embeddings/loader"
+	"github.com/digitornai/digitorn/internal/embeddings/models"
 )
 
 // Real cross-encoder proof. Downloads bge-reranker-base int8 (~266 MB).

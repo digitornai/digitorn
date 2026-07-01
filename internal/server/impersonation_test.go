@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/config"
+	"github.com/digitornai/digitorn/internal/config"
 )
 
 func TestCallerCanImpersonate(t *testing.T) {

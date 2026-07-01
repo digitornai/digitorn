@@ -3,8 +3,8 @@ package validate
 import (
 	"sort"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/diagnostic"
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/compiler/diagnostic"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
 )
 
 // triggerAdapters are the channel adapter types that double as event sources

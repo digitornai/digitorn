@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/runtime/turn"
+	"github.com/digitornai/digitorn/internal/runtime/turn"
 )
 
 func TestPhase_IsTerminal(t *testing.T) {

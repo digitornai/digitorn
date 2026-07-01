@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/runtime/agent"
-	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
+	"github.com/digitornai/digitorn/internal/runtime/agent"
+	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
 )
 
 // TestAgentLifecycle_ReachesParentStream locks the FULL real-time path a

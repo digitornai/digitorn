@@ -1,6 +1,6 @@
 package suggest
 
-import "github.com/mbathepaul/digitorn/internal/compiler/parse"
+import "github.com/digitornai/digitorn/internal/compiler/parse"
 
 func init() {
 	parse.SetClosestMatchHook(func(target string, pool []string) (string, bool) {

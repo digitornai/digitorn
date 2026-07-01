@@ -5,7 +5,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/mbathepaul/digitorn/internal/runtime/flow/flowexpr"
+	"github.com/digitornai/digitorn/internal/runtime/flow/flowexpr"
 )
 
 // nodeResult is the per-node data exposed in the flow context under the node's

@@ -3,7 +3,7 @@ package bifrost
 import (
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/llm"
+	"github.com/digitornai/digitorn/internal/llm"
 )
 
 // An assistant message that only carries tool_calls has empty text. DeepSeek's

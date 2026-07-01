@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mbathepaul/digitorn-cli/internal/client"
-	"github.com/mbathepaul/digitorn-cli/internal/theme"
+	"github.com/digitornai/digitorn-cli/internal/client"
+	"github.com/digitornai/digitorn-cli/internal/theme"
 )
 
 var ansiRe = regexp.MustCompile("\x1b\\[[0-9;]*m")

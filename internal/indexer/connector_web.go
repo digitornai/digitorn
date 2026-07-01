@@ -14,7 +14,7 @@ import (
 	htmltomd "github.com/JohannesKaufmann/html-to-markdown/v2"
 	"github.com/gocolly/colly/v2"
 
-	"github.com/mbathepaul/digitorn/internal/safehttp"
+	"github.com/digitornai/digitorn/internal/safehttp"
 )
 
 func init() { Register(&webConnector{}) }

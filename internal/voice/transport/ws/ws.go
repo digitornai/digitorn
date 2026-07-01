@@ -15,7 +15,7 @@ import (
 	"sync"
 
 	"github.com/gorilla/websocket"
-	"github.com/mbathepaul/digitorn/internal/voice"
+	"github.com/digitornai/digitorn/internal/voice"
 )
 
 const defaultRate = 8000

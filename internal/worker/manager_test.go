@@ -38,7 +38,7 @@ func buildDummyWorker(t *testing.T) string {
 			exe += ".exe"
 		}
 		cmd := exec.Command("go", "build", "-o", exe,
-			"github.com/mbathepaul/digitorn/cmd/digitorn-worker-dummy")
+			"github.com/digitornai/digitorn/cmd/digitorn-worker-dummy")
 		cmd.Stdout = io.Discard
 		cmd.Stderr = io.Discard
 		if err := cmd.Run(); err != nil {

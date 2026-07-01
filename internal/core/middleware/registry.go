@@ -3,8 +3,8 @@ package middleware
 import (
 	"log/slog"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
-	"github.com/mbathepaul/digitorn/internal/ports"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/ports"
 )
 
 // constructor builds one middleware instance from its YAML config + injected

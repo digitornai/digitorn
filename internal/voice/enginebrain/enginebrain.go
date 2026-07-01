@@ -12,7 +12,7 @@ package enginebrain
 import (
 	"context"
 
-	"github.com/mbathepaul/digitorn/internal/voice"
+	"github.com/digitornai/digitorn/internal/voice"
 )
 
 // Turn is one in-flight daemon turn. Deltas streams the assistant token-deltas and is

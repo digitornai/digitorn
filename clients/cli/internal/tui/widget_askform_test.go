@@ -7,7 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/mbathepaul/digitorn-cli/internal/theme"
+	"github.com/digitornai/digitorn-cli/internal/theme"
 )
 
 func kp(s string) tea.KeyMsg { return tea.KeyPressMsg{Text: s, Code: rune(s[0])} }

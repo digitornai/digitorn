@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/indexer"
+	"github.com/digitornai/digitorn/internal/indexer"
 )
 
 // File sources are driven by the indexation service (Tabula connector +

@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/runtime/context/index"
+	"github.com/digitornai/digitorn/internal/runtime/context/index"
 )
 
 // downSemantic simulates an embeddings worker that died after the index

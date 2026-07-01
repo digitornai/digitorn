@@ -28,8 +28,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/mbathepaul/digitorn/internal/appmgr"
-	"github.com/mbathepaul/digitorn/internal/runtime/context/meta"
+	"github.com/digitornai/digitorn/internal/appmgr"
+	"github.com/digitornai/digitorn/internal/runtime/context/meta"
 )
 
 // BundleLoader is the production SkillLoader : resolves skills via

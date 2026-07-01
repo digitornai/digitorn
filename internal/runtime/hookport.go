@@ -3,8 +3,8 @@ package runtime
 import (
 	"context"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
-	"github.com/mbathepaul/digitorn/internal/runtime/hooks"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/runtime/hooks"
 )
 
 // HookSource resolves the per-app hook engine + per-agent hook

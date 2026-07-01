@@ -26,10 +26,10 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/mbathepaul/digitorn/internal/background/daemonclient"
-	"github.com/mbathepaul/digitorn/internal/voice"
-	"github.com/mbathepaul/digitorn/internal/voice/transport/audiosocket"
-	"github.com/mbathepaul/digitorn/internal/voice/transport/twilio"
+	"github.com/digitornai/digitorn/internal/background/daemonclient"
+	"github.com/digitornai/digitorn/internal/voice"
+	"github.com/digitornai/digitorn/internal/voice/transport/audiosocket"
+	"github.com/digitornai/digitorn/internal/voice/transport/twilio"
 )
 
 const voiceContext = "You are on a live voice call. Reply in one or two short, spoken sentences. No markdown, no lists, no emojis."

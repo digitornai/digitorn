@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/domain/tool"
+	"github.com/digitornai/digitorn/internal/domain/tool"
 )
 
 // runRaw invokes the module's run handler for a session WITHOUT t.Fatalf, so it

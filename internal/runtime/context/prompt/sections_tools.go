@@ -4,7 +4,7 @@ import (
 	"sort"
 	"strings"
 
-	domainmodule "github.com/mbathepaul/digitorn/internal/domain/module"
+	domainmodule "github.com/digitornai/digitorn/internal/domain/module"
 )
 
 // OperatingGuideSection (doc "How to think" / "How to use tools") is

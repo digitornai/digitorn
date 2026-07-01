@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
 )
 
 // TestAutoConfig_ProbeRegistry hits the REAL MCP registry for a set of candidate

@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/diagnostic"
+	"github.com/digitornai/digitorn/internal/compiler/diagnostic"
 )
 
 // moduleMwApp splices a per-module middleware list under

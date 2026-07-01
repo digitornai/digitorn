@@ -3,8 +3,8 @@ package tui
 import (
 	"testing"
 
-	"github.com/mbathepaul/digitorn-cli/internal/client"
-	"github.com/mbathepaul/digitorn-cli/internal/theme"
+	"github.com/digitornai/digitorn-cli/internal/client"
+	"github.com/digitornai/digitorn-cli/internal/theme"
 )
 
 // A turn in progress must keep the animation loop alive even when nothing

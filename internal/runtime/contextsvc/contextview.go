@@ -3,8 +3,8 @@ package contextsvc
 import (
 	"sync"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
-	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
 )
 
 // ContextView is the first-class context variable : the single, rich read-model

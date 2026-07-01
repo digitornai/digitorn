@@ -12,9 +12,9 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
-	"github.com/mbathepaul/digitorn/internal/persistence/models"
-	"github.com/mbathepaul/digitorn/internal/runtime/policy/approval"
-	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
+	"github.com/digitornai/digitorn/internal/persistence/models"
+	"github.com/digitornai/digitorn/internal/runtime/policy/approval"
+	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
 )
 
 // ---------- Approvals ----------

@@ -8,10 +8,10 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/mbathepaul/digitorn/internal/appmgr"
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
-	"github.com/mbathepaul/digitorn/internal/runtime/context/prompt"
-	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
+	"github.com/digitornai/digitorn/internal/appmgr"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/runtime/context/prompt"
+	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
 )
 
 // appMemoryEnabled reports whether the app opted into the `memory` module, per

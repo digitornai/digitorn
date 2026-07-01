@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/pkg/module"
+	"github.com/digitornai/digitorn/pkg/module"
 )
 
 // TestAutoConfig_RealServer_E2E is the ultra-real proof: a user references a

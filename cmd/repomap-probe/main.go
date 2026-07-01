@@ -2,8 +2,8 @@ package main
 
 import (
 	"fmt"
-	"github.com/mbathepaul/digitorn/internal/runtime/context/repomap"
-	_ "github.com/mbathepaul/digitorn/internal/modules/filesystem"
+	"github.com/digitornai/digitorn/internal/runtime/context/repomap"
+	_ "github.com/digitornai/digitorn/internal/modules/filesystem"
 )
 
 func main() {

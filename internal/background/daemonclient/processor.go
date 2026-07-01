@@ -8,8 +8,8 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/background/runner"
-	"github.com/mbathepaul/digitorn/internal/background/store"
+	"github.com/digitornai/digitorn/internal/background/runner"
+	"github.com/digitornai/digitorn/internal/background/store"
 )
 
 // LaunchSpec is the decoded job payload: what session to feed and with what.

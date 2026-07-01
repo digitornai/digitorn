@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/modules/bash"
-	"github.com/mbathepaul/digitorn/internal/runtime/background"
-	"github.com/mbathepaul/digitorn/internal/runtime/context/meta"
+	"github.com/digitornai/digitorn/internal/modules/bash"
+	"github.com/digitornai/digitorn/internal/runtime/background"
+	"github.com/digitornai/digitorn/internal/runtime/context/meta"
 )
 
 // =============================================================================

@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/catalog"
-	"github.com/mbathepaul/digitorn/internal/compiler/diagnostic"
+	"github.com/digitornai/digitorn/internal/compiler/catalog"
+	"github.com/digitornai/digitorn/internal/compiler/diagnostic"
 )
 
 // TestStrictMode_CatchesMissingEnvVar proves that Compiler.Strict=true

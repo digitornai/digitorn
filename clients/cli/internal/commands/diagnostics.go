@@ -8,7 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/mbathepaul/digitorn-cli/internal/client"
+	"github.com/digitornai/digitorn-cli/internal/client"
 )
 
 // Version is the CLI version, set at build time via -ldflags.

@@ -7,8 +7,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/mbathepaul/digitorn/internal/background/adapter"
-	"github.com/mbathepaul/digitorn/internal/background/store"
+	"github.com/digitornai/digitorn/internal/background/adapter"
+	"github.com/digitornai/digitorn/internal/background/store"
 )
 
 // Intake is the durable Sink: it records every inbound Event as a pending job

@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/config"
-	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
-	"github.com/mbathepaul/digitorn/internal/server"
+	"github.com/digitornai/digitorn/internal/config"
+	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
+	"github.com/digitornai/digitorn/internal/server"
 )
 
 const flowAppYAML = `schema_version: 2

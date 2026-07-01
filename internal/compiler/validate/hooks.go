@@ -3,10 +3,10 @@ package validate
 import (
 	"fmt"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/catalog"
-	"github.com/mbathepaul/digitorn/internal/compiler/diagnostic"
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
-	"github.com/mbathepaul/digitorn/internal/compiler/suggest"
+	"github.com/digitornai/digitorn/internal/compiler/catalog"
+	"github.com/digitornai/digitorn/internal/compiler/diagnostic"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/compiler/suggest"
 )
 
 // CheckHooks validates the params of every hook condition / action against

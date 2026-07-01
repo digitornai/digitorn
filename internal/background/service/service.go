@@ -13,8 +13,8 @@ import (
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
 
-	"github.com/mbathepaul/digitorn/internal/background/runner"
-	"github.com/mbathepaul/digitorn/internal/background/store"
+	"github.com/digitornai/digitorn/internal/background/runner"
+	"github.com/digitornai/digitorn/internal/background/store"
 )
 
 // Inbound is the optional inbound side (the adapter manager): it serves channel

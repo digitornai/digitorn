@@ -5,10 +5,10 @@ import (
 	"testing"
 
 	// Registers the "json" gRPC codec the embeddings service negotiates on.
-	_ "github.com/mbathepaul/digitorn/internal/llm"
+	_ "github.com/digitornai/digitorn/internal/llm"
 
-	"github.com/mbathepaul/digitorn/internal/embeddings"
-	"github.com/mbathepaul/digitorn/internal/module/gateway"
+	"github.com/digitornai/digitorn/internal/embeddings"
+	"github.com/digitornai/digitorn/internal/module/gateway"
 )
 
 // The gateway round-trips an embed call from a worker-style client

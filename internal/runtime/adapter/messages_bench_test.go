@@ -6,8 +6,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/runtime/adapter"
-	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
+	"github.com/digitornai/digitorn/internal/runtime/adapter"
+	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
 )
 
 // buildTextHistory returns n messages alternating user / assistant with

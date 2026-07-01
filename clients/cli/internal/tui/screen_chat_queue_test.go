@@ -3,7 +3,7 @@ package tui
 import (
 	"testing"
 
-	"github.com/mbathepaul/digitorn-cli/internal/theme"
+	"github.com/digitornai/digitorn-cli/internal/theme"
 )
 
 // Messages typed while a turn is in flight queue locally (FIFO) and drain one

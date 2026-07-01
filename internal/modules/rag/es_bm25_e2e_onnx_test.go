@@ -6,7 +6,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/embeddings"
+	"github.com/digitornai/digitorn/internal/embeddings"
 )
 
 // Proves the memory lever : with the Elasticsearch backend, hybrid retrieval's

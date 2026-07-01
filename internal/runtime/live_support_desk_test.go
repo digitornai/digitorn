@@ -5,12 +5,12 @@ package runtime_test
 import (
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/compiler"
-	"github.com/mbathepaul/digitorn/internal/compiler/catalog"
-	_ "github.com/mbathepaul/digitorn/internal/modules/filesystem"
-	_ "github.com/mbathepaul/digitorn/internal/modules/rag"
-	"github.com/mbathepaul/digitorn/internal/runtime/policy/approval"
-	"github.com/mbathepaul/digitorn/pkg/module"
+	"github.com/digitornai/digitorn/internal/compiler"
+	"github.com/digitornai/digitorn/internal/compiler/catalog"
+	_ "github.com/digitornai/digitorn/internal/modules/filesystem"
+	_ "github.com/digitornai/digitorn/internal/modules/rag"
+	"github.com/digitornai/digitorn/internal/runtime/policy/approval"
+	"github.com/digitornai/digitorn/pkg/module"
 )
 
 // loadSupportDesk compiles the real examples/support-desk app and installs it on

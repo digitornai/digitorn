@@ -3,10 +3,10 @@ package validate
 import (
 	"fmt"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/catalog"
-	"github.com/mbathepaul/digitorn/internal/compiler/diagnostic"
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
-	"github.com/mbathepaul/digitorn/pkg/module"
+	"github.com/digitornai/digitorn/internal/compiler/catalog"
+	"github.com/digitornai/digitorn/internal/compiler/diagnostic"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/pkg/module"
 )
 
 func CheckConstraints(file string, def *schema.AppDefinition, cat *catalog.Catalog, bag *diagnostic.Bag) {

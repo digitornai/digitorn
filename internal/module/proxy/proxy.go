@@ -20,11 +20,11 @@ import (
 
 	"google.golang.org/grpc"
 
-	domainmodule "github.com/mbathepaul/digitorn/internal/domain/module"
-	"github.com/mbathepaul/digitorn/internal/domain/tool"
-	"github.com/mbathepaul/digitorn/internal/module/service"
-	"github.com/mbathepaul/digitorn/internal/worker"
-	pkgmodule "github.com/mbathepaul/digitorn/pkg/module"
+	domainmodule "github.com/digitornai/digitorn/internal/domain/module"
+	"github.com/digitornai/digitorn/internal/domain/tool"
+	"github.com/digitornai/digitorn/internal/module/service"
+	"github.com/digitornai/digitorn/internal/worker"
+	pkgmodule "github.com/digitornai/digitorn/pkg/module"
 )
 
 // Picker is the minimal surface the proxy needs from a worker pool :

@@ -19,11 +19,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/domain/tool"
-	"github.com/mbathepaul/digitorn/internal/ports"
-	"github.com/mbathepaul/digitorn/internal/runtime"
-	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
-	pkgmodule "github.com/mbathepaul/digitorn/pkg/module"
+	"github.com/digitornai/digitorn/internal/domain/tool"
+	"github.com/digitornai/digitorn/internal/ports"
+	"github.com/digitornai/digitorn/internal/runtime"
+	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
+	pkgmodule "github.com/digitornai/digitorn/pkg/module"
 )
 
 // BlobPutter stores a tool's binary output (an image read, a generated file) in

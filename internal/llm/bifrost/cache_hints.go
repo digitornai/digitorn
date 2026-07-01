@@ -30,7 +30,7 @@ package bifrost
 import (
 	"strings"
 
-	"github.com/mbathepaul/digitorn/internal/llm"
+	"github.com/digitornai/digitorn/internal/llm"
 )
 
 // recapSentinel marks a compaction handoff system message (the runtime wraps the

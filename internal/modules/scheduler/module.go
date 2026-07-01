@@ -20,10 +20,10 @@ import (
 	"sync"
 	"time"
 
-	domainmodule "github.com/mbathepaul/digitorn/internal/domain/module"
-	"github.com/mbathepaul/digitorn/internal/domain/tool"
-	"github.com/mbathepaul/digitorn/internal/flexjson"
-	"github.com/mbathepaul/digitorn/pkg/module"
+	domainmodule "github.com/digitornai/digitorn/internal/domain/module"
+	"github.com/digitornai/digitorn/internal/domain/tool"
+	"github.com/digitornai/digitorn/internal/flexjson"
+	"github.com/digitornai/digitorn/pkg/module"
 )
 
 // Config is the per-app configuration. BackgroundURL/OpsToken locate the bg

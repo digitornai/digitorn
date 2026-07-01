@@ -4,12 +4,12 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/bundle"
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/compiler/bundle"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
 )
 
 func TestMergeTemplatesFragment(t *testing.T) {
-	root, err := filepath.Abs("../appmgr/builtins/digitorn-lovable")
+	root, err := filepath.Abs("../appmgr/builtins/digitorn-craft")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -9,9 +9,9 @@ import (
 
 	"google.golang.org/grpc"
 
-	"github.com/mbathepaul/digitorn/internal/module/service"
-	"github.com/mbathepaul/digitorn/internal/ports"
-	"github.com/mbathepaul/digitorn/internal/worker"
+	"github.com/digitornai/digitorn/internal/module/service"
+	"github.com/digitornai/digitorn/internal/ports"
+	"github.com/digitornai/digitorn/internal/worker"
 )
 
 // Picker is the minimal surface needed from a worker pool : hand a healthy

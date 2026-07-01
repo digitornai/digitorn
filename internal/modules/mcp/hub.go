@@ -3,8 +3,8 @@ package mcp
 import (
 	"context"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
-	"github.com/mbathepaul/digitorn/internal/mcphub"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/mcphub"
 )
 
 // This file bridges the Hub's curated MCP catalog into the daemon's own

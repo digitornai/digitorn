@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/expr"
+	"github.com/digitornai/digitorn/internal/compiler/expr"
 )
 
 func PromptResolver(b *Bundle) expr.Resolver {

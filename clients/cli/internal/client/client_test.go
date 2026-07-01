@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mbathepaul/digitorn-cli/internal/client"
+	"github.com/digitornai/digitorn-cli/internal/client"
 )
 
 // ---- helpers -------------------------------------------------------

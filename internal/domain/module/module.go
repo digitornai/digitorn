@@ -4,7 +4,7 @@ package module
 import (
 	"context"
 
-	"github.com/mbathepaul/digitorn/internal/domain/tool"
+	"github.com/digitornai/digitorn/internal/domain/tool"
 )
 
 type Platform string

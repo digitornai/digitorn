@@ -8,7 +8,7 @@ import (
 
 	"google.golang.org/grpc"
 
-	"github.com/mbathepaul/digitorn/internal/worker"
+	"github.com/digitornai/digitorn/internal/worker"
 )
 
 // Client is the daemon-side handle to the tokenizer worker pool. Each call

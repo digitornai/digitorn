@@ -8,10 +8,10 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/diagnostic"
-	"github.com/mbathepaul/digitorn/internal/compiler/parse"
-	"github.com/mbathepaul/digitorn/internal/compiler/position"
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/compiler/diagnostic"
+	"github.com/digitornai/digitorn/internal/compiler/parse"
+	"github.com/digitornai/digitorn/internal/compiler/position"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
 )
 
 func Check(file string, doc *yaml.Node, def *schema.AppDefinition, bag *diagnostic.Bag) {

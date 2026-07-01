@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/embeddings"
-	"github.com/mbathepaul/digitorn/internal/indexer"
-	"github.com/mbathepaul/digitorn/pkg/module"
+	"github.com/digitornai/digitorn/internal/embeddings"
+	"github.com/digitornai/digitorn/internal/indexer"
+	"github.com/digitornai/digitorn/pkg/module"
 )
 
 // onnxEmbedder adapts the real multi-model embeddings Manager to the

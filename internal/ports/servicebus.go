@@ -3,8 +3,8 @@ package ports
 import (
 	"context"
 
-	"github.com/mbathepaul/digitorn/internal/domain/module"
-	"github.com/mbathepaul/digitorn/internal/domain/tool"
+	"github.com/digitornai/digitorn/internal/domain/module"
+	"github.com/digitornai/digitorn/internal/domain/tool"
 )
 
 // ServiceBus is the in-process registry of running modules. It enables

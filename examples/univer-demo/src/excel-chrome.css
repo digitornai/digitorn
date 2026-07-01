@@ -1,0 +1,15 @@
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+  background: #fff;
+  font-family: 'Segoe UI', Calibri, 'Helvetica Neue', Arial, sans-serif;
+}
+
+/* Slightly closer to Office 365 green when greenTheme is active */
+:root {
+  --univer-primary-500: #217346;
+  --univer-primary-600: #1e6b41;
+  --univer-primary-700: #185c37;
+}

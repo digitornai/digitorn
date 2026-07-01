@@ -28,13 +28,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/runtime"
-	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
+	"github.com/digitornai/digitorn/internal/runtime"
+	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
 )
 
 // Defaults applied when a Manager field is zero.
 const (
-	DefaultMaxDepth         = 8
+	DefaultMaxDepth         = 20
 	DefaultMaxAgentsPerRoot = 100_000
 
 	// DefaultAgentRetain bounds how long a terminal (completed/errored/cancelled)
@@ -42,8 +42,9 @@ const (
 	// Status / List it within its turn. The durable trail lives in the sink, so
 	// reaping the in-memory record loses nothing. agentReapInterval is how often
 	// the sweeper runs.
-	DefaultAgentRetain = 15 * time.Minute
+	DefaultAgentRetain = 30 * time.Minute
 	agentReapInterval  = 1 * time.Minute
+
 )
 
 var (

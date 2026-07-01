@@ -20,7 +20,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/background/adapter"
+	"github.com/digitornai/digitorn/internal/background/adapter"
 )
 
 const (

@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/background/adapter"
+	"github.com/digitornai/digitorn/internal/background/adapter"
 )
 
 // collect builds an adapter whose sink records every delivered event.

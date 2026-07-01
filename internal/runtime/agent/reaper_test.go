@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/runtime"
+	"github.com/digitornai/digitorn/internal/runtime"
 )
 
 type reaperRunner struct {

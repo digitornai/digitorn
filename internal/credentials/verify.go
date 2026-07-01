@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/dbaccess"
+	"github.com/digitornai/digitorn/internal/dbaccess"
 )
 
 // testTimeout bounds a live verification so a slow/unreachable provider can't

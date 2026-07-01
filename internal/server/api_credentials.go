@@ -6,7 +6,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/mbathepaul/digitorn/internal/credentials"
+	"github.com/digitornai/digitorn/internal/credentials"
 )
 
 // Per-user credential vault (settings plane). These handlers touch the DB +

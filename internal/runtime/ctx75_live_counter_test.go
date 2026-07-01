@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/llm"
-	"github.com/mbathepaul/digitorn/internal/runtime"
-	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
+	"github.com/digitornai/digitorn/internal/llm"
+	"github.com/digitornai/digitorn/internal/runtime"
+	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
 )
 
 // TestCTX75_LiveOutputTokenCounterStreams proves CTX-7.5 : during streaming,

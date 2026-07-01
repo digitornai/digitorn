@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	pkgmodule "github.com/mbathepaul/digitorn/pkg/module"
+	pkgmodule "github.com/digitornai/digitorn/pkg/module"
 )
 
 func TestACL_FilterFirst_PerUserIsolation(t *testing.T) {

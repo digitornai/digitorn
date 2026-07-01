@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/background/daemonclient"
+	"github.com/digitornai/digitorn/internal/background/daemonclient"
 )
 
 func TestToolBody_FileWriteIsReadable(t *testing.T) {

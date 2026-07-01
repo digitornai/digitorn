@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
+	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
 )
 
 type flowEventSessions struct {

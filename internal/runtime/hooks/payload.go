@@ -1,6 +1,6 @@
 package hooks
 
-import "github.com/mbathepaul/digitorn/internal/compiler/schema"
+import "github.com/digitornai/digitorn/internal/compiler/schema"
 
 // Payload carries the firing event's data into the condition
 // evaluator and the action executor. Field semantics align with

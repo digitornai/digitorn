@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	dgruntime "github.com/mbathepaul/digitorn/internal/runtime"
+	dgruntime "github.com/digitornai/digitorn/internal/runtime"
 )
 
 // =====================================================================

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/domain/tool"
+	"github.com/digitornai/digitorn/internal/domain/tool"
 )
 
 // dosHint must catch Windows cmd.exe usage on a bash shell and never flag a real

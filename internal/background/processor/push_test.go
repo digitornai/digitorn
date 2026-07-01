@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/background/adapter"
-	"github.com/mbathepaul/digitorn/internal/background/channels"
+	"github.com/digitornai/digitorn/internal/background/adapter"
+	"github.com/digitornai/digitorn/internal/background/channels"
 )
 
 func pushProc(ad adapter.Adapter) *ChannelProcessor {

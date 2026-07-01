@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/embeddings"
-	pkgmodule "github.com/mbathepaul/digitorn/pkg/module"
+	"github.com/digitornai/digitorn/internal/embeddings"
+	pkgmodule "github.com/digitornai/digitorn/pkg/module"
 )
 
 func TestProbe_CrossAppSharedKB(t *testing.T) {

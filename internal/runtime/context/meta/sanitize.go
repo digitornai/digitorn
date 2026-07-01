@@ -19,7 +19,7 @@ package meta
 import (
 	"strings"
 
-	"github.com/mbathepaul/digitorn/internal/runtime/toolname"
+	"github.com/digitornai/digitorn/internal/runtime/toolname"
 )
 
 // Canonicalize, Sanitize and SplitFQN are kept here as thin

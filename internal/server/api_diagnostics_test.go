@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/core/servicebus"
-	"github.com/mbathepaul/digitorn/internal/domain/module"
-	"github.com/mbathepaul/digitorn/internal/domain/tool"
-	"github.com/mbathepaul/digitorn/internal/modules/lsp"
-	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
+	"github.com/digitornai/digitorn/internal/core/servicebus"
+	"github.com/digitornai/digitorn/internal/domain/module"
+	"github.com/digitornai/digitorn/internal/domain/tool"
+	"github.com/digitornai/digitorn/internal/modules/lsp"
+	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
 )
 
 // ── Wiring: the debounce feeds the diagnostics push with the changed paths ──────

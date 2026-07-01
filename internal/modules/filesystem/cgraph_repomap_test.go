@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/runtime/context/repomap"
+	"github.com/digitornai/digitorn/internal/runtime/context/repomap"
 )
 
 func TestRepoMap_InjectedAndRanked(t *testing.T) {

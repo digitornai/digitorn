@@ -8,9 +8,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/mbathepaul/digitorn/internal/runtime/context/meta"
-	"github.com/mbathepaul/digitorn/internal/runtime/policy/approval"
-	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
+	"github.com/digitornai/digitorn/internal/runtime/context/meta"
+	"github.com/digitornai/digitorn/internal/runtime/policy/approval"
+	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
 )
 
 // askUserBridge is the production AskUserBridge : it backs the

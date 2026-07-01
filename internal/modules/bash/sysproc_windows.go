@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"syscall"
 
-	"github.com/mbathepaul/digitorn/internal/runtime/background"
+	"github.com/digitornai/digitorn/internal/runtime/background"
 )
 
 var (

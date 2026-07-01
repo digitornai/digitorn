@@ -20,9 +20,9 @@ import (
 
 	"google.golang.org/grpc"
 
-	"github.com/mbathepaul/digitorn/internal/runtime/tokencount"
-	"github.com/mbathepaul/digitorn/internal/tokenizer"
-	"github.com/mbathepaul/digitorn/internal/worker"
+	"github.com/digitornai/digitorn/internal/runtime/tokencount"
+	"github.com/digitornai/digitorn/internal/tokenizer"
+	"github.com/digitornai/digitorn/internal/worker"
 )
 
 func main() {

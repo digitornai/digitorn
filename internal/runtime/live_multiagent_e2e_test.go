@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
-	"github.com/mbathepaul/digitorn/internal/runtime/agent"
-	"github.com/mbathepaul/digitorn/internal/runtime/context/meta"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/runtime/agent"
+	"github.com/digitornai/digitorn/internal/runtime/context/meta"
 )
 
 // liveAgentAdapter bridges agent.Manager → meta.AgentManager for the live

@@ -7,8 +7,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/compiler"
-	"github.com/mbathepaul/digitorn/internal/compiler/codegen"
+	"github.com/digitornai/digitorn/internal/compiler"
+	"github.com/digitornai/digitorn/internal/compiler/codegen"
 )
 
 // TestCompilerAPI_BuildDeterministic verifies that compiling the same

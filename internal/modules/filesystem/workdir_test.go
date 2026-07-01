@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/domain/tool"
-	"github.com/mbathepaul/digitorn/internal/runtime/workdir"
+	"github.com/digitornai/digitorn/internal/domain/tool"
+	"github.com/digitornai/digitorn/internal/runtime/workdir"
 )
 
 // TestFilesystem_UsesCtxPolicyRoot proves WD-3: when a workdir PathPolicy rides

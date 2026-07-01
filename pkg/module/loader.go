@@ -9,8 +9,8 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	domainmodule "github.com/mbathepaul/digitorn/internal/domain/module"
-	"github.com/mbathepaul/digitorn/internal/domain/tool"
+	domainmodule "github.com/digitornai/digitorn/internal/domain/module"
+	"github.com/digitornai/digitorn/internal/domain/tool"
 )
 
 // ManifestFile is the on-disk representation of a module manifest.

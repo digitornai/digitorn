@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/background/adapter"
+	"github.com/digitornai/digitorn/internal/background/adapter"
 )
 
 // promptHarness stands in for the Discord REST API: it captures the nonce from the

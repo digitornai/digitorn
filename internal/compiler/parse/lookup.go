@@ -6,7 +6,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/position"
+	"github.com/digitornai/digitorn/internal/compiler/position"
 )
 
 // LookupNode navigates a YAML AST by a dotted path. Integer segments index

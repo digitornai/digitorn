@@ -1,8 +1,8 @@
 package catalog
 
 import (
-	"github.com/mbathepaul/digitorn/internal/domain/tool"
-	"github.com/mbathepaul/digitorn/pkg/module"
+	"github.com/digitornai/digitorn/internal/domain/tool"
+	"github.com/digitornai/digitorn/pkg/module"
 )
 
 // systemModuleManifests are the runtime-internal modules implemented as engine

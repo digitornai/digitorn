@@ -5,7 +5,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
+	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
 )
 
 // taskIDFakeSessions is a SessionAccess whose State carries no todos, so

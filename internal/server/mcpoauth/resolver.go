@@ -4,8 +4,8 @@ import (
 	"context"
 	"strings"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
-	"github.com/mbathepaul/digitorn/internal/module/service"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/module/service"
 )
 
 // ServerAuthLookup resolves a server's oauth2 auth block for an app. The daemon

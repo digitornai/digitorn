@@ -1,0 +1,207 @@
+schema_version: 2
+
+app:
+  app_id: support-desk
+  name: Digitorn Support Desk
+  short_name: Support
+  icon: "🎧"
+  color: "#4F46E5"
+  version: "1.0.0"
+  description: >
+    Omnichannel AI customer-support desk. Answers from your knowledge base,
+    routes by intent across specialist agents, and asks for human approval
+    before any sensitive action (refunds, cancellations).
+  author: "Digitorn"
+  category: "support"
+
+runtime:
+  mode: conversation
+  max_turns: 30
+  timeout: 120
+
+# ---------------------------------------------------------------------------
+# Agents — one coordinator that classifies, four specialists that act.
+# ---------------------------------------------------------------------------
+agents:
+  - id: triage
+    role: coordinator
+    brain:
+      provider: openai
+      model: zen-deepseek-v4-flash-free
+      temperature: 0.1
+      config:
+        api_key: placeholder
+        base_url: https://api.openai.com/v1
+    system_prompt: |
+      You are the triage brain of a customer-support desk. Read the customer
+      message and classify its intent into exactly one category:
+        - "question"  : general how-to / informational question
+        - "refund"    : wants money back, cancellation, billing dispute
+        - "bug"       : something is broken, an error, an outage
+        - "sales"     : pricing, plans, upgrades, buying intent
+        - "human"     : explicitly asks for a human, or is angry/complex
+      Respond with ONLY a JSON object: {"category": "<one of the five>"}.
+
+  - id: kb_agent
+    role: specialist
+    specialty: "Answers questions strictly from the knowledge base with citations."
+    brain:
+      provider: openai
+      model: zen-deepseek-v4-flash-free
+      temperature: 0.2
+      config:
+        api_key: placeholder
+        base_url: https://api.openai.com/v1
+    system_prompt: |
+      You answer customer questions using ONLY the knowledge base in your context. Answer concisely and cite the source section. If the knowledge base does not contain the answer, say so and
+      recommend escalating to a human — never invent policy.
+
+  - id: refund
+    role: specialist
+    specialty: "Handles refund and cancellation requests against policy."
+    brain:
+      provider: openai
+      model: zen-deepseek-v4-flash-free
+      temperature: 0.1
+      config:
+        api_key: placeholder
+        base_url: https://api.openai.com/v1
+    system_prompt: |
+      You handle refunds. Read the refund policy in your context. Decide
+      whether the request is eligible and whether it needs human approval
+      (any refund above $200, or annual plans, require approval).
+      Respond with ONLY JSON:
+      {"eligible": "<yes|no>", "needs_approval": "<yes|no>", "amount": "<number>", "reason": "<short>"}.
+
+  - id: tech
+    role: specialist
+    specialty: "Diagnoses technical problems and collects bug reports."
+    brain:
+      provider: openai
+      model: zen-deepseek-v4-flash-free
+      temperature: 0.3
+      config:
+        api_key: placeholder
+        base_url: https://api.openai.com/v1
+    system_prompt: |
+      You are technical support. Use the troubleshooting guide in your context. Give clear, numbered steps. If it looks like a
+      real bug, summarize a reproducible report the engineering team can act on.
+
+  - id: sales
+    role: specialist
+    specialty: "Answers pricing/plan questions and qualifies buying intent."
+    brain:
+      provider: openai
+      model: zen-deepseek-v4-flash-free
+      temperature: 0.4
+      config:
+        api_key: placeholder
+        base_url: https://api.openai.com/v1
+    system_prompt: |
+      You are a friendly sales assistant. Use the plan and pricing details in your context. Recommend the right plan for the customer's described needs and
+      invite them to upgrade. Never quote prices not in the knowledge base.
+
+# ---------------------------------------------------------------------------
+# Flow — the orchestration graph. Intent routing + a human approval gate on
+# high-value refunds. This is what makes the desk deterministic and auditable.
+# ---------------------------------------------------------------------------
+flow:
+  id: support
+  entry: triage_node
+  max_iterations: 30
+  description: "Triage → specialist → (approval gate for refunds) → resolution."
+  nodes:
+    - id: triage_node
+      type: agent
+      agent: triage
+      params:
+        task: "{{event.payload.message}}"
+      routes:
+        - { when: "category == 'question'", to: kb_node }
+        - { when: "category == 'refund'", to: refund_check }
+        - { when: "category == 'bug'", to: tech_node }
+        - { when: "category == 'sales'", to: sales_node }
+        - { default: true, to: human_handoff }
+
+    - id: kb_node
+      type: agent
+      agent: kb_agent
+      params:
+        task: "{{event.payload.message}}"
+      routes:
+        - { to: end }
+
+    - id: refund_check
+      type: agent
+      agent: refund
+      params:
+        task: "{{event.payload.message}}"
+      # Safe by default : a refund auto-completes ONLY when the specialist
+      # explicitly judged it eligible AND below the approval threshold. Anything
+      # ambiguous, unparseable, or high-value falls through to the human gate —
+      # a refund is NEVER silently approved.
+      routes:
+        - { when: "eligible == 'no'", to: refund_denied }
+        - { when: "eligible == 'yes' and needs_approval == 'no'", to: refund_done }
+        - { default: true, to: refund_gate }
+
+    - id: refund_gate
+      type: approval
+      message: "Refund requested: {{refund_check.output.reason}} (amount {{refund_check.output.amount}}). Approve?"
+      choices: [approve, reject]
+      routes:
+        - { when: "approvals.refund_gate == 'approve'", to: refund_done }
+        - { default: true, to: refund_denied }
+
+    - id: refund_done
+      type: terminal
+      params:
+        output: "Your refund has been approved and will arrive in 5–10 business days."
+
+    - id: refund_denied
+      type: terminal
+      params:
+        output: "This refund could not be approved automatically. A specialist will follow up shortly."
+
+    - id: tech_node
+      type: agent
+      agent: tech
+      params:
+        task: "{{event.payload.message}}"
+      routes:
+        - { to: end }
+
+    - id: sales_node
+      type: agent
+      agent: sales
+      params:
+        task: "{{event.payload.message}}"
+      routes:
+        - { to: end }
+
+    - id: human_handoff
+      type: terminal
+      params:
+        output: "I'm connecting you with a human specialist — one moment."
+
+# ---------------------------------------------------------------------------
+# Context — keep the agents grounded in time.
+# ---------------------------------------------------------------------------
+context:
+  sections:
+    - builtin: datetime
+    - title: "Knowledge Base — answer ONLY from this"
+      priority: 100
+      template: |
+        {{include:kb/refunds.md}}
+
+        {{include:kb/billing.md}}
+
+        {{include:kb/troubleshooting.md}}
+
+ui:
+  greeting: "Hi! I'm your support assistant. Ask me anything about your account, billing, or a problem you're hitting."
+  # Chat-only desk : no files, no IDE surface. Removes the workspace panel
+  # affordance entirely (the web defaults position to "right" otherwise).
+  workspace:
+    position: hidden

@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/runtime"
+	"github.com/digitornai/digitorn/internal/runtime"
 )
 
 var errTurnAborted = errors.New("turn aborted by client")

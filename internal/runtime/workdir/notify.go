@@ -3,7 +3,7 @@ package workdir
 import (
 	"context"
 
-	"github.com/mbathepaul/digitorn/internal/domain/tool"
+	"github.com/digitornai/digitorn/internal/domain/tool"
 )
 
 // NotifyFileChange signals the live workspace notifier that the agent just

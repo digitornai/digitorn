@@ -10,7 +10,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/spf13/cobra"
 
-	"github.com/mbathepaul/digitorn-cli/internal/client"
+	"github.com/digitornai/digitorn-cli/internal/client"
 )
 
 // NewSessions builds `digitorn sessions <app-id>` : a table of the

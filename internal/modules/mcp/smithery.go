@@ -6,7 +6,7 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
 )
 
 func resolveSmithery(id string, sc schema.MCPServerConfig) (connectSpec, error) {

@@ -14,7 +14,7 @@ import (
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/mbathepaul/digitorn/pkg/module"
+	"github.com/digitornai/digitorn/pkg/module"
 )
 
 // TestConcurrency_ParallelCalls hammers ONE live MCP connection with many

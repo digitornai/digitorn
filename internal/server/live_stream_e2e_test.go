@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	dgruntime "github.com/mbathepaul/digitorn/internal/runtime"
-	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
-	"github.com/mbathepaul/digitorn/internal/server"
+	dgruntime "github.com/digitornai/digitorn/internal/runtime"
+	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
+	"github.com/digitornai/digitorn/internal/server"
 )
 
 // =====================================================================

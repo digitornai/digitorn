@@ -12,10 +12,10 @@ import (
 	"github.com/go-chi/chi/v5"
 	"gorm.io/gorm"
 
-	"github.com/mbathepaul/digitorn/internal/appmgr"
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
-	"github.com/mbathepaul/digitorn/internal/persistence/models"
-	"github.com/mbathepaul/digitorn/internal/userskills"
+	"github.com/digitornai/digitorn/internal/appmgr"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/persistence/models"
+	"github.com/digitornai/digitorn/internal/userskills"
 )
 
 func newSkillsHarness(t *testing.T, allow bool) *chi.Mux {

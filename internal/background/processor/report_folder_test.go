@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/background/channels"
+	"github.com/digitornai/digitorn/internal/background/channels"
 )
 
 // Schedule-carried input blobs (a CV) convert to the daemon wire shape and skip

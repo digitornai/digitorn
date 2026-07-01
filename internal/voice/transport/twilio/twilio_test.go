@@ -9,8 +9,8 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/mbathepaul/digitorn/internal/voice"
-	"github.com/mbathepaul/digitorn/internal/voice/codec"
+	"github.com/digitornai/digitorn/internal/voice"
+	"github.com/digitornai/digitorn/internal/voice/codec"
 )
 
 // startServer runs the transport on an ephemeral port and returns a connected

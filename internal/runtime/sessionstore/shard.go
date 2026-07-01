@@ -11,7 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/safego"
+	"github.com/digitornai/digitorn/internal/safego"
 )
 
 type encodeBuf struct {

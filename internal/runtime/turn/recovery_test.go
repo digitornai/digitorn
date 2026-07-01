@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
-	"github.com/mbathepaul/digitorn/internal/runtime/turn"
+	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
+	"github.com/digitornai/digitorn/internal/runtime/turn"
 )
 
 func TestRecoverInFlight_NoTurnIsNoOp(t *testing.T) {

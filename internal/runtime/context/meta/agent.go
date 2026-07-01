@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/mbathepaul/digitorn/internal/runtime"
+	"github.com/digitornai/digitorn/internal/runtime"
 )
 
 type AgentManager interface {

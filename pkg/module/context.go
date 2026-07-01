@@ -3,7 +3,7 @@ package module
 import (
 	"context"
 
-	"github.com/mbathepaul/digitorn/internal/domain/tool"
+	"github.com/digitornai/digitorn/internal/domain/tool"
 )
 
 // Caller is the minimal contract a module needs to call another module — the

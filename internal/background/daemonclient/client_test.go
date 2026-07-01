@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/background/runner"
-	"github.com/mbathepaul/digitorn/internal/background/store"
+	"github.com/digitornai/digitorn/internal/background/runner"
+	"github.com/digitornai/digitorn/internal/background/store"
 )
 
 func errorsAs(err error, target any) bool { return errors.As(err, target) }

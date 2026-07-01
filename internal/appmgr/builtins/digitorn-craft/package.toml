@@ -1,15 +1,15 @@
-# Digitorn Lovable — Lovable-style AI app builder
+# Digitorn Craft — AI app builder
 #
 # Pick a starter template (portfolio, landing, dashboard, …) or
 # describe what you want; the agent scaffolds a real Vite + React
-# project on disk, runs its dev server, and registers it through
-# web_preview so the user's Preview tab loads the live HMR build.
+# project on disk, installs dependencies, runs ``npm run build``,
+# and the daemon auto-serves ``dist/`` in the Preview tab.
 
 [package]
-id = "digitorn-lovable"
-name = "Digitorn Lovable"
+id = "digitorn-craft"
+name = "Digitorn Craft"
 version = "0.1.0"
-description = "Lovable-style AI builder. Pick a template or describe an app, the agent ships a live preview in seconds."
+description = "React + Vite AI builder. Pick a template or describe an app; the agent writes code, installs deps, and ships a production build."
 author = "Digitorn"
 license = "MIT"
 category = "development"
@@ -23,7 +23,7 @@ publisher = "digitorn"
 digitorn_min = ">=1.0.0"
 
 [package.requirements]
-modules = ["preview", "web_preview", "shell", "workspace", "memory", "context_builder"]
+modules = ["bash", "filesystem", "memory", "context_builder", "lsp"]
 recommended_models = ["claude-haiku-4-5", "claude-sonnet-4-6"]
 external_tools = []
 
@@ -39,7 +39,7 @@ filesystem_scopes = []
 requires_approval = []
 
 [package.hub]
-tags = ["builder", "react", "no-code", "lovable", "templates", "official"]
+tags = ["builder", "react", "vite", "no-code", "craft", "templates", "official"]
 
 [package.release]
 released_at = "2026-05-09"

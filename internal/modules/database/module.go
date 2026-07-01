@@ -14,10 +14,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/dbaccess"
-	domainmodule "github.com/mbathepaul/digitorn/internal/domain/module"
-	"github.com/mbathepaul/digitorn/internal/domain/tool"
-	"github.com/mbathepaul/digitorn/pkg/module"
+	"github.com/digitornai/digitorn/internal/dbaccess"
+	domainmodule "github.com/digitornai/digitorn/internal/domain/module"
+	"github.com/digitornai/digitorn/internal/domain/tool"
+	"github.com/digitornai/digitorn/pkg/module"
 )
 
 type Module struct {

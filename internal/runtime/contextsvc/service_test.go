@@ -3,8 +3,8 @@ package contextsvc
 import (
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
-	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
 )
 
 func TestResolve_BudgetPressureAndRemaining(t *testing.T) {

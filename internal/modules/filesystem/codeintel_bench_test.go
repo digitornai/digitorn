@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/runtime/workdir"
-	"github.com/mbathepaul/digitorn/pkg/module"
+	"github.com/digitornai/digitorn/internal/runtime/workdir"
+	"github.com/digitornai/digitorn/pkg/module"
 )
 
 // --- test embedders (fakeEmb lives in sindex_test.go) ---

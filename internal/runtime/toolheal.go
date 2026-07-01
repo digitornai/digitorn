@@ -3,8 +3,8 @@ package runtime
 import (
 	"strings"
 
-	"github.com/mbathepaul/digitorn/internal/domain/tool"
-	"github.com/mbathepaul/digitorn/internal/runtime/toolname"
+	"github.com/digitornai/digitorn/internal/domain/tool"
+	"github.com/digitornai/digitorn/internal/runtime/toolname"
 )
 
 // healToolArgs repairs the COMMON ways an LLM mis-shapes a tool call's arguments,

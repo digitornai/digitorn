@@ -1,6 +1,6 @@
 package catalog
 
-import "github.com/mbathepaul/digitorn/pkg/module"
+import "github.com/digitornai/digitorn/pkg/module"
 
 var builtinConstraints = map[string]module.ConstraintType{
 	"allowed_commands": module.ConstraintStringList,

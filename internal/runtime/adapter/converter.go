@@ -3,8 +3,8 @@ package adapter
 import (
 	"context"
 
-	"github.com/mbathepaul/digitorn/internal/llm"
-	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
+	"github.com/digitornai/digitorn/internal/llm"
+	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
 )
 
 // Converter is a stateful, incremental front-end to MessagesToLLM. Within

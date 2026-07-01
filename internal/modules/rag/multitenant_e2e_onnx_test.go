@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/embeddings"
+	"github.com/digitornai/digitorn/internal/embeddings"
 )
 
 // End-to-end : N distinct apps index their own documents CONCURRENTLY with REAL

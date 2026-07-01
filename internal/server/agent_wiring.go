@@ -4,9 +4,9 @@ import (
 	"context"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/appmgr"
-	"github.com/mbathepaul/digitorn/internal/runtime/agent"
-	"github.com/mbathepaul/digitorn/internal/runtime/context/meta"
+	"github.com/digitornai/digitorn/internal/appmgr"
+	"github.com/digitornai/digitorn/internal/runtime/agent"
+	"github.com/digitornai/digitorn/internal/runtime/context/meta"
 )
 
 // agentManagerAdapter bridges the concrete agent.Manager to the

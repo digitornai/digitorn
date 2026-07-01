@@ -8,8 +8,8 @@ import (
 	"io"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/catalog"
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/compiler/catalog"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
 )
 
 func Build(def *schema.AppDefinition, cat *catalog.Catalog) (*Artifact, error) {

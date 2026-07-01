@@ -3,8 +3,8 @@ package policy_test
 import (
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
-	"github.com/mbathepaul/digitorn/internal/runtime/policy"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/runtime/policy"
 )
 
 // gate4Case is one row in the precedence truth table. Holding the

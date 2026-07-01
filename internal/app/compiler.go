@@ -8,7 +8,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	domainapp "github.com/mbathepaul/digitorn/internal/domain/app"
+	domainapp "github.com/digitornai/digitorn/internal/domain/app"
 )
 
 // Compiler loads, validates, and resolves variables in app YAML manifests.

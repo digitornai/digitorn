@@ -1,6 +1,6 @@
 package hooks
 
-import "github.com/mbathepaul/digitorn/internal/compiler/schema"
+import "github.com/digitornai/digitorn/internal/compiler/schema"
 
 // canonicalEvent resolves the 3 documented aliases to their
 // canonical event names per docs-site/language/31-tool-hooks.md

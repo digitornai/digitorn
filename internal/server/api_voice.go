@@ -12,15 +12,15 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/mbathepaul/digitorn/internal/llm"
-	"github.com/mbathepaul/digitorn/internal/runtime"
-	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
-	"github.com/mbathepaul/digitorn/internal/voice"
-	"github.com/mbathepaul/digitorn/internal/voice/busbrain"
-	"github.com/mbathepaul/digitorn/internal/voice/enginebrain"
-	"github.com/mbathepaul/digitorn/internal/voice/llmaudio"
-	"github.com/mbathepaul/digitorn/internal/voice/realtime"
-	wstransport "github.com/mbathepaul/digitorn/internal/voice/transport/ws"
+	"github.com/digitornai/digitorn/internal/llm"
+	"github.com/digitornai/digitorn/internal/runtime"
+	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
+	"github.com/digitornai/digitorn/internal/voice"
+	"github.com/digitornai/digitorn/internal/voice/busbrain"
+	"github.com/digitornai/digitorn/internal/voice/enginebrain"
+	"github.com/digitornai/digitorn/internal/voice/llmaudio"
+	"github.com/digitornai/digitorn/internal/voice/realtime"
+	wstransport "github.com/digitornai/digitorn/internal/voice/transport/ws"
 )
 
 // voiceSystemContext nudges the agent to answer in a spoken style. Injected per-call

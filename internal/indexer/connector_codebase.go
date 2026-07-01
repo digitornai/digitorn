@@ -11,7 +11,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/mbathepaul/digitorn/internal/codeast"
+	"github.com/digitornai/digitorn/internal/codeast"
 )
 
 func init() { Register(&codebaseConnector{}) }

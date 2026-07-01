@@ -3,8 +3,8 @@ package runtime
 import (
 	"context"
 
-	"github.com/mbathepaul/digitorn/internal/domain/tool"
-	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
+	"github.com/digitornai/digitorn/internal/domain/tool"
+	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
 )
 
 // ToolDispatcher is what the runtime calls to execute one tool. The

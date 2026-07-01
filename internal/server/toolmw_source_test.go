@@ -10,16 +10,16 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/appmgr"
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
-	"github.com/mbathepaul/digitorn/internal/core/servicebus"
-	domainmodule "github.com/mbathepaul/digitorn/internal/domain/module"
-	"github.com/mbathepaul/digitorn/internal/domain/tool"
-	fsmod "github.com/mbathepaul/digitorn/internal/modules/filesystem"
-	"github.com/mbathepaul/digitorn/internal/ports"
-	"github.com/mbathepaul/digitorn/internal/runtime"
-	"github.com/mbathepaul/digitorn/internal/runtime/dispatch"
-	"github.com/mbathepaul/digitorn/pkg/module"
+	"github.com/digitornai/digitorn/internal/appmgr"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/core/servicebus"
+	domainmodule "github.com/digitornai/digitorn/internal/domain/module"
+	"github.com/digitornai/digitorn/internal/domain/tool"
+	fsmod "github.com/digitornai/digitorn/internal/modules/filesystem"
+	"github.com/digitornai/digitorn/internal/ports"
+	"github.com/digitornai/digitorn/internal/runtime"
+	"github.com/digitornai/digitorn/internal/runtime/dispatch"
+	"github.com/digitornai/digitorn/pkg/module"
 )
 
 type fakeGetter struct{ app *appmgr.RuntimeApp }

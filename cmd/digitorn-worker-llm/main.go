@@ -24,9 +24,9 @@ import (
 
 	"google.golang.org/grpc"
 
-	"github.com/mbathepaul/digitorn/internal/llm"
-	llmbifrost "github.com/mbathepaul/digitorn/internal/llm/bifrost"
-	"github.com/mbathepaul/digitorn/internal/worker"
+	"github.com/digitornai/digitorn/internal/llm"
+	llmbifrost "github.com/digitornai/digitorn/internal/llm/bifrost"
+	"github.com/digitornai/digitorn/internal/worker"
 )
 
 func main() {

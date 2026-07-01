@@ -6,7 +6,7 @@ import (
 	"os/exec"
 	"syscall"
 
-	"github.com/mbathepaul/digitorn/internal/runtime/background"
+	"github.com/digitornai/digitorn/internal/runtime/background"
 )
 
 // errSignalINT / errSignalTERM are the exact sentinel values from the background

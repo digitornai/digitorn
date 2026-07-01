@@ -8,9 +8,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/appmgr"
-	bgchannels "github.com/mbathepaul/digitorn/internal/background/channels"
-	"github.com/mbathepaul/digitorn/internal/background/service"
+	"github.com/digitornai/digitorn/internal/appmgr"
+	bgchannels "github.com/digitornai/digitorn/internal/background/channels"
+	"github.com/digitornai/digitorn/internal/background/service"
 )
 
 func (d *Daemon) pushTriggersToBackground(ctx context.Context, app *appmgr.App) {

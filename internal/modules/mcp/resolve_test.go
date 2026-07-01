@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
 )
 
 func resolveFromRaw(t *testing.T, id string, raw map[string]any) (connectSpec, bool) {

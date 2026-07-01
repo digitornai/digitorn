@@ -3,8 +3,8 @@ package validate
 import (
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/diagnostic"
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/compiler/diagnostic"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
 )
 
 func runMCP(cfg, cons map[string]any) *diagnostic.Bag {

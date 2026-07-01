@@ -5,12 +5,12 @@ import (
 	"log/slog"
 	"sync"
 
-	"github.com/mbathepaul/digitorn/internal/appmgr"
-	"github.com/mbathepaul/digitorn/internal/embeddings"
-	"github.com/mbathepaul/digitorn/internal/modulesettings"
-	"github.com/mbathepaul/digitorn/internal/runtime/dispatch"
-	"github.com/mbathepaul/digitorn/internal/toolmw"
-	"github.com/mbathepaul/digitorn/pkg/module"
+	"github.com/digitornai/digitorn/internal/appmgr"
+	"github.com/digitornai/digitorn/internal/embeddings"
+	"github.com/digitornai/digitorn/internal/modulesettings"
+	"github.com/digitornai/digitorn/internal/runtime/dispatch"
+	"github.com/digitornai/digitorn/internal/toolmw"
+	"github.com/digitornai/digitorn/pkg/module"
 )
 
 // toolPipelineSource resolves the per-app tool-call middleware onion for an

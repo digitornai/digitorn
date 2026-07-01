@@ -21,15 +21,15 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/background/adapter/cron"
-	"github.com/mbathepaul/digitorn/internal/background/adapter/pieces"
-	"github.com/mbathepaul/digitorn/internal/background/channels"
-	"github.com/mbathepaul/digitorn/internal/background/daemonclient"
-	"github.com/mbathepaul/digitorn/internal/background/discovery"
-	"github.com/mbathepaul/digitorn/internal/background/processor"
-	"github.com/mbathepaul/digitorn/internal/background/service"
-	"github.com/mbathepaul/digitorn/internal/background/store"
-	"github.com/mbathepaul/digitorn/internal/background/userauth"
+	"github.com/digitornai/digitorn/internal/background/adapter/cron"
+	"github.com/digitornai/digitorn/internal/background/adapter/pieces"
+	"github.com/digitornai/digitorn/internal/background/channels"
+	"github.com/digitornai/digitorn/internal/background/daemonclient"
+	"github.com/digitornai/digitorn/internal/background/discovery"
+	"github.com/digitornai/digitorn/internal/background/processor"
+	"github.com/digitornai/digitorn/internal/background/service"
+	"github.com/digitornai/digitorn/internal/background/store"
+	"github.com/digitornai/digitorn/internal/background/userauth"
 )
 
 type inbound struct{ mgr *processor.Manager }

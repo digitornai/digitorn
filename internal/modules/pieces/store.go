@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/persistence/models"
-	"github.com/mbathepaul/digitorn/internal/server/mcpoauth"
+	"github.com/digitornai/digitorn/internal/persistence/models"
+	"github.com/digitornai/digitorn/internal/server/mcpoauth"
 	"gorm.io/gorm"
 )
 

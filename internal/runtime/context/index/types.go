@@ -26,7 +26,7 @@
 package index
 
 import (
-	"github.com/mbathepaul/digitorn/internal/domain/tool"
+	"github.com/digitornai/digitorn/internal/domain/tool"
 )
 
 // IndexedTool is the per-action record stored in the ToolIndex.

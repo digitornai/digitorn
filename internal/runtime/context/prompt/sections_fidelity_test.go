@@ -4,10 +4,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
-	domainmodule "github.com/mbathepaul/digitorn/internal/domain/module"
-	"github.com/mbathepaul/digitorn/internal/runtime/context/index"
-	"github.com/mbathepaul/digitorn/internal/runtime/context/prompt"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
+	domainmodule "github.com/digitornai/digitorn/internal/domain/module"
+	"github.com/digitornai/digitorn/internal/runtime/context/index"
+	"github.com/digitornai/digitorn/internal/runtime/context/prompt"
 )
 
 func boolp(b bool) *bool { return &b }

@@ -3,8 +3,8 @@ package validate
 import (
 	"fmt"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/diagnostic"
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/compiler/diagnostic"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
 )
 
 func (v *validator) checkGrantOverlap() {

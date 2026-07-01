@@ -25,8 +25,8 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/mbathepaul/digitorn/internal/voice"
-	"github.com/mbathepaul/digitorn/internal/voice/codec"
+	"github.com/digitornai/digitorn/internal/voice"
+	"github.com/digitornai/digitorn/internal/voice/codec"
 )
 
 const sampleRate = 8000 // Twilio Media Streams is fixed at 8 kHz μ-law mono

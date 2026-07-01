@@ -7,8 +7,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/domain/tool"
-	"github.com/mbathepaul/digitorn/internal/ports"
+	"github.com/digitornai/digitorn/internal/domain/tool"
+	"github.com/digitornai/digitorn/internal/ports"
 )
 
 // Emit is a helper function that emits an event on the EventBus if available.

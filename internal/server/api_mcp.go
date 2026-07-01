@@ -10,10 +10,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
-	"github.com/mbathepaul/digitorn/internal/mcpservers"
-	"github.com/mbathepaul/digitorn/internal/modules/mcp"
-	"github.com/mbathepaul/digitorn/internal/server/mcpoauth"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/mcpservers"
+	"github.com/digitornai/digitorn/internal/modules/mcp"
+	"github.com/digitornai/digitorn/internal/server/mcpoauth"
 )
 
 // managedMCPAppID is the sentinel app id under which per-user managed MCP servers

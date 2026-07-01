@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/background/adapter"
-	"github.com/mbathepaul/digitorn/internal/background/adapter/poll"
+	"github.com/digitornai/digitorn/internal/background/adapter"
+	"github.com/digitornai/digitorn/internal/background/adapter/poll"
 )
 
 const (

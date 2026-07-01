@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/runtime/dispatch"
-	"github.com/mbathepaul/digitorn/internal/toolmw"
+	"github.com/digitornai/digitorn/internal/runtime/dispatch"
+	"github.com/digitornai/digitorn/internal/toolmw"
 )
 
 // onionSource attaches the same pipeline to the filesystem module only.

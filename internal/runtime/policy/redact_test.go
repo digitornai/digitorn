@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/runtime/policy"
+	"github.com/digitornai/digitorn/internal/runtime/policy"
 )
 
 func TestRedactParams_EmptyInput(t *testing.T) {

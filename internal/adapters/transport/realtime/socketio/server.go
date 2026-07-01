@@ -23,7 +23,7 @@ import (
 	socket "github.com/zishang520/socket.io/servers/socket/v3"
 	siotypes "github.com/zishang520/socket.io/v3/pkg/types"
 
-	"github.com/mbathepaul/digitorn/internal/ports"
+	"github.com/digitornai/digitorn/internal/ports"
 )
 
 // Options configures the Socket.IO server.

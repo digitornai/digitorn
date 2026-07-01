@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/appmgr"
+	"github.com/digitornai/digitorn/internal/appmgr"
 )
 
 func TestSetBYOK_FlipsFlagAndPublishesSnapshot(t *testing.T) {

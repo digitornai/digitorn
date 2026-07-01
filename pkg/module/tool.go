@@ -1,6 +1,6 @@
 package module
 
-import "github.com/mbathepaul/digitorn/internal/domain/tool"
+import "github.com/digitornai/digitorn/internal/domain/tool"
 
 type Tool struct {
 	Name            string

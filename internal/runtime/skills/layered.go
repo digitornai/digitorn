@@ -3,7 +3,7 @@ package skills
 import (
 	"context"
 
-	"github.com/mbathepaul/digitorn/internal/runtime/context/meta"
+	"github.com/digitornai/digitorn/internal/runtime/context/meta"
 )
 
 // UserLoader resolves a per-user authored skill by command, scoped to

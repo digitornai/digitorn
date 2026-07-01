@@ -30,8 +30,8 @@
 package injection
 
 import (
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
-	"github.com/mbathepaul/digitorn/internal/llm"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/llm"
 )
 
 // Mode is one of the three documented injection modes. Mirrors

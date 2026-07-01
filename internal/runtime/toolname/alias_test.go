@@ -3,7 +3,7 @@ package toolname_test
 import (
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/runtime/toolname"
+	"github.com/digitornai/digitorn/internal/runtime/toolname"
 )
 
 // TestResolveAlias locks in the documented short-name aliases for the

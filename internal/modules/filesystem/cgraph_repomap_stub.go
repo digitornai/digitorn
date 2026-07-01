@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/mbathepaul/digitorn/internal/runtime/context/repomap"
+	"github.com/digitornai/digitorn/internal/runtime/context/repomap"
 )
 
 // Without treesitter there is no call graph, so the injected codebase map used to
@@ -231,7 +231,7 @@ func extractDocstring(lines []string, defLine int) string {
 }
 
 // importPathToFile converts a Go import path like
-// "github.com/mbathepaul/digitorn/internal/foo" to a relative file path by
+// "github.com/digitornai/digitorn/internal/foo" to a relative file path by
 // stripping the module prefix. Returns "" for standard library or unresolvable.
 func importPathToFile(impPath, modulePrefix, root string) string {
 	if !strings.HasPrefix(impPath, modulePrefix) {
@@ -256,7 +256,7 @@ func importPathToFile(impPath, modulePrefix, root string) string {
 }
 
 // detectModulePrefix reads go.mod to find the module path (e.g.
-// "github.com/mbathepaul/digitorn") so import paths can be mapped to files.
+// "github.com/digitornai/digitorn") so import paths can be mapped to files.
 func detectModulePrefix(root string) string {
 	data, _, err := readCapped(filepath.Join(root, "go.mod"), 4096)
 	if err != nil || len(data) == 0 {

@@ -1,6 +1,6 @@
 package compiler
 
-import "github.com/mbathepaul/digitorn/internal/compiler/schema"
+import "github.com/digitornai/digitorn/internal/compiler/schema"
 
 // Doc defaults for runtime.context (docs-site language/06-context-management).
 const (

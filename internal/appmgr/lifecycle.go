@@ -10,8 +10,8 @@ import (
 
 	"gorm.io/gorm"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/codegen"
-	"github.com/mbathepaul/digitorn/internal/persistence/models"
+	"github.com/digitornai/digitorn/internal/compiler/codegen"
+	"github.com/digitornai/digitorn/internal/persistence/models"
 )
 
 // Enable flips the row's Enabled flag to true and republishes the

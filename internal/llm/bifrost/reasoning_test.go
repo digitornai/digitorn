@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/maximhq/bifrost/core/providers/openai"
-	"github.com/mbathepaul/digitorn/internal/llm"
+	"github.com/digitornai/digitorn/internal/llm"
 )
 
 // An assistant message carrying ReasoningContent must reach the provider as

@@ -12,7 +12,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/embeddings"
+	"github.com/digitornai/digitorn/internal/embeddings"
 )
 
 func cosine(a, b []float32) float64 {

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/runtime/workdir"
+	"github.com/digitornai/digitorn/internal/runtime/workdir"
 )
 
 // TestProbe_BridgeRepo drives the filesystem tools against a real ~4k-file repo

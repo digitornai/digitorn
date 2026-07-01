@@ -3,7 +3,7 @@ package tui
 import (
 	"testing"
 
-	"github.com/mbathepaul/digitorn-cli/internal/theme"
+	"github.com/digitornai/digitorn-cli/internal/theme"
 )
 
 func pickerItems() []PickerItem {

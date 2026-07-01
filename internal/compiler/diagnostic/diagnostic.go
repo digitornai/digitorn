@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/position"
+	"github.com/digitornai/digitorn/internal/compiler/position"
 )
 
 type Severity int

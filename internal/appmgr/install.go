@@ -12,8 +12,8 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/codegen"
-	"github.com/mbathepaul/digitorn/internal/persistence/models"
+	"github.com/digitornai/digitorn/internal/compiler/codegen"
+	"github.com/digitornai/digitorn/internal/persistence/models"
 )
 
 // Install resolves the source, compiles it, persists it, and publishes

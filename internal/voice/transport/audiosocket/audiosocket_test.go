@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/voice"
+	"github.com/digitornai/digitorn/internal/voice"
 )
 
 func writeFrame(t *testing.T, conn net.Conn, kind byte, payload []byte) {

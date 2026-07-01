@@ -7,15 +7,15 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/compiler"
-	"github.com/mbathepaul/digitorn/internal/compiler/catalog"
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
-	"github.com/mbathepaul/digitorn/internal/runtime/hooks"
-	"github.com/mbathepaul/digitorn/pkg/module"
+	"github.com/digitornai/digitorn/internal/compiler"
+	"github.com/digitornai/digitorn/internal/compiler/catalog"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/runtime/hooks"
+	"github.com/digitornai/digitorn/pkg/module"
 
 	// Register the filesystem module so the compiler's catalog resolves
 	// the apps' `modules: [filesystem]` — mirrors the daemon boot wiring.
-	_ "github.com/mbathepaul/digitorn/internal/modules/filesystem"
+	_ "github.com/digitornai/digitorn/internal/modules/filesystem"
 )
 
 // =====================================================================

@@ -20,7 +20,7 @@ package middleware
 import (
 	"context"
 
-	"github.com/mbathepaul/digitorn/internal/ports"
+	"github.com/digitornai/digitorn/internal/ports"
 )
 
 // Base embeds in your middleware struct. Override Before and/or After.

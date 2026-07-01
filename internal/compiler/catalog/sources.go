@@ -1,7 +1,7 @@
 package catalog
 
 import (
-	"github.com/mbathepaul/digitorn/pkg/module"
+	"github.com/digitornai/digitorn/pkg/module"
 )
 
 // DirSource loads manifests from a directory of YAML files.

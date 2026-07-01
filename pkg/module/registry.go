@@ -7,7 +7,7 @@ import (
 	"sort"
 	"sync"
 
-	domainmodule "github.com/mbathepaul/digitorn/internal/domain/module"
+	domainmodule "github.com/digitornai/digitorn/internal/domain/module"
 )
 
 // Factory builds a fresh module instance. Registering a factory (not an

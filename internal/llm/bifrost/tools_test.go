@@ -6,7 +6,7 @@ import (
 
 	schemas "github.com/maximhq/bifrost/core/schemas"
 
-	"github.com/mbathepaul/digitorn/internal/llm"
+	"github.com/digitornai/digitorn/internal/llm"
 )
 
 // =====================================================================

@@ -6,7 +6,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/mbathepaul/digitorn/internal/usersnippets"
+	"github.com/digitornai/digitorn/internal/usersnippets"
 )
 
 // listSnippets returns the caller's saved prompts for an app, newest first.

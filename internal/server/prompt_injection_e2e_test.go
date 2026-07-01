@@ -5,14 +5,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
-	domainmodule "github.com/mbathepaul/digitorn/internal/domain/module"
-	"github.com/mbathepaul/digitorn/internal/domain/tool"
-	"github.com/mbathepaul/digitorn/internal/llm"
-	"github.com/mbathepaul/digitorn/internal/runtime/context/index"
-	"github.com/mbathepaul/digitorn/internal/runtime/context/injection"
-	"github.com/mbathepaul/digitorn/internal/runtime/context/prompt"
-	"github.com/mbathepaul/digitorn/pkg/module"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
+	domainmodule "github.com/digitornai/digitorn/internal/domain/module"
+	"github.com/digitornai/digitorn/internal/domain/tool"
+	"github.com/digitornai/digitorn/internal/llm"
+	"github.com/digitornai/digitorn/internal/runtime/context/index"
+	"github.com/digitornai/digitorn/internal/runtime/context/injection"
+	"github.com/digitornai/digitorn/internal/runtime/context/prompt"
+	"github.com/digitornai/digitorn/pkg/module"
 )
 
 // buildRegistryWith registers + starts a single module instance (which may

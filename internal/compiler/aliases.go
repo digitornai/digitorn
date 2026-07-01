@@ -3,7 +3,7 @@ package compiler
 import (
 	"strings"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
 )
 
 // moduleAliases maps a legacy module id to its current replacement. The old

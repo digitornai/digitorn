@@ -16,11 +16,11 @@ import (
 	"sync"
 	"time"
 
-	domainmodule "github.com/mbathepaul/digitorn/internal/domain/module"
-	"github.com/mbathepaul/digitorn/internal/domain/tool"
-	"github.com/mbathepaul/digitorn/internal/flexjson"
-	"github.com/mbathepaul/digitorn/internal/indexer"
-	"github.com/mbathepaul/digitorn/pkg/module"
+	domainmodule "github.com/digitornai/digitorn/internal/domain/module"
+	"github.com/digitornai/digitorn/internal/domain/tool"
+	"github.com/digitornai/digitorn/internal/flexjson"
+	"github.com/digitornai/digitorn/internal/indexer"
+	"github.com/digitornai/digitorn/pkg/module"
 )
 
 // engEntry is one cached per-(app,config) engine plus the sources it

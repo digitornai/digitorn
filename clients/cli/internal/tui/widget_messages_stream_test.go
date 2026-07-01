@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbathepaul/digitorn-cli/internal/theme"
+	"github.com/digitornai/digitorn-cli/internal/theme"
 )
 
 // The streaming-tool line must carry the SAME verb the real chip uses (so the

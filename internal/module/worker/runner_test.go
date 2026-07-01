@@ -15,9 +15,9 @@ import (
 
 	"google.golang.org/grpc"
 
-	domainmodule "github.com/mbathepaul/digitorn/internal/domain/module"
-	"github.com/mbathepaul/digitorn/internal/module/service"
-	"github.com/mbathepaul/digitorn/internal/worker"
+	domainmodule "github.com/digitornai/digitorn/internal/domain/module"
+	"github.com/digitornai/digitorn/internal/module/service"
+	"github.com/digitornai/digitorn/internal/worker"
 )
 
 // ----- Helpers : compile the binary once, share across tests -----
@@ -44,7 +44,7 @@ func buildWorkerBinary(t *testing.T) string {
 			exe += ".exe"
 		}
 		cmd := exec.Command("go", "build", "-o", exe,
-			"github.com/mbathepaul/digitorn/cmd/digitorn-worker")
+			"github.com/digitornai/digitorn/cmd/digitorn-worker")
 		cmd.Stdout = io.Discard
 		cmd.Stderr = io.Discard
 		if err := cmd.Run(); err != nil {

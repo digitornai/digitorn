@@ -8,9 +8,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
-	"github.com/mbathepaul/digitorn/internal/mcphub"
-	"github.com/mbathepaul/digitorn/internal/modules/pieces"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/mcphub"
+	"github.com/digitornai/digitorn/internal/modules/pieces"
 )
 
 // piecesModule returns the daemon's in-process pieces module, or nil when it

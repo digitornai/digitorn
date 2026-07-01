@@ -1,6 +1,6 @@
 package contextcompact
 
-import "github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
+import "github.com/digitornai/digitorn/internal/runtime/sessionstore"
 
 // estMsgTokens estimates ONE message's token cost with the documented
 // chars/token heuristic. This estimate is used ONLY to decide the truncation

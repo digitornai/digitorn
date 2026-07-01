@@ -9,12 +9,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
-	"github.com/mbathepaul/digitorn/internal/domain/tool"
-	bkend "github.com/mbathepaul/digitorn/internal/embeddings/backend"
-	"github.com/mbathepaul/digitorn/internal/runtime/context/embeddings"
-	"github.com/mbathepaul/digitorn/internal/runtime/context/index"
-	"github.com/mbathepaul/digitorn/internal/runtime/policy"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/domain/tool"
+	bkend "github.com/digitornai/digitorn/internal/embeddings/backend"
+	"github.com/digitornai/digitorn/internal/runtime/context/embeddings"
+	"github.com/digitornai/digitorn/internal/runtime/context/index"
+	"github.com/digitornai/digitorn/internal/runtime/policy"
 )
 
 func largeUniverse(n int) (univ []policy.AvailableAction, anchors map[string]string) {

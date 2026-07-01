@@ -21,24 +21,24 @@ import (
 
 	_ "go.uber.org/automaxprocs"
 
-	"github.com/mbathepaul/digitorn/internal/module/worker"
-	"github.com/mbathepaul/digitorn/internal/pathutil"
+	"github.com/digitornai/digitorn/internal/module/worker"
+	"github.com/digitornai/digitorn/internal/pathutil"
 
 	// Built-in modules. Each side-effect import registers the module
 	// in pkg/module.Default ; the runner picks the right ones at
 	// startup based on DIGITORN_WORKER_MODULES. Importing here does
 	// NOT mean the worker hosts ALL of them — it just makes them
 	// available for the runner to choose from.
-	_ "github.com/mbathepaul/digitorn/internal/modules/bash"
-	_ "github.com/mbathepaul/digitorn/internal/modules/database"
-	_ "github.com/mbathepaul/digitorn/internal/modules/filesystem"
-	_ "github.com/mbathepaul/digitorn/internal/modules/lsp"
-	_ "github.com/mbathepaul/digitorn/internal/modules/mcp"
-	_ "github.com/mbathepaul/digitorn/internal/modules/pieces"
-	_ "github.com/mbathepaul/digitorn/internal/modules/rag"
-	_ "github.com/mbathepaul/digitorn/internal/modules/http"
-	_ "github.com/mbathepaul/digitorn/internal/modules/web"
-	_ "github.com/mbathepaul/digitorn/internal/modules/workspace"
+	_ "github.com/digitornai/digitorn/internal/modules/bash"
+	_ "github.com/digitornai/digitorn/internal/modules/database"
+	_ "github.com/digitornai/digitorn/internal/modules/filesystem"
+	_ "github.com/digitornai/digitorn/internal/modules/lsp"
+	_ "github.com/digitornai/digitorn/internal/modules/mcp"
+	_ "github.com/digitornai/digitorn/internal/modules/pieces"
+	_ "github.com/digitornai/digitorn/internal/modules/rag"
+	_ "github.com/digitornai/digitorn/internal/modules/http"
+	_ "github.com/digitornai/digitorn/internal/modules/web"
+	_ "github.com/digitornai/digitorn/internal/modules/workspace"
 )
 
 func main() {

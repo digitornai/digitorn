@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/dbaccess"
+	"github.com/digitornai/digitorn/internal/dbaccess"
 )
 
 // dbaccessConnector Walks ANY database supported by the shared dbaccess socle

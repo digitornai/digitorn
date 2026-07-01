@@ -13,9 +13,9 @@
 package contextsvc
 
 import (
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
-	"github.com/mbathepaul/digitorn/internal/runtime/contextcompact"
-	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/runtime/contextcompact"
+	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
 )
 
 // DefaultOutputReserved mirrors the documented default reply headroom

@@ -38,8 +38,8 @@ import (
 
 	ort "github.com/yalue/onnxruntime_go"
 
-	"github.com/mbathepaul/digitorn/internal/embeddings/backend/tokenizer"
-	"github.com/mbathepaul/digitorn/internal/embeddings/models"
+	"github.com/digitornai/digitorn/internal/embeddings/backend/tokenizer"
+	"github.com/digitornai/digitorn/internal/embeddings/models"
 )
 
 // envOnce guards the one-time onnxruntime environment initialisation.

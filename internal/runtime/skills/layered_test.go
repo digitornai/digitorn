@@ -7,10 +7,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/appmgr"
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
-	"github.com/mbathepaul/digitorn/internal/runtime/context/meta"
-	"github.com/mbathepaul/digitorn/internal/runtime/skills"
+	"github.com/digitornai/digitorn/internal/appmgr"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/runtime/context/meta"
+	"github.com/digitornai/digitorn/internal/runtime/skills"
 )
 
 // userLayer is a controllable UserLoader for the layered tests.

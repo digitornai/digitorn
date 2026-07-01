@@ -1,7 +1,7 @@
 // Package app defines the compiled AppDefinition produced by the YAML compiler.
 package app
 
-import "github.com/mbathepaul/digitorn/internal/domain/agent"
+import "github.com/digitornai/digitorn/internal/domain/agent"
 
 // Meta holds high-level app metadata shown to users.
 type Meta struct {

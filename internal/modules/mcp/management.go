@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
 )
 
 // This file is the EXPORTED management surface the daemon's /api/mcp routes call:

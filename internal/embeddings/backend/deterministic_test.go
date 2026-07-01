@@ -5,7 +5,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/embeddings/backend"
+	"github.com/digitornai/digitorn/internal/embeddings/backend"
 )
 
 // =====================================================================

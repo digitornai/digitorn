@@ -1,0 +1,84 @@
+schema_version: 2
+
+app:
+  app_id: ops-alert
+  name: Ops Alert Desk
+  short_name: Alerts
+  icon: "🚨"
+  color: "#DC2626"
+  version: "1.0.0"
+  description: >
+    Background ops desk: ingests webhook alerts (monitoring, CI, custom integrations),
+    triages severity, summarizes impact, and recommends next steps. One session per
+    alert for a full audit trail.
+  author: "Digitorn"
+  category: "automation"
+  tags: [ops, webhook, background, monitoring]
+
+runtime:
+  mode: background
+  max_turns: 15
+  timeout: 90
+
+agents:
+  - id: triage
+    role: worker
+    brain:
+      provider: openai
+      model: zen-deepseek-v4-flash-free
+      temperature: 0.2
+      max_tokens: 4096
+      config:
+        api_key: placeholder
+        base_url: https://api.openai.com/v1
+    system_prompt: |
+      You are an on-call triage agent. You receive structured alert payloads from
+      external systems (monitoring, CI/CD, custom webhooks).
+
+      For each alert:
+      1. State severity: critical | warning | info
+      2. Summarize what happened in 2-3 sentences (plain language)
+      3. List likely causes (bullet points, max 3)
+      4. Recommend concrete next steps (numbered, actionable)
+      5. Say whether a human must be paged now (yes/no) and why
+
+      Be concise. No emoji. If the payload is ambiguous, say what is missing.
+      Never invent infrastructure details not present in the payload.
+
+context:
+  sections:
+    - builtin: datetime
+      priority: 10
+
+tools:
+  modules:
+    channels:
+      config:
+        default_agent: triage
+        max_turns: 15
+        timeout: 90
+        providers:
+          ops:
+            adapter: webhook
+            enabled: true
+            config:
+              inbound_path: /hook/ops
+              auth: api_key
+              api_key: "{{secret.OPS_WEBHOOK_KEY}}"
+            activation:
+              session: per_event
+              agent: triage
+              message: |
+                Ops alert received.
+
+                Source: {{event.source}}
+                Provider: {{event.provider}}
+
+                Payload:
+                {{event.payload}}
+              reply: none
+
+ui:
+  greeting: "Ops Alert Desk — wire POST /hook/ops on digitorn-background to ingest alerts."
+  workspace:
+    position: hidden

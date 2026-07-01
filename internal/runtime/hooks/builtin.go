@@ -1,6 +1,6 @@
 package hooks
 
-import "github.com/mbathepaul/digitorn/internal/compiler/schema"
+import "github.com/digitornai/digitorn/internal/compiler/schema"
 
 // BuiltinTaskCompletionGuardID is the id of the always-on stop hook that
 // holds the turn open when the agent tries to finish with unfinished tasks.

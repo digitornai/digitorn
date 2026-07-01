@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/indexer"
+	"github.com/digitornai/digitorn/internal/indexer"
 )
 
 type closeBackend struct {

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/dbaccess"
+	"github.com/digitornai/digitorn/internal/dbaccess"
 )
 
 func main() {

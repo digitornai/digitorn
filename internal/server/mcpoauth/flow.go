@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
 )
 
 // providerEndpoints mirrors the Python _WELL_KNOWN_PROVIDERS table verbatim.

@@ -10,9 +10,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/mbathepaul/digitorn/internal/background/adapter/cron"
-	"github.com/mbathepaul/digitorn/internal/background/channels"
-	"github.com/mbathepaul/digitorn/internal/background/store"
+	"github.com/digitornai/digitorn/internal/background/adapter/cron"
+	"github.com/digitornai/digitorn/internal/background/channels"
+	"github.com/digitornai/digitorn/internal/background/store"
 )
 
 // CreateTriggerRequest is the body of POST /ops/triggers.

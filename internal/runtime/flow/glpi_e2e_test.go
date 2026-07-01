@@ -14,13 +14,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/compiler"
-	"github.com/mbathepaul/digitorn/internal/compiler/catalog"
-	glpihttp "github.com/mbathepaul/digitorn/internal/modules/http"
-	"github.com/mbathepaul/digitorn/internal/runtime/flow"
-	"github.com/mbathepaul/digitorn/internal/runtime/policy/approval"
-	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
-	"github.com/mbathepaul/digitorn/pkg/module"
+	"github.com/digitornai/digitorn/internal/compiler"
+	"github.com/digitornai/digitorn/internal/compiler/catalog"
+	glpihttp "github.com/digitornai/digitorn/internal/modules/http"
+	"github.com/digitornai/digitorn/internal/runtime/flow"
+	"github.com/digitornai/digitorn/internal/runtime/policy/approval"
+	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
+	"github.com/digitornai/digitorn/pkg/module"
 )
 
 // capturedReq records one inbound request the mock GLPI server received.

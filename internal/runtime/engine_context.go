@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/appmgr"
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
-	"github.com/mbathepaul/digitorn/internal/runtime/context/ctxinject"
-	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
+	"github.com/digitornai/digitorn/internal/appmgr"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/runtime/context/ctxinject"
+	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
 )
 
 // contextSectionsText renders the app + agent YAML-declared context sections for

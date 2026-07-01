@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/pkg/module"
+	"github.com/digitornai/digitorn/pkg/module"
 )
 
 // TestDynamicAuth_AnyServer_E2E is the proof that the auth wiring is fully

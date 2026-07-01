@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/domain/tool"
+	"github.com/digitornai/digitorn/internal/domain/tool"
 )
 
 // pngBytes is a PNG signature + filler — enough for detectKind to classify it

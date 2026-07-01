@@ -5,8 +5,8 @@ import (
 	"io"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/domain/tool"
-	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
+	"github.com/digitornai/digitorn/internal/domain/tool"
+	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
 )
 
 type fakePutter struct {

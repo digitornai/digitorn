@@ -2581,7 +2581,7 @@ just set `label`, `icon` and `accent` explicitly.
 `digitorn-deepresearch`, `notes-lm` ship with no `runtime.modes`
 (single dispatch path → no picker). `digitorn-code`,
 `digitorn-builder` ship with `ask / plan / auto`.
-`digitorn-lovable` ships with `plan / build`.
+`digitorn-craft` ships with `plan / build`.
 
 #### Runtime semantics - what fires when the user picks a mode
 

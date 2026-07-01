@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/llm"
-	dgruntime "github.com/mbathepaul/digitorn/internal/runtime"
-	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
+	"github.com/digitornai/digitorn/internal/llm"
+	dgruntime "github.com/digitornai/digitorn/internal/runtime"
+	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
 )
 
 // modelCapturingLLM records the model the engine sent on the request.

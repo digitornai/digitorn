@@ -10,12 +10,12 @@ import (
 
 	"google.golang.org/grpc"
 
-	"github.com/mbathepaul/digitorn/internal/core/servicebus"
-	"github.com/mbathepaul/digitorn/internal/embeddings"
-	"github.com/mbathepaul/digitorn/internal/module/gateway"
-	"github.com/mbathepaul/digitorn/internal/module/service"
-	workerfw "github.com/mbathepaul/digitorn/internal/worker"
-	pkgmodule "github.com/mbathepaul/digitorn/pkg/module"
+	"github.com/digitornai/digitorn/internal/core/servicebus"
+	"github.com/digitornai/digitorn/internal/embeddings"
+	"github.com/digitornai/digitorn/internal/module/gateway"
+	"github.com/digitornai/digitorn/internal/module/service"
+	workerfw "github.com/digitornai/digitorn/internal/worker"
+	pkgmodule "github.com/digitornai/digitorn/pkg/module"
 )
 
 // EnvModules is the env var the daemon sets when spawning a worker

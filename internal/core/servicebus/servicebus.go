@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/mbathepaul/digitorn/internal/domain/module"
-	"github.com/mbathepaul/digitorn/internal/domain/tool"
-	"github.com/mbathepaul/digitorn/internal/ports"
+	"github.com/digitornai/digitorn/internal/domain/module"
+	"github.com/digitornai/digitorn/internal/domain/tool"
+	"github.com/digitornai/digitorn/internal/ports"
 )
 
 // Bus is the default in-memory implementation of ports.ServiceBus.

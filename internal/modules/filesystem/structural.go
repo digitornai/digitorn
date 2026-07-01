@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/mbathepaul/digitorn/internal/codeast"
+	"github.com/digitornai/digitorn/internal/codeast"
 )
 
 // astSearch walks the workspace, parses every AST-supported file with

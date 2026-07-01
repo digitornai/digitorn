@@ -1,6 +1,6 @@
 package policy
 
-import "github.com/mbathepaul/digitorn/internal/compiler/schema"
+import "github.com/digitornai/digitorn/internal/compiler/schema"
 
 // Gate3Permissions implements gate 3 of the documented security
 // sequence (docs-site/docs/tutorial/security-02-gates.md, line 84) :

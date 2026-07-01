@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/runtime/turn"
+	"github.com/digitornai/digitorn/internal/runtime/turn"
 )
 
 func TestPool_AcquireRelease_HappyPath(t *testing.T) {

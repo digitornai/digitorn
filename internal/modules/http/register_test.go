@@ -3,7 +3,7 @@ package http
 import (
 	"testing"
 
-	"github.com/mbathepaul/digitorn/pkg/module"
+	"github.com/digitornai/digitorn/pkg/module"
 )
 
 // TestModuleRegistered guards against the regression where internal/modules/http

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/runtime/workdir"
+	"github.com/digitornai/digitorn/internal/runtime/workdir"
 )
 
 func hardenModule(t *testing.T) (*Module, context.Context) {

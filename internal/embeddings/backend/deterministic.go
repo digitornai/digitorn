@@ -6,7 +6,7 @@ import (
 	"math"
 	"strings"
 
-	"github.com/mbathepaul/digitorn/internal/embeddings/models"
+	"github.com/digitornai/digitorn/internal/embeddings/models"
 )
 
 // Deterministic is the fallback inference backend : it produces

@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/runtime/tokencount"
+	"github.com/digitornai/digitorn/internal/runtime/tokencount"
 )
 
 func TestServer_CountMatchesCounter(t *testing.T) {

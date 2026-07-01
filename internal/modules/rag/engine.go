@@ -9,7 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
-	pkgmodule "github.com/mbathepaul/digitorn/pkg/module"
+	pkgmodule "github.com/digitornai/digitorn/pkg/module"
 )
 
 // Engine is the per-call RAG pipeline : chunk → embed (via the daemon

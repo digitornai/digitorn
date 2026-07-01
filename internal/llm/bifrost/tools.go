@@ -7,7 +7,7 @@ import (
 
 	schemas "github.com/maximhq/bifrost/core/schemas"
 
-	"github.com/mbathepaul/digitorn/internal/llm"
+	"github.com/digitornai/digitorn/internal/llm"
 )
 
 // Tool wire-up between llm.* and Bifrost's schemas.*. Kept in its own file

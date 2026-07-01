@@ -3,7 +3,7 @@ package runtime
 import (
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/llm"
+	"github.com/digitornai/digitorn/internal/llm"
 )
 
 // TestCanonicalize_BareActionRecovery : a weak model that drops the module

@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
-	"github.com/mbathepaul/digitorn/internal/llm"
-	dgruntime "github.com/mbathepaul/digitorn/internal/runtime"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/llm"
+	dgruntime "github.com/digitornai/digitorn/internal/runtime"
 )
 
 // TestTurn_LLMRequestCarriesIdentity : every LLM request is attributed to the

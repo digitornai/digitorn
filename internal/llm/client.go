@@ -13,7 +13,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/mbathepaul/digitorn/internal/worker"
+	"github.com/digitornai/digitorn/internal/worker"
 )
 
 // htrace writes a debug trace line to stderr when DIGITORN_LLM_TRACE is set,

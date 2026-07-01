@@ -10,17 +10,17 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/bundle"
-	"github.com/mbathepaul/digitorn/internal/compiler/catalog"
-	"github.com/mbathepaul/digitorn/internal/compiler/codegen"
-	"github.com/mbathepaul/digitorn/internal/compiler/diagnostic"
-	"github.com/mbathepaul/digitorn/internal/compiler/expr"
-	"github.com/mbathepaul/digitorn/internal/compiler/parse"
-	"github.com/mbathepaul/digitorn/internal/compiler/refs"
-	"github.com/mbathepaul/digitorn/internal/compiler/schema"
-	"github.com/mbathepaul/digitorn/internal/compiler/validate"
+	"github.com/digitornai/digitorn/internal/compiler/bundle"
+	"github.com/digitornai/digitorn/internal/compiler/catalog"
+	"github.com/digitornai/digitorn/internal/compiler/codegen"
+	"github.com/digitornai/digitorn/internal/compiler/diagnostic"
+	"github.com/digitornai/digitorn/internal/compiler/expr"
+	"github.com/digitornai/digitorn/internal/compiler/parse"
+	"github.com/digitornai/digitorn/internal/compiler/refs"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/compiler/validate"
 
-	_ "github.com/mbathepaul/digitorn/internal/compiler/suggest"
+	_ "github.com/digitornai/digitorn/internal/compiler/suggest"
 )
 
 type Compiler struct {

@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/ports"
-	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
+	"github.com/digitornai/digitorn/internal/ports"
+	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
 )
 
 // erroringRealtime records emits like fakeRealtime but every Emit FAILS, to

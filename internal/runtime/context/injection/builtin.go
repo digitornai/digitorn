@@ -1,7 +1,7 @@
 package injection
 
 import (
-	"github.com/mbathepaul/digitorn/internal/llm"
+	"github.com/digitornai/digitorn/internal/llm"
 )
 
 // builtinToolSpecs holds the canonical schemas for the meta-tools +

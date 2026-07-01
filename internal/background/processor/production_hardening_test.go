@@ -12,11 +12,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/background/adapter"
-	"github.com/mbathepaul/digitorn/internal/background/channels"
-	"github.com/mbathepaul/digitorn/internal/background/daemonclient"
-	"github.com/mbathepaul/digitorn/internal/background/runner"
-	"github.com/mbathepaul/digitorn/internal/background/store"
+	"github.com/digitornai/digitorn/internal/background/adapter"
+	"github.com/digitornai/digitorn/internal/background/channels"
+	"github.com/digitornai/digitorn/internal/background/daemonclient"
+	"github.com/digitornai/digitorn/internal/background/runner"
+	"github.com/digitornai/digitorn/internal/background/store"
 )
 
 // ─────────────────────────────────────────────────────────────────────────────

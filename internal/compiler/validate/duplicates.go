@@ -3,7 +3,7 @@ package validate
 import (
 	"fmt"
 
-	"github.com/mbathepaul/digitorn/internal/compiler/diagnostic"
+	"github.com/digitornai/digitorn/internal/compiler/diagnostic"
 )
 
 func (v *validator) checkDuplicates() {

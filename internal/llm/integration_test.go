@@ -15,9 +15,9 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health/grpc_health_v1"
 
-	"github.com/mbathepaul/digitorn/internal/llm"
-	_ "github.com/mbathepaul/digitorn/internal/llm" // ensure JSON codec registered
-	"github.com/mbathepaul/digitorn/internal/worker"
+	"github.com/digitornai/digitorn/internal/llm"
+	_ "github.com/digitornai/digitorn/internal/llm" // ensure JSON codec registered
+	"github.com/digitornai/digitorn/internal/worker"
 )
 
 var (
@@ -39,7 +39,7 @@ func buildLLMWorker(t *testing.T) string {
 			exe += ".exe"
 		}
 		cmd := exec.Command("go", "build", "-o", exe,
-			"github.com/mbathepaul/digitorn/cmd/digitorn-worker-llm")
+			"github.com/digitornai/digitorn/cmd/digitorn-worker-llm")
 		cmd.Stdout = io.Discard
 		cmd.Stderr = io.Discard
 		if err := cmd.Run(); err != nil {

@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mbathepaul/digitorn/internal/dbaccess"
-	"github.com/mbathepaul/digitorn/pkg/module"
+	"github.com/digitornai/digitorn/internal/dbaccess"
+	"github.com/digitornai/digitorn/pkg/module"
 )
 
 func pgDSN() string {

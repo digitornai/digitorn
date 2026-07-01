@@ -7,7 +7,7 @@ import (
 
 	"golang.org/x/sync/semaphore"
 
-	"github.com/mbathepaul/digitorn/internal/llm"
+	"github.com/digitornai/digitorn/internal/llm"
 )
 
 // BenchmarkDispatch_FastPath measures the per-call cost of the worker-

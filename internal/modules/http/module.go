@@ -14,12 +14,12 @@ import (
 	"strings"
 	"time"
 
-	domainmodule "github.com/mbathepaul/digitorn/internal/domain/module"
-	"github.com/mbathepaul/digitorn/internal/domain/tool"
-	"github.com/mbathepaul/digitorn/internal/flexjson"
-	"github.com/mbathepaul/digitorn/internal/modules/eventemitter"
-	"github.com/mbathepaul/digitorn/internal/safehttp"
-	"github.com/mbathepaul/digitorn/pkg/module"
+	domainmodule "github.com/digitornai/digitorn/internal/domain/module"
+	"github.com/digitornai/digitorn/internal/domain/tool"
+	"github.com/digitornai/digitorn/internal/flexjson"
+	"github.com/digitornai/digitorn/internal/modules/eventemitter"
+	"github.com/digitornai/digitorn/internal/safehttp"
+	"github.com/digitornai/digitorn/pkg/module"
 )
 
 const (

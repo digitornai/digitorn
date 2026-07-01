@@ -11,8 +11,8 @@ import (
 	"encoding/binary"
 	"log/slog"
 
-	"github.com/mbathepaul/digitorn/internal/llm"
-	"github.com/mbathepaul/digitorn/internal/voice"
+	"github.com/digitornai/digitorn/internal/llm"
+	"github.com/digitornai/digitorn/internal/voice"
 )
 
 // Transcriber / Synthesizer are the slice of *llm.Client the adapters need (so tests

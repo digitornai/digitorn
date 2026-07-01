@@ -10,11 +10,11 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
-	domainmodule "github.com/mbathepaul/digitorn/internal/domain/module"
-	mwp "github.com/mbathepaul/digitorn/internal/middlewareplugin"
-	"github.com/mbathepaul/digitorn/internal/module/service"
-	"github.com/mbathepaul/digitorn/internal/ports"
-	"github.com/mbathepaul/digitorn/internal/worker"
+	domainmodule "github.com/digitornai/digitorn/internal/domain/module"
+	mwp "github.com/digitornai/digitorn/internal/middlewareplugin"
+	"github.com/digitornai/digitorn/internal/module/service"
+	"github.com/digitornai/digitorn/internal/ports"
+	"github.com/digitornai/digitorn/internal/worker"
 )
 
 // host is a minimal service.Service hosting one module — what a worker binary

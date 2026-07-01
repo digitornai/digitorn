@@ -3,7 +3,7 @@ package contextcompact
 import (
 	"testing"
 
-	"github.com/mbathepaul/digitorn/internal/runtime/sessionstore"
+	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
 )
 
 func msgText(seq uint64, role, text string) sessionstore.Message {
