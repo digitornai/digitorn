@@ -38,7 +38,7 @@ jobs:
 
       - name: Install TUI dependencies
         working-directory: digitorn-tui-src/packages/digitorn
-        run: bun install --frozen-lockfile
+        run: bun install
 
       - name: Build TUI binaries
         run: |
