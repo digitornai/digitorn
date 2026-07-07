@@ -11,65 +11,26 @@ import (
 	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
 )
 
-// Action set — the 13 user-facing actions documented in
-// docs-site/language/31-tool-hooks.md "Actions (15 built-in)".
-// compile_yaml + auto_test_deploy are intentionally NOT exposed :
-// they're builder-app scoped and not intended for end-user YAMLs.
-//
-// Action effects fall in 4 categories :
-//
-//   1. Pure observability (no veto, no mutation) :
-//      log, notify
-//
-//   2. Conversation mutation (next-turn injection) :
-//      inject_message, compact_context
-//
-//   3. Tool-call interception (synchronous, may block / mutate) :
-//      gate           → veto the in-flight tool call
-//      transform_params → mutate args before dispatch
-//      transform_result → mutate outcome after dispatch
-//
-//   4. Side-effects (fire-and-forget) :
-//      module_action, module_action_inject, shell, pipe, chain,
-//      lsp_diagnose
-//
-// The Engine decides whether to run an action synchronously
-// (category 1+3) or asynchronously (category 2+4) based on the
-// action type and the firing event. See engine.go.
 
-// GateDecision is the result of running gate actions on tool_start.
-// When Allow is false the engine blocks the tool dispatch.
 type GateDecision struct {
 	Allow  bool
 	Reason string
 }
 
-// MessageInjection is the result of inject_message — the engine
-// projects it into session state at the next turn boundary.
 type MessageInjection struct {
 	Role        string
 	Content     string
 	Placeholder string
 }
 
-// ActionEffects bundles everything an action may want to write
-// back to the engine. Most actions touch zero or one field.
-//
-// Injects is a slice, not a single pointer : a chain action can emit
-// several inject_message effects, and the engine aggregates injects
-// across every hook that fires on the same event. Last-wins would
-// silently drop all but one — see applyEffects / mergeEffects.
+
 type ActionEffects struct {
 	Gate     *GateDecision
 	Injects  []*MessageInjection
 	Modified bool // true when transform_params/transform_result changed something
 }
 
-// RunAction dispatches one action and returns its effects.
-// Returns (effects, err) ; err is only set when the action's
-// own machinery failed (invalid params, bus error). A `gate`
-// action with allow=false is NOT an error — its effects carry
-// the veto decision.
+
 func RunAction(
 	ctx context.Context, action schema.HookAction, payload Payload,
 	deps ActionDeps,
@@ -105,18 +66,13 @@ func RunAction(
 	case "lsp_diagnose":
 		return runLSPDiagnose(ctx, action.Params, payload, deps)
 	case "compile_yaml", "auto_test_deploy":
-		// Builder-app scoped actions (doc "Actions (15 built-in)" — the
-		// last two). Accepted so a builder app compiles ; the builder
-		// wires its own executor. In the general runtime they're a
-		// deliberate no-op rather than an error.
+	
 		return ActionEffects{}, nil
 	}
 	return ActionEffects{}, fmt.Errorf("hook: unsupported action type %q", action.Type)
 }
 
-// ActionDeps is what the runtime injects so actions can reach
-// modules, the session bus, the LLM client, etc. Each field is
-// optional ; nil = "feature unavailable" (action errors cleanly).
+
 type ActionDeps struct {
 	Logger    ActionLogger
 	Sink      Sink
@@ -124,23 +80,18 @@ type ActionDeps struct {
 	Compactor SessionCompactor
 }
 
-// SessionCompactor triggers compaction for one session. Wired by the
-// daemon to the sessionstore Compactor ; nil in dev/test, in which
-// case compact_context degrades to a clean no-op.
+
 type SessionCompactor interface {
 	CompactSession(ctx context.Context, sessionID, strategy string, keepLast int) error
 }
 
-// ActionLogger is the slice of *slog.Logger the action needs.
+
 type ActionLogger interface {
 	Info(msg string, args ...any)
 	Warn(msg string, args ...any)
 	Error(msg string, args ...any)
 }
 
-// =====================================================================
-// log
-// =====================================================================
 
 func runLog(params map[string]any, p Payload, deps ActionDeps) error {
 	msg := renderTemplate(stringParam(params, "message"), p)
@@ -162,9 +113,7 @@ func runLog(params map[string]any, p Payload, deps ActionDeps) error {
 	return nil
 }
 
-// =====================================================================
-// notify  (fires a UI-facing session event so the client renders a toast)
-// =====================================================================
+
 
 func runNotify(ctx context.Context, params map[string]any, p Payload, deps ActionDeps) (ActionEffects, error) {
 	if deps.Sink == nil {
@@ -194,9 +143,7 @@ func runNotify(ctx context.Context, params map[string]any, p Payload, deps Actio
 	return ActionEffects{}, nil
 }
 
-// =====================================================================
-// inject_message  (queue a message for next turn)
-// =====================================================================
+
 
 func runInjectMessage(params map[string]any, p Payload) (ActionEffects, error) {
 	content := renderTemplate(stringParam(params, "content"), p)
@@ -217,9 +164,6 @@ func runInjectMessage(params map[string]any, p Payload) (ActionEffects, error) {
 	}, nil
 }
 
-// =====================================================================
-// gate  (veto power on tool_start)
-// =====================================================================
 
 func runGate(params map[string]any, p Payload) ActionEffects {
 	reason := renderTemplate(stringParam(params, "reason"), p)
@@ -229,9 +173,7 @@ func runGate(params map[string]any, p Payload) ActionEffects {
 	}
 }
 
-// =====================================================================
-// transform_params  (modify args before dispatch)
-// =====================================================================
+
 
 func runTransformParams(params map[string]any, p Payload) (ActionEffects, error) {
 	raw, ok := params["transformation"].(map[string]any)
@@ -249,9 +191,7 @@ func runTransformParams(params map[string]any, p Payload) (ActionEffects, error)
 	return ActionEffects{Modified: true}, nil
 }
 
-// =====================================================================
-// transform_result  (modify outcome after dispatch)
-// =====================================================================
+
 
 func runTransformResult(params map[string]any, p Payload) (ActionEffects, error) {
 	raw, ok := params["transformation"].(map[string]any)
@@ -269,9 +209,7 @@ func runTransformResult(params map[string]any, p Payload) (ActionEffects, error)
 	return ActionEffects{Modified: true}, nil
 }
 
-// =====================================================================
-// module_action  (fire-and-forget call to any tool)
-// =====================================================================
+
 
 func runModuleAction(ctx context.Context, params map[string]any, p Payload, deps ActionDeps) (string, error) {
 	if deps.Caller == nil {
@@ -294,9 +232,7 @@ func runModuleAction(ctx context.Context, params map[string]any, p Payload, deps
 	return deps.Caller.Call(ctx, target, rendered)
 }
 
-// =====================================================================
-// module_action_inject  (call any tool, inject result as next-turn message)
-// =====================================================================
+
 
 func runModuleActionInject(ctx context.Context, params map[string]any, p Payload, deps ActionDeps) (ActionEffects, error) {
 	out, err := runModuleAction(ctx, params, p, deps)
@@ -320,9 +256,7 @@ func runModuleActionInject(ctx context.Context, params map[string]any, p Payload
 	}, nil
 }
 
-// =====================================================================
-// chain  (sequential composition)
-// =====================================================================
+
 
 func runChain(ctx context.Context, params map[string]any, p Payload, deps ActionDeps) (ActionEffects, error) {
 	raw, ok := params["actions"].([]any)
@@ -355,10 +289,8 @@ func runChain(ctx context.Context, params map[string]any, p Payload, deps Action
 	return combined, nil
 }
 
-// mergeEffects folds the right hand effects into the left. Later
-// effects override earlier ones for the non-additive Gate field ;
-// Injects ACCUMULATE (a chain may inject several messages) ; Modified
-// is OR'd.
+
+
 func mergeEffects(a, b ActionEffects) ActionEffects {
 	if b.Gate != nil {
 		a.Gate = b.Gate
@@ -370,15 +302,7 @@ func mergeEffects(a, b ActionEffects) ActionEffects {
 	return a
 }
 
-// =====================================================================
-// shell  (run a command via the shell module)
-// =====================================================================
 
-// runShell dispatches the templated command to the shell module's
-// `exec` action through the same Caller (and thus security gates) the
-// LLM uses. `on_error` ∈ {log (default), ignore, raise} controls how a
-// failed command propagates. Doc params : command, cwd, timeout,
-// on_error.
 func runShell(ctx context.Context, params map[string]any, p Payload, deps ActionDeps) error {
 	if deps.Caller == nil {
 		return fmt.Errorf("shell: caller not wired")
@@ -396,21 +320,12 @@ func runShell(ctx context.Context, params map[string]any, p Payload, deps Action
 		// `timeout`. Bridge here.
 		args["timeout_seconds"] = t
 	}
-	// The shell hook action runs through the single, hardened shell module
-	// (bash.run) — same `command` contract, plus PATH-enrichment, bash-idiom
-	// translation and the safety guard.
+
 	_, cerr := deps.Caller.Call(ctx, "bash.run", args)
 	return applyOnError(params, cerr, deps, p, "shell")
 }
 
-// =====================================================================
-// pipe  (route this tool's output into another tool)
-// =====================================================================
 
-// runPipe is the generic tool-chaining primitive. `to` is the target
-// tool FQN ; `map` builds its args from templated values (typically
-// {{tool.result.*}}) ; `extra` adds static args. Routes through the
-// same Caller so the piped call goes through the security pipeline.
 func runPipe(ctx context.Context, params map[string]any, p Payload, deps ActionDeps) error {
 	if deps.Caller == nil {
 		return fmt.Errorf("pipe: caller not wired")
@@ -436,14 +351,7 @@ func runPipe(ctx context.Context, params map[string]any, p Payload, deps ActionD
 	return applyOnError(params, cerr, deps, p, "pipe")
 }
 
-// =====================================================================
-// lsp_diagnose  (post-write LSP trigger)
-// =====================================================================
 
-// runLSPDiagnose resolves the written file's path (and optionally
-// content) from the tool params and calls lsp.notify_change via the
-// Caller. The action is fully wired ; it requires the `lsp` module to
-// be registered to do real work — a clean error surfaces otherwise.
 func runLSPDiagnose(ctx context.Context, params map[string]any, p Payload, deps ActionDeps) (ActionEffects, error) {
 	if deps.Caller == nil {
 		return ActionEffects{}, fmt.Errorf("lsp_diagnose: caller not wired")
@@ -458,11 +366,7 @@ func runLSPDiagnose(ctx context.Context, params map[string]any, p Payload, deps 
 			args["content"] = cv
 		}
 	}
-	// Sync the document to the language server and get its diagnostics back.
-	// LSP failure (server not installed, in cooldown, unreachable) is non-fatal:
-	// log it and return clean so the edit result reaches the agent unchanged.
-	// The warning is intentional — it surfaces misconfiguration without breaking
-	// the agent's understanding of whether its edit succeeded.
+
 	raw, err := deps.Caller.Call(ctx, "lsp.notify_change", args)
 	if err != nil {
 		if deps.Logger != nil {
@@ -471,18 +375,12 @@ func runLSPDiagnose(ctx context.Context, params map[string]any, p Payload, deps 
 		}
 		return ActionEffects{}, nil
 	}
-	// Surface the errors/warnings to the agent WITHOUT a separate tool call or chat
-	// message — stay silent on a clean file (no noise).
+
 	msg := formatLSPDiagnostics(path, raw)
 	if msg == "" {
 		return ActionEffects{}, nil
 	}
-	// Fold the diagnostics straight into the edit/write tool's OWN result (the
-	// `text` surface a transform_result mutates), so the agent reads its errors
-	// inline as part of the edit it just made — exactly where it expects feedback.
-	// lsp_diagnose already runs synchronously on tool_end (see isSyncAction), so
-	// the mutation lands before the result reaches the LLM. Fall back to a message
-	// only if the result map is unavailable, so the diagnostics are never lost.
+
 	if p.ToolResult != nil {
 		prev, _ := p.ToolResult["text"].(string)
 		if strings.TrimSpace(prev) != "" {
@@ -495,9 +393,7 @@ func runLSPDiagnose(ctx context.Context, params map[string]any, p Payload, deps 
 	return ActionEffects{Injects: []*MessageInjection{{Role: "user", Content: msg}}}, nil
 }
 
-// resolveEditedPath finds the edited file's path from the post-tool payload,
-// trying the configured path_field then the aliases a model may key the file
-// under (file_path / filename / file) and finally the tool's own result path.
+
 func resolveEditedPath(params map[string]any, p Payload) string {
 	fields := []string{stringParam(params, "path_field")}
 	fields = append(fields,
@@ -516,11 +412,7 @@ func resolveEditedPath(params map[string]any, p Payload) string {
 	return ""
 }
 
-// formatLSPDiagnostics turns the lsp tool's result into a concise, readable
-// error list to inject — or "" when the file is clean AND the project is
-// clean, so a passing edit adds no noise. When the edit ripples into other
-// files, those are listed under a "[lsp] project" section so the agent sees
-// the WHOLE project state after every edit, not just the focal file.
+
 func formatLSPDiagnostics(path, raw string) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -580,14 +472,7 @@ func formatLSPDiagnostics(path, raw string) string {
 	return b.String()
 }
 
-// =====================================================================
-// compact_context  (trigger session compaction)
-// =====================================================================
 
-// runCompactContext triggers compaction of the active session with the
-// documented strategy + keep_last. Real when deps.Compactor is wired
-// (the daemon binds it to the sessionstore Compactor) ; a clean no-op
-// in dev/test so the hook never errors when compaction is unavailable.
 func runCompactContext(ctx context.Context, params map[string]any, p Payload, deps ActionDeps) error {
 	if deps.Compactor == nil {
 		return nil
@@ -597,13 +482,7 @@ func runCompactContext(ctx context.Context, params map[string]any, p Payload, de
 	return deps.Compactor.CompactSession(ctx, p.SessionID, strategy, keepLast)
 }
 
-// =====================================================================
-// shared helpers
-// =====================================================================
 
-// applyOnError maps a downstream error through the hook's `on_error`
-// policy : raise → propagate, ignore → swallow, log (default) → log +
-// swallow. Used by shell + pipe.
 func applyOnError(params map[string]any, err error, deps ActionDeps, p Payload, action string) error {
 	if err == nil {
 		return nil
@@ -634,9 +513,6 @@ func readActionInt(params map[string]any, key string) int {
 	return 0
 }
 
-// =====================================================================
-// helpers
-// =====================================================================
 
 func stringParam(params map[string]any, key string) string {
 	if v, ok := params[key].(string); ok {
@@ -646,8 +522,6 @@ func stringParam(params map[string]any, key string) string {
 }
 
 func readActionParams(params map[string]any) map[string]any {
-	// Doc allows `params` OR `action_params` for the call args
-	// (module_action / module_action_inject).
 	if v, ok := params["params"].(map[string]any); ok {
 		return v
 	}

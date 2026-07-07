@@ -10,22 +10,7 @@ import (
 	"github.com/digitornai/digitorn/internal/compiler/schema"
 )
 
-// =====================================================================
-// CONFORMANCE LOCK — the anti-divergence verifier.
-//
-// This test is the single thing that keeps the hook vocabulary honest.
-// It asserts that the doc, the compiler schema enum, the compiler param
-// catalog, and the runtime dispatch all describe the EXACT SAME set of
-// conditions and actions. If anyone adds an action to the catalog
-// without a runtime handler, renames a condition, or drifts from the
-// documentation, this test fails in CI — divergence becomes impossible.
-//
-// docD... lists are transcribed verbatim from
-// docs-site/language/31-tool-hooks.md. They are the source of truth ;
-// everything else must equal them.
-// =====================================================================
 
-// docConditions — "Conditions (14 built-in)".
 var docConditions = []string{
 	"always", "never",
 	"context_pressure", "turn_count", "tool_calls", "message_count",
@@ -66,9 +51,6 @@ func equalSets(t *testing.T, label string, got, want []string) {
 	}
 }
 
-// =====================================================================
-// 1. Compiler schema enum == doc
-// =====================================================================
 
 func TestConformance_SchemaConditionsMatchDoc(t *testing.T) {
 	got := make([]string, len(schema.AllHookConditions))
@@ -86,9 +68,6 @@ func TestConformance_SchemaActionsMatchDoc(t *testing.T) {
 	equalSets(t, "schema.AllHookActions vs doc", got, docActions)
 }
 
-// =====================================================================
-// 2. Compiler param catalog == doc
-// =====================================================================
 
 func TestConformance_CatalogConditionsMatchDoc(t *testing.T) {
 	got := make([]string, 0, len(catalog.HookConditions))
@@ -106,10 +85,7 @@ func TestConformance_CatalogActionsMatchDoc(t *testing.T) {
 	equalSets(t, "catalog.HookActions vs doc", got, docActions)
 }
 
-// =====================================================================
-// 3. Runtime implements every doc condition (none falls to default-false
-//    silently). For each condition we craft a payload that MUST fire it.
-// =====================================================================
+
 
 func TestConformance_RuntimeHandlesEveryCondition(t *testing.T) {
 	cases := []struct {
@@ -153,16 +129,10 @@ func TestConformance_RuntimeHandlesEveryCondition(t *testing.T) {
 	}
 }
 
-// =====================================================================
-// 4. Runtime implements every doc action (RunAction never returns the
-//    "unsupported action type" sentinel for a documented action).
-// =====================================================================
+
 
 func TestConformance_RuntimeHandlesEveryAction(t *testing.T) {
-	// Minimal params so each action gets past its own arg-parsing to
-	// prove the DISPATCH case exists. We don't wire deps : actions that
-	// need a Caller/Sink return their own "not wired" error, which is
-	// fine — the only forbidden outcome is "unsupported action type".
+
 	params := map[string]map[string]any{
 		"compact_context":      {},
 		"inject_message":       {"content": "hi"},

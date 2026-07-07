@@ -11,7 +11,7 @@ import (
 // Filter syntax `expr | filter | filter` is recognized but filters are stripped
 // (filters apply at runtime; the compiler validates whitelisted names only).
 func Parse(s string) (Expr, error) {
-	base, _ := splitFilters(s)
+	base, filters := splitFilters(s)
 	p := &parser{src: base, pos: 0}
 	expr, err := p.parseFallback()
 	if err != nil {
@@ -20,6 +20,10 @@ func Parse(s string) (Expr, error) {
 	p.skipSpace()
 	if p.pos != len(p.src) {
 		return nil, fmt.Errorf("unexpected %q at offset %d", p.src[p.pos:], p.pos)
+	}
+	if ref, ok := expr.(Ref); ok && len(filters) > 0 {
+		ref.Filters = filters
+		return ref, nil
 	}
 	return expr, nil
 }

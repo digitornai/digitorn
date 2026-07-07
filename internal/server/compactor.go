@@ -11,6 +11,7 @@ import (
 
 	"github.com/digitornai/digitorn/internal/appmgr"
 	"github.com/digitornai/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/credentials"
 	"github.com/digitornai/digitorn/internal/llm"
 	"github.com/digitornai/digitorn/internal/runtime/contextcompact"
 	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
@@ -25,8 +26,12 @@ type contextCompactor struct {
 	apps   appmgr.Manager
 	llm    chatLLM
 	logger *slog.Logger
-	touch     func(sessionID string)
-	touchSync func(sessionID string)
+	// credResolver resolves the per-user BYOK credential (base_url + key) for a
+	// cross-provider pinned model, so the summarizer's own LLM call routes to the
+	// same provider as the turn. nil = embedded auth only (tests / no vault).
+	credResolver *credentials.Resolver
+	touch        func(sessionID string)
+	touchSync    func(sessionID string)
 
 	nonBlocking bool
 	prepare func(sessionID, jwt string)
@@ -117,7 +122,7 @@ func (c *contextCompactor) CompactSession(ctx context.Context, sessionID, strate
 			}
 		}
 		if !applied {
-			s := &llmSummarizer{client: c.llm, brain: brain, sessionID: sessionID, byok: byok, userJWT: llm.UserJWTFromContext(ctx), logger: c.logger}
+			s := &llmSummarizer{client: c.llm, brain: brain, sessionID: sessionID, byok: byok, userJWT: llm.UserJWTFromContext(ctx), logger: c.logger, resolver: c.credResolver, userID: snap.UserID}
 			prior := ""
 			if snap.ContextCompaction != nil {
 				prior = snap.ContextCompaction.Summary
@@ -285,6 +290,16 @@ func (c *contextCompactor) resolveContextConfig(ctx context.Context, appID, sess
 			}
 			if ovr, ok := snap.ModelOverrides[agentID]; ok && ovr != "" {
 				brain.Model = ovr
+				// Carry the cross-provider pin + output cap so the summarizer's own
+				// LLM call uses the same BYOK credential as the turn (else it falls
+				// back to the brain's provider → 401 on a local model).
+				if pov := snap.ProviderOverrides[agentID]; pov != "" {
+					brain.Provider = pov
+				}
+				if out := snap.OutputTokenOverrides[agentID]; out > 0 {
+					v := out
+					brain.MaxTokens = &v
+				}
 				if eff != nil {
 					eff.MaxTokens = 0
 				}
@@ -360,6 +375,10 @@ type llmSummarizer struct {
 	byok bool
 	userJWT string
 	logger *slog.Logger
+	// resolver + userID resolve the BYOK vault credential for brain.Provider when
+	// the model is cross-provider pinned (e.g. a local LM Studio model).
+	resolver *credentials.Resolver
+	userID   string
 }
 
 func (s *llmSummarizer) summarizeFailed(err error) {
@@ -384,6 +403,18 @@ func (s *llmSummarizer) Summarize(ctx context.Context, dropped []sessionstore.Me
 	var apiKey, baseURL string
 	if s.byok {
 		apiKey, baseURL = embeddedBrainAuth(s.brain)
+		// Cross-provider pin: the vault credential for brain.Provider (base_url +
+		// key) wins over the brain's embedded auth — same rule as the engine, so a
+		// local model summarizes on the local server instead of 401ing on the
+		// brain's cloud provider.
+		if s.resolver != nil && s.userID != "" {
+			if uk, ub, ok := s.resolver.Lookup(ctx, s.userID, s.brain.Provider); ok {
+				apiKey = uk
+				if ub != "" {
+					baseURL = ub
+				}
+			}
+		}
 	}
 	transcript := renderTranscript(dropped)
 	if strings.TrimSpace(transcript) == "" {

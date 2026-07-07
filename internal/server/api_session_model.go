@@ -228,10 +228,11 @@ func (d *Daemon) putSessionModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Agent          string `json:"agent"`
-		Model          string `json:"model"`
-		MaxContextTokens int  `json:"max_ctx_tokens"`
-		ReasoningEffort string `json:"reasoning_effort"`
+		Agent            string `json:"agent"`
+		Model            string `json:"model"`
+		MaxContextTokens int    `json:"max_ctx_tokens"`
+		MaxOutputTokens  int    `json:"max_output_tokens"`
+		ReasoningEffort  string `json:"reasoning_effort"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
@@ -260,17 +261,35 @@ func (d *Daemon) putSessionModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// providerOverride is set when the user pins a model from a DIFFERENT provider
+	// than the agent's brain (BYOK cross-provider, e.g. a local LM Studio model) —
+	// it travels with the override so the turn resolves the right vault credential.
+	var providerOverride string
 	if model != "" {
 		byok := false
 		if app, err := d.appMgr.GetApp(r.Context(), appID); err == nil && app != nil {
 			byok = app.BYOK
 		}
 		if byok {
-			// Direct mode: switch only within the declared models.
+			// Direct mode: switch within the declared models, OR to one of the
+			// user's own BYOK models (vault / local providers). For the latter we
+			// pin the model's provider so the turn uses that credential.
 			if model != brain.Model && !slices.Contains(brain.Models, model) {
-				writeError(w, http.StatusBadRequest, "model_not_declared",
-					"direct mode: the model must be one declared in the agent brain")
-				return
+				if d.creds != nil {
+					for _, m := range d.creds.ListUserModels(r.Context(), userID) {
+						// Only models the runtime can actually route with the stored
+						// credential (Direct) are valid cross-provider pins.
+						if m.ID == model && m.Direct {
+							providerOverride = m.OwnedBy
+							break
+						}
+					}
+				}
+				if providerOverride == "" {
+					writeError(w, http.StatusBadRequest, "model_not_declared",
+						"direct mode: the model must be one declared in the agent brain or one of your own credentials")
+					return
+				}
 			}
 		} else if kinds, err := d.gatewayModelKinds(r.Context(), extractBearer(r)); err == nil {
 			// Gateway mode: the model must be served with the agent's kind.
@@ -306,7 +325,7 @@ func (d *Daemon) putSessionModel(w http.ResponseWriter, r *http.Request) {
 		SessionID: sid,
 		AppID:     appID,
 		UserID:    userID,
-		Meta:      &sessionstore.MetaPayload{Model: model, AgentID: agentID, MaxContextTokens: maxCtx, ReasoningEffort: strings.TrimSpace(req.ReasoningEffort)},
+		Meta:      &sessionstore.MetaPayload{Model: model, AgentID: agentID, Provider: providerOverride, MaxContextTokens: maxCtx, MaxOutputTokens: req.MaxOutputTokens, ReasoningEffort: strings.TrimSpace(req.ReasoningEffort)},
 	}); err != nil {
 		writeError(w, appendErrStatus(err), "append_failed", err.Error())
 		return

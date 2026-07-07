@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex" />
+  <title>Connecting…</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+           display: grid; place-items: center; min-height: 100vh; margin: 0; }
+    .card { text-align: center; max-width: 420px; padding: 2rem; }
+    .spinner { width: 28px; height: 28px; margin: 0 auto 1rem; border-radius: 50%;
+               border: 3px solid rgba(127,127,127,.3); border-top-color: currentColor;
+               animation: spin .8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .muted { opacity: .6; font-size: .85rem; }
+    a { color: inherit; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="spinner" id="spin"></div>
+    <p id="msg">Finalizing your connection…</p>
+    <p class="muted" id="hint"></p>
+  </div>
+  <script>
+    // Digitorn OAuth bounce: providers that require an HTTPS redirect (Slack,
+    // Notion, Zoom…) or that allow only one callback per app redirect here.
+    // Because the browser runs on the user's machine, we forward the OAuth
+    // `code`/`state` to their LOCAL daemon's callback. Pure client-side — no
+    // secret ever touches this page.
+    (function () {
+      var params = new URLSearchParams(window.location.search);
+
+      // OAuth error from the provider — surface it, don't bounce.
+      var err = params.get("error");
+      if (err) {
+        document.getElementById("spin").style.display = "none";
+        document.getElementById("msg").textContent = "Authorization failed";
+        document.getElementById("hint").textContent =
+          err + (params.get("error_description") ? " — " + params.get("error_description") : "");
+        return;
+      }
+
+      // Desktop daemon runs locally on a fixed port. (For a cloud daemon the
+      // target is encoded in `state` — see below; falls back to loopback.)
+      var target = "http://127.0.0.1:8000/api/oauth/mcp/callback";
+
+      // Optional: state may carry a base64url-encoded return base as
+      // "<random>.<b64url(daemonBaseURL)>" to support cloud daemons.
+      try {
+        var state = params.get("state") || "";
+        var dot = state.indexOf(".");
+        if (dot > 0) {
+          var enc = state.slice(dot + 1).replace(/-/g, "+").replace(/_/g, "/");
+          var base = atob(enc);
+          if (/^https?:\/\//.test(base)) target = base.replace(/\/$/, "") + "/api/oauth/mcp/callback";
+        }
+      } catch (e) { /* keep loopback default */ }
+
+      window.location.replace(target + window.location.search);
+      document.getElementById("hint").innerHTML =
+        'If nothing happens, make sure Digitorn is running, then <a href="' +
+        target + window.location.search.replace(/"/g, "%22") + '">click here</a>.';
+    })();
+  </script>
+</body>
+</html>

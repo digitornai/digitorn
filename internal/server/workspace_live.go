@@ -96,7 +96,7 @@ func (d *Daemon) newWorkspaceLive() *workspaceLive {
 // filesystem write that called us returns immediately. A sub-agent write is
 // folded onto its session ROOT so the user's session room gets one coalesced
 // push for the whole agent tree.
-func (l *workspaceLive) FileChanged(sessionID, workdir string) {
+func (l *workspaceLive) FileChanged(sessionID, workdir string, paths ...string) {
 	if l == nil || sessionID == "" || workdir == "" {
 		return
 	}
@@ -104,6 +104,12 @@ func (l *workspaceLive) FileChanged(sessionID, workdir string) {
 	if r, _, isSub := sessionstore.SubAgentSession(sessionID); isSub {
 		root = r
 	}
+
+	// When the caller named the exact files, push them IMMEDIATELY and reliably
+	// — the debounced git-status path below can miss a brand-new file (its first
+	// `changes` call bakes it into the baseline, so it shows no diff). This is
+	// what makes the embedded preview update in real time on every write.
+	l.emitPaths(root, paths)
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -123,6 +129,40 @@ func (l *workspaceLive) FileChanged(sessionID, workdir string) {
 	p := &wsPend{workdir: workdir, first: now}
 	p.timer = time.AfterFunc(l.window, func() { l.fire(root) })
 	l.pend[root] = p
+}
+
+// emitPaths pushes an immediate workspace_changes for the named files, bypassing
+// git status entirely — a reliable "re-read this" signal for the preview. Called
+// synchronously off the write hot path; the emit itself is best-effort.
+func (l *workspaceLive) emitPaths(root string, paths []string) {
+	if len(paths) == 0 {
+		return
+	}
+	files := make([]sessionstore.WorkspaceChangedFile, 0, len(paths))
+	for _, p := range paths {
+		if p == "" {
+			continue
+		}
+		files = append(files, sessionstore.WorkspaceChangedFile{Path: p, Status: "modified"})
+	}
+	if len(files) == 0 {
+		return
+	}
+	ev := sessionstore.Event{
+		Type:       sessionstore.EventWorkspaceChanges,
+		SessionID:  root,
+		TsUnixNano: time.Now().UnixNano(),
+		WorkspaceChanges: &sessionstore.WorkspaceChangesPayload{
+			Files: files,
+			Count: len(files),
+		},
+	}
+	env := l.builder.Build(&ev)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := l.rt.Emit(ctx, bridgeNamespace, "session:"+root, "event", env); err != nil && l.log != nil {
+		l.log.Debug("workspace live emitPaths failed", "root", root, "err", err.Error())
+	}
 }
 
 // fire runs in the debounce timer's goroutine (off every hot path). It snapshots

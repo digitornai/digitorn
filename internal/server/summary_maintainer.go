@@ -222,6 +222,8 @@ func (m *summaryMaintainer) prepare(sid string) {
 		byok:      byok,
 		userJWT:   m.takeJWT(sid),
 		logger:    m.logger,
+		resolver:  m.compactor.credResolver,
+		userID:    snap.UserID,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), m.timeout)

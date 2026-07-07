@@ -52,7 +52,7 @@ func (m *Module) PromptSections(domainmodule.PromptScope) []domainmodule.PromptS
 	return []domainmodule.PromptSection{{
 		Title:    "Filesystem",
 		Priority: 50,
-		Content: "All paths are relative to the workspace root; absolute paths and `..` escapes are rejected.\n" +
+		Content: "All paths are relative to the workspace root and MUST include the filename — never a bare directory unless you deliberately want its tree (`read \"src\"`). Example: a file at the workspace root named `scene.excalidraw` is addressed as path `\"scene.excalidraw\"` — not `\"\"`, not `\".\"`, not `\"scene\"`. Nested: `\"src/components/App.tsx\"`. Absolute paths and `..` escapes are rejected.\n" +
 			"Workflow that always works:\n" +
 			"1. FIND: `glob` by name (`**` recurses) or `grep` contents — never guess a path.\n" +
 			"2. MAP a big file: `read` with `outline: true` → functions/classes + line numbers, cheaply; then `read` a precise line range (offset/limit). Read several files at once with `paths: [...]`. Reading an IMAGE (png/jpg/…) shows it to you directly — you can SEE it.\n" +
@@ -169,11 +169,12 @@ func New() *Module {
 			"- When you need to read a large file, do it in consecutive chunks (e.g. offset=1 limit=400, then offset=401 limit=400).\n" +
 			"- Use outline:true first when exploring large files, then read only the relevant lines.",
 		Params: []tool.ParamSpec{
-			{Name: "path", Type: "string", Description: "File path relative to the workspace.", Path: true},
-			{Name: "paths", Type: "array", Description: "Read several files in one call (labeled sections). Use instead of path.", Items: &tool.ParamSpec{Type: "string", Path: true}},
+			{Name: "path", Type: "string", Description: "File path relative to the workspace root, filename included — e.g. \"scene.excalidraw\", \"src/app.tsx\", or \".\" for the root directory tree. Never empty.", Path: true},
+			{Name: "paths", Type: "array", Description: "Read several files in one call (labeled sections). Use instead of path. Example: [\"scene.excalidraw\", \"src/app.tsx\"].", Items: &tool.ParamSpec{Type: "string", Path: true}},
 			{Name: "offset", Type: "integer", Description: "1-based line to start from (default 1).", Default: 1},
 			{Name: "limit", Type: "integer", Description: "Max lines to return (default 200). Set higher explicitly when you need more — e.g. limit:500.", Default: 0},
-			{Name: "outline", Type: "boolean", Description: "Return a structural map (definitions + line numbers) instead of content — ideal to navigate a large file cheaply.", Default: false},
+			{Name: "outline", Type: "boolean", Description: "Return a structural map (definitions + line numbers) instead of content — ideal to navigate a large file cheaply. On a JSON file it returns the deep structure (keys, array sizes, each element's id/type).", Default: false},
+			{Name: "json_path", Type: "string", Description: "For a JSON file: return ONLY this subtree instead of the whole file. gjson syntax — query arrays by field, e.g. `elements.#(id==\"r1\")` (one) or `elements.#(type==\"text\")#` (all); a leading-slash JSON Pointer `/elements/3` works too. A large JSON without json_path auto-returns its structure map."},
 		},
 		RiskLevel: tool.RiskLow,
 		Handler:   m.read,
@@ -196,9 +197,15 @@ func New() *Module {
 			"Style rules:\n" +
 			"• Match the surrounding code's indentation, quotes, and conventions exactly.\n" +
 			"• Never write credentials, API keys, or secrets into source.\n" +
-			"• Preserve existing file encoding (UTF-8 unless the file is explicitly otherwise).",
+			"• Preserve existing file encoding (UTF-8 unless the file is explicitly otherwise).\n" +
+			"\n" +
+			"PATH — must include the filename, relative to the workspace root:\n" +
+			"• Right: path=\"scene.excalidraw\" (root file) · path=\"src/pages/index.tsx\" (nested).\n" +
+			"• Wrong: path=\"\" (empty — the call is rejected) · path=\"src/\" or path=\".\" (a directory, not a file).\n" +
+			"\n" +
+			"LARGE CONTENT: if what you are about to write is big (many elements/lines) and you also reasoned at length to plan it, the call can be cut off mid-generation, arriving with an EMPTY path/content and failing immediately. When the target is large, write a MINIMAL version first (skeleton / first few items), confirm it succeeded, then grow it with `edit`/`patch` in several smaller calls instead of one giant `write`.",
 		Params: []tool.ParamSpec{
-			{Name: "path", Type: "string", Description: "File path relative to the workspace.", Required: true, Path: true},
+			{Name: "path", Type: "string", Description: "File path relative to the workspace root, filename included — e.g. \"scene.excalidraw\", \"src/app.tsx\". Never empty, never just a directory.", Required: true, Path: true},
 			{Name: "content", Type: "string", Description: "Full content to write.", Required: true},
 		},
 		RiskLevel:    tool.RiskMedium,
@@ -209,6 +216,7 @@ func New() *Module {
 	m.RegisterTool(module.Tool{
 		Name: "edit",
 		Description: "Edit a file surgically. Pick ONE way to locate the edit, then `new_string` is the content to put there:\n" +
+			"• JSON files — use `patch`: a full RFC 6902 JSON Patch array to change a .json (config, Excalidraw scene…) WITHOUT rewriting it. e.g. patch=[{\"op\":\"replace\",\"path\":\"/agents/3/model\",\"value\":\"gpt-5.5\"}, {\"op\":\"add\",\"path\":\"/elements/-\",\"value\":{…}}, {\"op\":\"remove\",\"path\":\"/elements/2\"}]. Ops: add/remove/replace/move/copy/test; path is a JSON Pointer; `/-` appends to an array. Read the file first (it shows the structure + indices) to build correct pointers. This is the way to edit large JSON — never re-emit the whole document.\n" +
 			"• By LINE NUMBER (easiest — you saw the numbers in `read`): set `start_line` (and `end_line` for a range) to replace those lines. `new_string` empty deletes them. No need to reproduce the text.\n" +
 			"• INSERT: `insert_after` / `insert_before` a short unique snippet from the target line, or `prepend` / `append` to add at the file's start/end.\n" +
 			"• By TEXT: `old_string` (exact match, with a forgiving whitespace/indentation fallback). If it occurs N times: add surrounding context, OR set `occurrence` to the Nth match, OR `replace_all`.\n" +
@@ -226,9 +234,11 @@ func New() *Module {
 			"• The change is a single short line with no ambiguous whitespace\n" +
 			"• old_string must be unique in the file; add context lines or use occurrence:N if it appears multiple times\n\n" +
 			"NEVER include the line-number prefix from read ('  142\\t') in old_string — strip it first.\n" +
-			"dry_run:true previews the diff before writing. expect:\"snippet\" guards against editing a stale version.",
+			"dry_run:true previews the diff before writing. expect:\"snippet\" guards against editing a stale version.\n\n" +
+			"PATH must include the filename, relative to the workspace root — e.g. path=\"scene.excalidraw\", path=\"src/app.tsx\". Never empty, never just a directory.\n" +
+			"BATCH SIZE (patch mode): if you reasoned at length before calling `edit`, a huge `patch` array (many ops, large `value` objects) risks the same mid-generation cutoff as an oversized `write` — the call then arrives empty and fails. Send `patch` in several smaller calls (a handful of ops each) rather than one massive one.",
 		Params: []tool.ParamSpec{
-			{Name: "path", Type: "string", Description: "File path relative to the workspace.", Required: true, Path: true},
+			{Name: "path", Type: "string", Description: "File path relative to the workspace root, filename included — e.g. \"scene.excalidraw\", \"src/app.tsx\". Never empty, never just a directory.", Required: true, Path: true},
 			{Name: "new_string", Type: "string", Description: "Content to insert or to replace the located region with. Empty string deletes the targeted lines."},
 			{Name: "old_string", Type: "string", Description: "TEXT locator: substring to find (exact, with whitespace/indentation fuzzy fallback)."},
 			{Name: "replace_all", Type: "boolean", Description: "With old_string: replace every occurrence.", Default: false},
@@ -241,6 +251,7 @@ func New() *Module {
 			{Name: "append", Type: "boolean", Description: "Append new_string at the end of the file.", Default: false},
 			{Name: "expect", Type: "string", Description: "Safety check: the targeted region must contain this text or the edit is refused."},
 			{Name: "dry_run", Type: "boolean", Description: "Preview the unified diff without writing anything.", Default: false},
+			{Name: "patch", Type: "array", Description: "RFC 6902 JSON Patch to edit a .json surgically (see the JSON bullet above). Each item = {op, path, value}. When set, the text locators are ignored.", Items: &tool.ParamSpec{Type: "object"}},
 		},
 		RiskLevel:    tool.RiskMedium,
 		Irreversible: true,
@@ -252,7 +263,7 @@ func New() *Module {
 		Description: "Apply several edits to one file in a single atomic write (all-or-nothing). Edits apply in order; each sees the previous result. Each edit accepts the SAME locators as `edit` (old_string / occurrence / insert_after / insert_before / prepend / append; expect). Prefer text/anchor locators here — line numbers shift as earlier edits apply. Set dry_run to preview the combined diff.",
 		ToolPrompt:  "Prefer this over several separate `edit` calls when changing one file in multiple places — it's atomic (all edits land or none do) and you review one combined diff. Because edits apply in sequence, use text/anchor locators, not line numbers (earlier edits move later lines). Order edits top-to-bottom and make each `old_string` unique. `dry_run: true` to preview the whole change first.",
 		Params: []tool.ParamSpec{
-			{Name: "path", Type: "string", Description: "File path relative to the workspace.", Required: true, Path: true},
+			{Name: "path", Type: "string", Description: "File path relative to the workspace root, filename included — e.g. \"scene.excalidraw\", \"src/app.tsx\". Never empty, never just a directory.", Required: true, Path: true},
 			{Name: "dry_run", Type: "boolean", Description: "Preview the combined unified diff without writing.", Default: false},
 			{Name: "edits", Type: "array", Description: "Edits applied in order.", Required: true, Items: &tool.ParamSpec{
 				Type: "object",
@@ -278,7 +289,7 @@ func New() *Module {
 		ToolPrompt: "Remove a file you created or no longer need. This is irreversible — the file is gone from disk and disappears from the client's view. It deletes ONE file, never a directory, and errors if the path is missing so a delete never silently no-ops.\n" +
 			"Prefer editing over delete-then-rewrite; reach for delete only when the file should genuinely cease to exist.",
 		Params: []tool.ParamSpec{
-			{Name: "path", Type: "string", Description: "File path relative to the workspace.", Required: true, Path: true},
+			{Name: "path", Type: "string", Description: "File path relative to the workspace root, filename included — e.g. \"scene.excalidraw\", \"src/old-notes.md\". Never empty, never a directory.", Required: true, Path: true},
 		},
 		RiskLevel:    tool.RiskMedium,
 		Irreversible: true,
@@ -322,7 +333,7 @@ func New() *Module {
 			"Note: RE2 has no lookbehind/backreferences. For those edge cases: bash + `rg -P`.",
 		Params: []tool.ParamSpec{
 			{Name: "pattern", Type: "string", Description: "RE2 regular expression. Inline flags supported: (?i) case-insensitive, (?m) multiline ^/$, (?s) dot matches newline.", Required: true},
-			{Name: "path", Type: "string", Description: "Directory (or file) to search under (default: workspace root).", Default: ".", Path: true},
+			{Name: "path", Type: "string", Description: "Directory (or file) to search under, relative to the workspace root — e.g. \"src/components\" scopes to that subtree, \".\" (default) searches the whole workspace.", Default: ".", Path: true},
 			{Name: "include", Type: "string", Description: "Glob to scope files, e.g. \"*.go\" or \"*.{ts,tsx}\".", Default: ""},
 			{Name: "output_mode", Type: "string", Description: "\"content\" (matching lines, default), \"files_with_matches\" (just the paths — find WHERE fast), or \"count\" (match counts per file).", Default: "content"},
 			{Name: "context", Type: "integer", Description: "Lines of surrounding context shown around each match (default 3, max 20). Use a higher value when you need to see more of the function to write new_string.", Default: 3},
@@ -489,6 +500,10 @@ type readParams struct {
 	Offset   flexjson.Int  `json:"offset"`    // 1-based start line (default 1)
 	Limit    flexjson.Int  `json:"limit"`     // max lines to return (default 2000)
 	Outline  flexjson.Bool `json:"outline"`   // return a structural map (defs + line numbers) not content
+	// JSONPath returns ONLY the given subtree of a JSON file (gjson syntax —
+	// supports querying arrays by field, e.g. elements.#(id=="r1") — and a
+	// leading-slash JSON Pointer). Lets the agent zoom into one element.
+	JSONPath string `json:"json_path"`
 }
 
 const (
@@ -614,6 +629,28 @@ func (m *Module) readBody(ctx context.Context, rel string, p readParams) (string
 		default:
 			return fmt.Sprintf("[binary file: %s, %d bytes — not displayed]", filepath.Base(abs), fi.Size()), nil, nil
 		}
+	}
+
+	// JSON-aware reading: an agent editing a .json (config, Excalidraw scene…)
+	// should SEE the structure in depth rather than a huge blob, and zoom into
+	// one subtree via json_path — then edit surgically by pointer.
+	if looksJSON(data) {
+		content := string(data)
+		if p.JSONPath != "" {
+			sub, err := selectJSONPath(content, p.JSONPath)
+			if err != nil {
+				return "", nil, err
+			}
+			return fmt.Sprintf("%s @ json_path=%q:\n%s", filepath.Base(abs), p.JSONPath, sub), nil, nil
+		}
+		// Deep structure map when asked (outline) or when the raw would be big.
+		if bool(p.Outline) || len(data) > 2048 {
+			if st, err := jsonStructure(content); err == nil {
+				return fmt.Sprintf("JSON structure of %s — pass json_path=\"…\" for a subtree's full content (e.g. elements.#(id==\"r1\")), or edit(patch=[…]) to modify by pointer:\n\n%s",
+					filepath.Base(abs), st), nil, nil
+			}
+		}
+		// small JSON with no json_path/outline → fall through to raw read
 	}
 
 	// Outline mode : a structural map (definitions + line numbers) so a big file
@@ -773,7 +810,7 @@ func (m *Module) write(ctx context.Context, raw json.RawMessage) (tool.Result, e
 	tindexes.markDirty(abs)
 	sindexes.markDirty(abs)
 	repomap.MarkDirty(abs)
-	notifyFileChange(ctx)
+	notifyFileChange(ctx, abs)
 	action := "created"
 	if existed {
 		action = "overwrote"
@@ -813,6 +850,12 @@ type editParams struct {
 	Append       flexjson.Bool `json:"append"`
 	Expect       string   `json:"expect"`
 	DryRun       flexjson.Bool `json:"dry_run"`
+	// RFC 6902 JSON Patch for surgical .json editing. When present, `edit`
+	// applies this patch to the file and the text-mode locators above are
+	// ignored — the agent sends only the tiny patch, never the whole file.
+	// flexjson.RawArray tolerates a model double-encoding the array as a JSON
+	// string (`"patch": "[{...}]"`) instead of native JSON (`"patch": [{...}]`).
+	Patch flexjson.RawArray `json:"patch"`
 }
 
 func (p editParams) locator() editLocator {
@@ -937,16 +980,32 @@ func (m *Module) edit(ctx context.Context, raw json.RawMessage) (tool.Result, er
 	}
 	content := string(src)
 
-	updated, count, strategy, err := resolveEditOp(content, p.locator())
-	if err != nil {
-		if ee, ok := err.(*editError); ok && ee.kind == "not_found" {
-			data := map[string]any{"error": ee.message, "path": p.Path}
-			if len(ee.closest) > 0 {
-				data["closest_matches"] = ee.closest
+	var updated, strategy string
+	var count int
+	if len(p.Patch) > 0 {
+		// Surgical JSON mode: apply the RFC 6902 patch, ignore text locators.
+		u, n, perr := applyJSONPatch(content, json.RawMessage(p.Patch))
+		if perr != nil {
+			data := map[string]any{
+				"error": perr.Error(), "path": p.Path,
+				"hint": "patch is an RFC 6902 array, e.g. [{\"op\":\"replace\",\"path\":\"/agents/3/model\",\"value\":\"x\"}]. Call read with json_path to see current values/indices first.",
 			}
-			return tool.Result{Success: false, Error: ee.message, Data: data}, err
+			return tool.Result{Success: false, Error: perr.Error(), Data: data}, perr
 		}
-		return errResult(err), err
+		updated, count, strategy = u, n, "json_patch"
+	} else {
+		u, n, s, eerr := resolveEditOp(content, p.locator())
+		if eerr != nil {
+			if ee, ok := eerr.(*editError); ok && ee.kind == "not_found" {
+				data := map[string]any{"error": ee.message, "path": p.Path}
+				if len(ee.closest) > 0 {
+					data["closest_matches"] = ee.closest
+				}
+				return tool.Result{Success: false, Error: ee.message, Data: data}, eerr
+			}
+			return errResult(eerr), eerr
+		}
+		updated, count, strategy = u, n, s
 	}
 	d := computeDiff(p.Path, content, updated)
 	data := map[string]any{
@@ -974,7 +1033,7 @@ func (m *Module) edit(ctx context.Context, raw json.RawMessage) (tool.Result, er
 	tindexes.markDirty(abs)
 	sindexes.markDirty(abs)
 	repomap.MarkDirty(abs)
-	notifyFileChange(ctx) // live workspace push (non-blocking, best-effort)
+	notifyFileChange(ctx, abs) // live workspace push (non-blocking, best-effort)
 	// Emit event for the background service
 	emitFileEvent(ctx, "file.modified", p.Path, map[string]any{
 		"replacements": count,
@@ -1077,7 +1136,7 @@ func (m *Module) multiEdit(ctx context.Context, raw json.RawMessage) (tool.Resul
 	tindexes.markDirty(abs)
 	sindexes.markDirty(abs)
 	repomap.MarkDirty(abs)
-	notifyFileChange(ctx) // live workspace push (non-blocking, best-effort)
+	notifyFileChange(ctx, abs) // live workspace push (non-blocking, best-effort)
 	// Emit event for the background service
 	emitFileEvent(ctx, "file.modified", p.Path, map[string]any{
 		"replacements": total,
@@ -1132,7 +1191,7 @@ func (m *Module) delete(ctx context.Context, raw json.RawMessage) (tool.Result, 
 		return errResult(err), err
 	}
 	tindexes.markDirty(abs)
-	notifyFileChange(ctx) // live workspace push (non-blocking, best-effort)
+	notifyFileChange(ctx, abs) // live workspace push (non-blocking, best-effort)
 	// Emit event for the background service
 	emitFileEvent(ctx, "file.deleted", p.Path, nil)
 	return tool.Result{Success: true, Data: map[string]any{"path": p.Path, "deleted": true}}, nil
@@ -1646,8 +1705,8 @@ func errResult(err error) tool.Result {
 // fires only when a notifier, a caller identity, and a real workdir all ride on
 // ctx (the agent path) — setup / CLI / test calls have none and skip silently.
 // Never returns an error : a failed live push must never affect the write.
-func notifyFileChange(ctx context.Context) {
-	workdir.NotifyFileChange(ctx)
+func notifyFileChange(ctx context.Context, paths ...string) {
+	workdir.NotifyFileChangePath(ctx, paths...)
 }
 
 // ── EventEmitter implementation ────────────────────────────────────────────

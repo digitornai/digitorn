@@ -7,9 +7,7 @@ import (
 	"github.com/digitornai/digitorn/internal/compiler/schema"
 )
 
-// TestEncode_Deterministic_MinimalDef encodes the same minimal in-memory
-// AppDefinition 10 times and asserts every encoding is byte-identical.
-// This isolates the codec from the rest of the compiler.
+
 func TestEncode_Deterministic_MinimalDef(t *testing.T) {
 	def := &schema.AppDefinition{
 		SchemaVersion: 2,
@@ -45,7 +43,7 @@ func TestEncode_Deterministic_MinimalDef(t *testing.T) {
 	}
 }
 
-// TestEncode_Deterministic_WithMaps stresses the map-sorting code path.
+
 func TestEncode_Deterministic_WithMaps(t *testing.T) {
 	mods := map[string]schema.ModuleBlock{
 		"zzz_module": {Config: map[string]any{"k": "v"}},

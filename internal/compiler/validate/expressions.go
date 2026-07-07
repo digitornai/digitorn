@@ -24,7 +24,7 @@ var expressionRoots = map[string]struct{}{
 	"workspace": {}, "ws": {},
 	"steps": {}, "step": {}, "field": {},
 	"previous": {}, "true": {}, "false": {}, "null": {}, "nil": {},
-	"approvals": {}, "tasks": {},
+	"approvals": {}, "tasks": {}, "error": {},
 }
 
 // CheckExpressions lints every expression-typed field in the manifest:

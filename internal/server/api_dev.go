@@ -18,6 +18,7 @@ type devInvokeRequest struct {
 	ModuleID string          `json:"module_id"`
 	Tool     string          `json:"tool"`
 	Params   json.RawMessage `json:"params,omitempty"`
+	UserID   string          `json:"user_id,omitempty"`
 }
 
 // devInvokeResponse exposes the dispatched tool.Result PLUS metadata
@@ -75,6 +76,12 @@ func (d *Daemon) devInvoke(w http.ResponseWriter, r *http.Request) {
 	// Inject the EventBus into the context so modules that implement
 	// EventEmitter can publish events.
 	ctx := tool.WithEventBus(r.Context(), d.eventBus)
+
+	// Optional identity so per-user credential injection (pieces auth) works
+	// when driving an E2E check from outside a real session.
+	if req.UserID != "" {
+		ctx = tool.WithIdentity(ctx, tool.Identity{UserID: req.UserID, SessionID: "dev-e2e"})
+	}
 
 	start := time.Now()
 	res, callErr := d.bus.Call(ctx, req.ModuleID, req.Tool, params)

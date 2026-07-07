@@ -148,11 +148,12 @@ func (r *Runner) runPath(ctx context.Context, startID string, fc *fctx, in runIn
 		iter := int(rs.visits.Load())
 		r.emit(ctx, in, sessionstore.EventFlowNodeStart, node.ID, node.Type, "running", "", "", iter)
 
-		res, execErr := r.executeNode(ctx, *node, fc, in)
+		res, execErr := r.execWithRetry(ctx, *node, fc, in, iter)
 		last = res
 
 		if execErr != nil {
 			r.emit(ctx, in, sessionstore.EventFlowNodeEnd, node.ID, node.Type, "errored", res.text, execErr.Error(), iter)
+			fc.recordError(node.ID, node.Type, execErr.Error())
 			to := matchErrorRoute(node.OnError, execErr.Error())
 			if to == "" {
 				return last, execErr

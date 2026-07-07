@@ -504,8 +504,10 @@ func languageID(path string) string {
 		return "latex"
 	case ".bib":
 		return "bibtex"
-	case ".json", ".jsonc":
+	case ".json", ".jsonc", ".excalidraw":
 		return "json"
+	case ".mmd", ".mermaid":
+		return "mermaid"
 	case ".yaml", ".yml":
 		return "yaml"
 	case ".md", ".markdown":

@@ -36,7 +36,8 @@ type TriggerSpec struct {
 	Activation   channels.ActivationConfig `json:"activation"`
 	// Schedule is the cron expression for a cron trigger. Stored in the trigger
 	// config so the ops API can report next_run (it is not read by the pipeline).
-	Schedule string `json:"schedule,omitempty"`
+	Schedule string         `json:"schedule,omitempty"`
+	Config   map[string]any `json:"config,omitempty"`
 }
 
 func (s TriggerSpec) moduleConfig() channels.ModuleConfig {
@@ -213,6 +214,12 @@ func (p *ChannelProcessor) Process(ctx context.Context, job store.Job) (err erro
 		// Final answer only (reply:auto), to the push destination or the originator.
 		rr.replyChars, rr.replyPreview = len(res.Reply), runPreview(res.Reply)
 		p.deliverReply(ctx, ev, act, spec, res.Reply)
+	case !res.Idempotent:
+		octx, cancel := context.WithTimeout(daemonclient.WithActAs(ctx, ls.OwnerUserID), replyTimeout)
+		if turnErr, aerr := p.client.AwaitTurnOutcome(octx, ls.AppID, res.SessionID, res.UserSeq); aerr == nil && turnErr != "" {
+			rr.turnErr = errors.New(turnErr)
+		}
+		cancel()
 	}
 	return nil
 }
@@ -223,6 +230,7 @@ type runInfo struct {
 	jobID, appID, triggerID, provider, adapter, sessionID, replyPreview string
 	attempt, replyChars                                                 int
 	filtered, pushed                                                    bool
+	turnErr                                                             error
 }
 
 // recordRun writes the execution report for one attempt. Outcome is derived from
@@ -242,6 +250,9 @@ func (p *ChannelProcessor) recordRun(rr runInfo, started time.Time, err error) {
 		} else {
 			outcome = "failed"
 		}
+	case rr.turnErr != nil:
+		outcome = "failed"
+		errStr = clipStr(rr.turnErr.Error(), 2000)
 	case rr.filtered:
 		outcome = "filtered"
 	case rr.pushed:

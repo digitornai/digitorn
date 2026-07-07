@@ -64,6 +64,9 @@ func (s *moduleService) Invoke(ctx context.Context, req *service.InvokeRequest) 
 		AppID: req.AppID, SessionID: req.SessionID, UserID: req.UserID, AgentID: req.AgentID,
 		ModuleID: req.ModuleID, ToolName: req.ToolName,
 	})
+	if req.AppDir != "" {
+		ctx = pkgmodule.WithAppDir(ctx, req.AppDir)
+	}
 	// Bridge the daemon embeddings service into the call so worker-hosted
 	// modules (RAG) can embed without a local worker.Manager.
 	if s.embedder != nil {

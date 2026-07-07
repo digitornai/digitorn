@@ -278,14 +278,14 @@ func TestOutbound_SSRFGuard(t *testing.T) {
 		{"https loopback", "https://127.0.0.1/x"},
 	}
 	for _, c := range blocked {
-		if err := a.safeURL(c.url); err == nil {
+		if err := a.safeURL(c.url, false); err == nil {
 			t.Errorf("SSRF BYPASS: %s (%s) was allowed", c.name, c.url)
 		}
 	}
 
 	// Non-HTTP schemes are rejected before any DNS work.
 	for _, raw := range []string{"file:///etc/passwd", "gopher://127.0.0.1/", "ftp://10.0.0.1/", "ssh://127.0.0.1/", "//127.0.0.1/x"} {
-		if err := a.safeURL(raw); err == nil {
+		if err := a.safeURL(raw, false); err == nil {
 			t.Errorf("scheme bypass: %q was allowed", raw)
 		}
 	}

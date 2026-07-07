@@ -306,9 +306,7 @@ func (m *Manager) Stop() {
 	m.reapOnce.Do(func() { close(m.reapStop) })
 }
 
-// reapAll sweeps every root, deleting terminal agents past the retention window
-// and removing root tables left empty. Deleting an empty table from m.roots is
-// done UNDER its lock so it can't race a concurrent Spawn (see lockRoot).
+
 func (m *Manager) reapAll() {
 	cutoff := m.clock().Add(-m.retain()).UnixNano()
 	m.roots.Range(func(k, v any) bool {
@@ -327,10 +325,6 @@ func (m *Manager) reapAll() {
 	})
 }
 
-// SpawnBatch atomically launches N agents and returns their run IDs in input
-// order. All agents start simultaneously — no agent waits for another to spawn.
-// Budget and depth are validated under a single lock so the batch either
-// succeeds entirely or fails before any goroutine launches.
 func (m *Manager) SpawnBatch(_ context.Context, reqs []SpawnRequest) ([]string, error) {
 	if len(reqs) == 0 {
 		return nil, nil
@@ -389,9 +383,7 @@ func (m *Manager) SpawnBatch(_ context.Context, reqs []SpawnRequest) ([]string, 
 	return runIDs, nil
 }
 
-// Spawn launches a sub-agent and returns its distinct run id IMMEDIATELY. The
-// agent runs in its own goroutine ; the caller does not block. Enforces the
-// depth + budget guards.
+
 func (m *Manager) Spawn(_ context.Context, req SpawnRequest) (string, error) {
 	if m.runner == nil {
 		return "", ErrNoRunner
@@ -436,13 +428,9 @@ func (m *Manager) Spawn(_ context.Context, req SpawnRequest) (string, error) {
 	return runID, nil
 }
 
-// runAgent is the per-agent goroutine. A panic here is contained : it marks the
-// agent errored and never propagates.
+
 func (m *Manager) runAgent(a *agentState, req SpawnRequest) {
-	// Always release the agent's context when its goroutine exits. Without
-	// this, a child agent stays attached to its parent's cancellation
-	// propagation list for the lifetime of the parent — a steady leak under
-	// repeated delegation.
+
 	defer a.cancel()
 	defer close(a.done)
 	defer func() {
@@ -455,8 +443,6 @@ func (m *Manager) runAgent(a *agentState, req SpawnRequest) {
 		}
 	}()
 
-	// Periodic progress ticker: emit durable telemetry every 5 s so reconnecting
-	// clients always see an up-to-date state, even for long-running agents.
 	tickStop := make(chan struct{})
 	go func() {
 		ticker := time.NewTicker(5 * time.Second)
@@ -473,8 +459,7 @@ func (m *Manager) runAgent(a *agentState, req SpawnRequest) {
 		}
 	}()
 
-	// Attach this agent as the telemetry recorder so the engine updates its
-	// counters in real time while the sub-turn runs.
+
 	ctx := runtime.WithRecorder(a.ctx, a)
 	res, err := m.runner.RunSubAgent(ctx, runtime.SubAgentSpec{
 		AppID: req.AppID, ParentSession: req.RootSession, UserID: req.UserID, UserJWT: req.UserJWT,
@@ -490,9 +475,6 @@ func (m *Manager) runAgent(a *agentState, req SpawnRequest) {
 		a.errMsg.Store(err.Error())
 		if a.ctx.Err() != nil {
 			status = "cancelled"
-			// Prefer the user-facing reason (set when the user explicitly
-			// cancelled this sub-agent) over the raw "context canceled" string,
-			// so the parent agent reads a clear message in the sub-agent result.
 			if reason, ok := a.cancelReason.Load().(string); ok && reason != "" {
 				a.errMsg.Store(reason)
 			} else {
@@ -515,8 +497,6 @@ func (m *Manager) lookup(root, runID string) *agentState {
 	return rt.agents[runID]
 }
 
-// Wait blocks until the agent finishes or the timeout (0 = none) expires. It
-// blocks ONLY the calling goroutine — other agents run undisturbed.
 func (m *Manager) Wait(ctx context.Context, root, runID string, timeout time.Duration) (Snapshot, error) {
 	a := m.lookup(root, runID)
 	if a == nil {
@@ -535,10 +515,6 @@ func (m *Manager) Wait(ctx context.Context, root, runID string, timeout time.Dur
 	}
 }
 
-// WaitAll waits for several agents concurrently and returns their snapshots in
-// input order. All agents are awaited simultaneously — the first to finish
-// unblocks its slot immediately rather than waiting for earlier agents to
-// complete first. A timeout applies to the whole batch.
 func (m *Manager) WaitAll(ctx context.Context, root string, runIDs []string, timeout time.Duration) ([]Snapshot, error) {
 	if len(runIDs) == 0 {
 		return nil, nil
@@ -555,8 +531,7 @@ func (m *Manager) WaitAll(ctx context.Context, root string, runIDs []string, tim
 		err      error
 	}
 
-	// Buffered to the number of agents so every goroutine can deliver without
-	// blocking even if the collector stopped reading early (cancellation).
+
 	resCh := make(chan result, len(runIDs))
 
 	for i, id := range runIDs {
@@ -578,7 +553,7 @@ func (m *Manager) WaitAll(ctx context.Context, root string, runIDs []string, tim
 	return out, firstErr
 }
 
-// Status returns one agent's live snapshot.
+
 func (m *Manager) Status(root, runID string) (Snapshot, error) {
 	a := m.lookup(root, runID)
 	if a == nil {
@@ -587,7 +562,7 @@ func (m *Manager) Status(root, runID string) (Snapshot, error) {
 	return a.snapshot(), nil
 }
 
-// List returns the whole agent tree for a root session.
+
 func (m *Manager) List(root string) []Snapshot {
 	v, ok := m.roots.Load(root)
 	if !ok {
@@ -603,8 +578,7 @@ func (m *Manager) List(root string) []Snapshot {
 	return out
 }
 
-// Cancel stops an agent and its whole subtree (ctx-tree cancellation). Returns
-// immediately ; the agent's goroutine observes the cancel and unwinds.
+
 func (m *Manager) Cancel(root, runID string) error {
 	a := m.lookup(root, runID)
 	if a == nil {
@@ -614,10 +588,7 @@ func (m *Manager) Cancel(root, runID string) error {
 	return nil
 }
 
-// CancelWithReason stops an agent and its whole subtree, attaching a
-// user-facing reason that surfaces in the cancelled agent's result (so the
-// parent agent learns the user aborted it, not a bare "context canceled").
-// Returns the number of agents signalled.
+
 func (m *Manager) CancelWithReason(root, runID, reason string) (int, error) {
 	a := m.lookup(root, runID)
 	if a == nil {
@@ -663,13 +634,7 @@ func isDescendant(agents map[string]*agentState, runID, ancestorID string) bool 
 	return isDescendant(agents, a.parentRunID, ancestorID)
 }
 
-// CancelAll stops EVERY agent under a root session — the whole delegated tree.
-// A user "stop" (session abort) must halt all delegated work, not just the
-// coordinator's turn : sub-agents run on independent contexts (so they never
-// block the parent), so the turn's own ctx cancel can't reach them. Each
-// agent's goroutine observes its cancel and unwinds to "cancelled". Returns the
-// number of agents signalled. The cancels are gathered under the lock and
-// fired outside it so a cancel callback can never deadlock against Spawn/Status.
+
 func (m *Manager) CancelAll(root string) int {
 	v, ok := m.roots.Load(root)
 	if !ok {
@@ -688,15 +653,7 @@ func (m *Manager) CancelAll(root string) int {
 	return len(cancels)
 }
 
-// emit publishes a DURABLE, seq'd agent-lifecycle event into the root session
-// when a sink is wired. These project into SessionSnapshot.Children and replay
-// through the existing "since seq" path, so a reconnecting client reconstructs
-// the agent tree with no gaps. "running" → EventAgentSpawn ; any terminal
-// status → EventAgentResult. Best-effort : a sink error never blocks the agent.
-// emitProgress publishes a durable agent_progress snapshot so every client —
-// including those that reconnect after a network hiccup or a daemon restart —
-// can reconstruct the live agent tree from the event log without hitting the
-// in-memory registry. Called on every tool/LLM completion and every 5 s tick.
+
 func (m *Manager) emitProgress(a *agentState, currentTool string) {
 	if m.sink == nil {
 		return
@@ -759,9 +716,7 @@ func (m *Manager) emit(a *agentState, status string) {
 		if v, ok := a.result.Load().(runtime.AgentResult); ok {
 			payload.ResultSummary = truncate(v.Content, 500)
 		}
-		// Terminal telemetry, durable : the live registry can be gone after a
-		// daemon restart, so persist the final counts with the result so the
-		// tree reconstructs fully from disk.
+
 		payload.ToolCalls = a.toolCalls.Load()
 		payload.LLMCalls = a.llmCalls.Load()
 		payload.TokensIn = a.tokensIn.Load()

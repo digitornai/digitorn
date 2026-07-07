@@ -42,11 +42,7 @@ func (l *liveLog) tail() string {
 	return string(l.buf)
 }
 
-// tailLines returns the most recent n lines of the buffered output, exactly
-// what an agent watching a build / dev-server / install wants — last 50 or 100
-// lines, formatted as a single newline-joined string so it slots into the
-// existing `log` JSON field without changing the wire shape. n<=0 means "all
-// bytes in the current window".
+
 func (l *liveLog) tailLines(n int) string {
 	full := l.tail()
 	if n <= 0 || full == "" {

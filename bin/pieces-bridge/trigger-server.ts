@@ -295,5 +295,15 @@ async function handlePieceStatus(pieceId: string, loader: PieceLoader): Promise<
     authType: piece.metadata.auth?.type ?? 'none',
     actionCount: Object.keys(piece.metadata.actions ?? {}).length,
     triggerCount: Object.keys(piece.metadata.triggers ?? {}).length,
+    actions: Object.entries(piece.metadata.actions ?? {}).map(([name, a]) => ({
+      name,
+      displayName: (a as { displayName?: string }).displayName ?? name,
+      description: (a as { description?: string }).description ?? '',
+    })),
+    triggers: Object.entries(piece.metadata.triggers ?? {}).map(([name, t]) => ({
+      name,
+      displayName: (t as { displayName?: string }).displayName ?? name,
+      description: (t as { description?: string }).description ?? '',
+    })),
   }
 }

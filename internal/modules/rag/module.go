@@ -202,8 +202,12 @@ func (m *Module) engineFor(ctx context.Context) (*Engine, error) {
 	sink := ragSink{eng: e}
 	owner := module.AppID(ctx)
 	cdsn := cursorDSNFor(cfg)
+	appDir := module.AppDir(ctx)
 	var specs []indexer.SourceSpec
 	for _, src := range cfg.Sources {
+		if appDir != "" && src.Path != "" && !filepath.IsAbs(src.Path) {
+			src.Path = filepath.Join(appDir, src.Path)
+		}
 		if spec, ok := specFor(src, cfg.AutoIndex); ok {
 			spec.Owner = owner
 			spec.CursorDSN = cdsn

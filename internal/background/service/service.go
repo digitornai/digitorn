@@ -33,6 +33,10 @@ type Setup struct {
 	Processor runner.Processor
 	Inbound   Inbound
 	Rearm     func(context.Context, CreateTriggerRequest) (store.Trigger, error)
+	// Disarm stops a trigger's live listener (its cron goroutine / webhook route)
+	// so a runtime disable actually stops it firing, not just flips the DB flag.
+	// nil → disable is DB-only (re-applied from YAML on restart).
+	Disarm func(context.Context, store.Trigger) error
 }
 
 // Service is the assembled background service: durable store + worker pool + an
@@ -47,6 +51,7 @@ type Service struct {
 	started time.Time
 	inbound Inbound
 	rearm   func(context.Context, CreateTriggerRequest) (store.Trigger, error)
+	disarm  func(context.Context, store.Trigger) error
 }
 
 // New opens the DB (SQLite or Postgres, by config), migrates, lets the caller
@@ -89,6 +94,7 @@ func New(cfg Config, build func(*store.Store) (Setup, error), log *slog.Logger) 
 		started: time.Now(),
 		inbound: setup.Inbound,
 		rearm:   setup.Rearm,
+		disarm:  setup.Disarm,
 	}
 	s.httpd = &http.Server{Addr: cfg.HTTPAddr, Handler: s.mux(), ReadHeaderTimeout: 5 * time.Second}
 	return s, nil
@@ -140,7 +146,7 @@ func (s *Service) mux() http.Handler {
 	// triggers/jobs/runs, per-trigger execution reports, enable/disable/replay.
 	// Purely additive — never touches YAML-driven discovery. Mounted under /ops
 	// (more specific than the catch-all), Bearer-gated when OpsToken is set.
-	m.Handle("/ops/", http.StripPrefix("/ops", opsRoutes(s.store, OpsConfig{Token: s.cfg.OpsToken, Rearm: s.rearm})))
+	m.Handle("/ops/", http.StripPrefix("/ops", opsRoutes(s.store, OpsConfig{Token: s.cfg.OpsToken, Rearm: s.rearm, Disarm: s.disarm})))
 	// Inbound adapter HTTP routes (webhook). Mounted as the catch-all; the
 	// specific /healthz, /stats and /ops above take precedence (ServeMux longest-match).
 	if s.inbound != nil {
@@ -170,6 +176,8 @@ func (s *Service) Run(ctx context.Context) error {
 		}()
 	}
 
+	go s.sweepAlerts(ctx)
+
 	s.pool.Run(ctx) // returns when ctx is cancelled and in-flight work has drained
 
 	sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -177,6 +185,37 @@ func (s *Service) Run(ctx context.Context) error {
 	_ = s.httpd.Shutdown(sctx)
 	s.log.Info("background service stopped")
 	return s.closeDB()
+}
+
+// defaultAlertStreak is the number of consecutive failed runs on a trigger that
+// promotes a blip to an alert (a broken channel, not a one-off).
+const defaultAlertStreak = 3
+
+// alertSweepInterval is how often the service scans triggers for fail streaks.
+const alertSweepInterval = 2 * time.Minute
+
+// sweepAlerts periodically logs a WARN for any enabled trigger whose recent runs
+// are all failing, so a broken channel (dead endpoint, bad credentials) surfaces
+// in the logs without an operator polling /ops/alerts. Best-effort; never fatal.
+func (s *Service) sweepAlerts(ctx context.Context) {
+	t := time.NewTicker(alertSweepInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			alerts, err := s.store.TriggerAlerts(ctx, defaultAlertStreak)
+			if err != nil {
+				continue
+			}
+			for _, a := range alerts {
+				s.log.Warn("background: trigger failing repeatedly",
+					"trigger", a.TriggerID, "app", a.AppID, "provider", a.Provider,
+					"adapter", a.Adapter, "fail_streak", a.FailStreak, "last_error", a.LastError)
+			}
+		}
+	}
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

@@ -81,9 +81,7 @@ func newEngineSync(appHooks []schema.Hook, deps hooks.ActionDeps) *hooks.Engine 
 	return e
 }
 
-// =====================================================================
-// 1. Event aliases resolve to canonical
-// =====================================================================
+
 
 func TestEvents_PreToolUseResolvesToToolStart(t *testing.T) {
 	logger := &recordingLogger{}
@@ -130,9 +128,7 @@ func TestEvents_UserPromptResolvesToTurnStart(t *testing.T) {
 	}
 }
 
-// =====================================================================
-// 2. Conditions — sample subset
-// =====================================================================
+
 
 func TestCond_Always(t *testing.T) {
 	if !hooks.EvalCondition(schema.HookCondition{Type: "always"}, hooks.Payload{}) {
@@ -260,9 +256,7 @@ func TestCond_UnknownTypeIsFalse(t *testing.T) {
 	}
 }
 
-// =====================================================================
-// 3. Actions — log / notify / inject_message
-// =====================================================================
+
 
 func TestAction_Log(t *testing.T) {
 	logger := &recordingLogger{}
@@ -319,10 +313,7 @@ func TestAction_InjectMessage_ReturnsInjection(t *testing.T) {
 	}
 }
 
-// TestEngine_MultipleInjectMessagesAllSurvive locks the multi-inject
-// fix : two hooks both injecting on turn_start must BOTH land, in
-// priority order. The old single-pointer FireResult silently dropped
-// the first.
+
 func TestEngine_MultipleInjectMessagesAllSurvive(t *testing.T) {
 	mk := func(id, msg string, prio int) schema.Hook {
 		return schema.Hook{
@@ -346,8 +337,7 @@ func TestEngine_MultipleInjectMessagesAllSurvive(t *testing.T) {
 	}
 }
 
-// TestAction_ChainWithTwoInjects proves a single chain action emitting
-// two inject_message sub-actions yields both injections.
+
 func TestAction_ChainWithTwoInjects(t *testing.T) {
 	hk := schema.Hook{
 		ID: "h1", On: schema.HookEventTurnStart,
@@ -368,9 +358,7 @@ func TestAction_ChainWithTwoInjects(t *testing.T) {
 	}
 }
 
-// =====================================================================
-// 4. Gate veto on tool_start
-// =====================================================================
+
 
 func TestAction_GateVetoesOnToolStart(t *testing.T) {
 	hk := schema.Hook{
@@ -397,9 +385,7 @@ func TestAction_GateAllowDoesNotBlock(t *testing.T) {
 	}
 }
 
-// =====================================================================
-// 5. transform_params / transform_result
-// =====================================================================
+
 
 func TestAction_TransformParams(t *testing.T) {
 	hk := schema.Hook{
@@ -421,9 +407,6 @@ func TestAction_TransformParams(t *testing.T) {
 	}
 }
 
-// =====================================================================
-// 6. module_action with templating
-// =====================================================================
 
 func TestAction_ModuleActionWithTemplating(t *testing.T) {
 	caller := &fakeCaller{}
@@ -453,23 +436,14 @@ func TestAction_ModuleActionWithTemplating(t *testing.T) {
 	}
 }
 
-// =====================================================================
-// 6b. Panic safety : a crashing hook action MUST NOT crash the turn,
-// on either the synchronous (gate/transform/inject/compact_context) or
-// the asynchronous (log/notify/module_action/...) path.
-// =====================================================================
 
-// panicCompactor panics inside CompactSession — exercises a crashing
-// dependency on the SYNCHRONOUS compact_context path.
 type panicCompactor struct{}
 
 func (panicCompactor) CompactSession(context.Context, string, string, int) error {
 	panic("boom: compactor exploded")
 }
 
-// TestEngine_SyncActionPanic_DoesNotCrash : compact_context runs
-// synchronously ; a panicking Compactor must be contained, Fire must
-// return, and the hook still counts as fired.
+
 func TestEngine_SyncActionPanic_DoesNotCrash(t *testing.T) {
 	hk := schema.Hook{
 		ID: "h1", On: schema.HookEventTurnEnd,
@@ -489,16 +463,14 @@ func TestEngine_SyncActionPanic_DoesNotCrash(t *testing.T) {
 	}
 }
 
-// panicLogger panics on Info — exercises a crashing dependency on the
-// ASYNCHRONOUS log path.
+
 type panicLogger struct{}
 
 func (panicLogger) Info(string, ...any)  { panic("boom: logger exploded") }
 func (panicLogger) Warn(string, ...any)  {}
 func (panicLogger) Error(string, ...any) {}
 
-// TestEngine_AsyncActionPanic_DoesNotCrash : a panicking async action
-// (log) is recovered by runHookAsync and Fire returns cleanly.
+
 func TestEngine_AsyncActionPanic_DoesNotCrash(t *testing.T) {
 	hk := schema.Hook{
 		ID: "h1", On: schema.HookEventTurnStart,
@@ -514,14 +486,9 @@ func TestEngine_AsyncActionPanic_DoesNotCrash(t *testing.T) {
 	}
 }
 
-// TestEngine_GateActionPanic_FailsOpen : a panicking gate action on
-// tool_start must not crash, and must NOT silently veto — it fails open
-// (no gate decision) so the turn proceeds, with the panic logged.
+
 func TestEngine_GateActionPanic_FailsOpen(t *testing.T) {
-	// transform_params with a transformation that is not a map would make
-	// runTransformParams return an error (not panic). To force a panic on
-	// the sync path we reuse compact_context above ; here we assert the
-	// gate path specifically returns no veto when the action errors.
+
 	hk := schema.Hook{
 		ID: "h1", On: schema.HookEventToolStart,
 		Action: schema.HookAction{Type: "compact_context", Params: map[string]any{"strategy": "summarize"}},
@@ -535,9 +502,7 @@ func TestEngine_GateActionPanic_FailsOpen(t *testing.T) {
 	}
 }
 
-// =====================================================================
-// 7. Cooldown
-// =====================================================================
+
 
 func TestEngine_Cooldown(t *testing.T) {
 	logger := &recordingLogger{}
@@ -560,9 +525,7 @@ func TestEngine_Cooldown(t *testing.T) {
 	}
 }
 
-// =====================================================================
-// 8. Priority ordering
-// =====================================================================
+
 
 func TestEngine_PriorityOrdering(t *testing.T) {
 	logger := &recordingLogger{}
@@ -585,9 +548,7 @@ func TestEngine_PriorityOrdering(t *testing.T) {
 	}
 }
 
-// =====================================================================
-// 9. Per-agent hooks merged
-// =====================================================================
+
 
 func TestEngine_PerAgentHooksMerged(t *testing.T) {
 	logger := &recordingLogger{}
@@ -606,9 +567,7 @@ func TestEngine_PerAgentHooksMerged(t *testing.T) {
 	}
 }
 
-// =====================================================================
-// 10. Enabled:false skips
-// =====================================================================
+
 
 func TestEngine_DisabledSkips(t *testing.T) {
 	logger := &recordingLogger{}
@@ -624,9 +583,7 @@ func TestEngine_DisabledSkips(t *testing.T) {
 	}
 }
 
-// =====================================================================
-// 11. Cancelled ctx skips
-// =====================================================================
+
 
 func TestEngine_CancelledCtxSkips(t *testing.T) {
 	logger := &recordingLogger{}
@@ -643,9 +600,7 @@ func TestEngine_CancelledCtxSkips(t *testing.T) {
 	}
 }
 
-// =====================================================================
-// 12. Nil-safe
-// =====================================================================
+
 
 func TestEngine_NilEngineSafe(t *testing.T) {
 	var e *hooks.Engine
@@ -655,9 +610,7 @@ func TestEngine_NilEngineSafe(t *testing.T) {
 	}
 }
 
-// =====================================================================
-// 13. max_fires per engine lifetime
-// =====================================================================
+
 
 func TestEngine_MaxFires(t *testing.T) {
 	logger := &recordingLogger{}
@@ -741,9 +694,7 @@ func TestTemplating_ToolPathsResolveCorrectly(t *testing.T) {
 	}
 }
 
-// =====================================================================
-// 16. Async vs sync : async returns immediately
-// =====================================================================
+
 
 func TestEngine_AsyncReturnsBeforeActionFinishes(t *testing.T) {
 	released := make(chan struct{})

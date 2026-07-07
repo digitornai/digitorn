@@ -54,6 +54,7 @@ func (d *Daemon) piecesList(w http.ResponseWriter, r *http.Request) {
 		ActionCount   int    `json:"actionCount"`
 		TriggerCount  int    `json:"triggerCount"`
 		Configured    bool   `json:"configured"`
+		NeedsReconnect bool  `json:"needs_reconnect"`
 	}
 	out := make([]enriched, 0, len(list))
 	for _, p := range list {
@@ -64,6 +65,7 @@ func (d *Daemon) piecesList(w http.ResponseWriter, r *http.Request) {
 			AuthType:  p.AuthType,
 			Enabled:   p.Enabled,
 			Configured: len(p.SecretKeys) > 0,
+			NeedsReconnect: p.NeedsReconnect,
 		}
 		if bridge != nil {
 			if status, err2 := bridge.GetPieceStatus(p.PieceName); err2 == nil {
@@ -604,7 +606,12 @@ func (d *Daemon) piecesOAuthStart(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Build the auth config from the piece's OAuth schema.
+	// Build the auth config from the piece's OAuth schema. Pieces are
+	// confidential clients (the daemon holds the client secret), so PKCE is
+	// unnecessary — and forcing it breaks providers like GitHub (custom
+	// provider bypasses the known-provider pkce:false, so it would default on
+	// and the token endpoint answers "Not Found").
+	pkceOff := false
 	cfg := &schema.MCPAuthConfig{
 		Type:         "oauth2",
 		Provider:     "custom",
@@ -613,6 +620,7 @@ func (d *Daemon) piecesOAuthStart(w http.ResponseWriter, r *http.Request) {
 		Scopes:       scopes,
 		ClientID:     clientID,
 		ClientSecret: clientSecret,
+		PKCE:         &pkceOff,
 	}
 
 	// Start the OAuth flow using the existing mcpoauth service.

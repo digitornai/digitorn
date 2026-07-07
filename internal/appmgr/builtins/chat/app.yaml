@@ -18,6 +18,14 @@ ui:
   workspace:
     position: hidden
 
+# Auto-injected context (rendered into the system prompt every turn).
+context:
+  sections:
+    - builtin: datetime      # current date/time
+    - builtin: user          # user identity (name, region, locale…)
+    - builtin: environment   # daemon OS / arch / platform
+    - builtin: session       # goal, workdir, turn + attachments note
+
 agents:
   - id: main
     role: worker

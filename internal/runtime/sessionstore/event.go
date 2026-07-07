@@ -640,6 +640,13 @@ type MetaPayload struct {
 	AgentID          string `json:"agent_id,omitempty"`
 	MaxContextTokens int    `json:"max_ctx_tokens,omitempty"`
 	ReasoningEffort  string `json:"reasoning_effort,omitempty"`
+	// Provider carries the model's provider when the override targets a model
+	// from a DIFFERENT provider than the agent's brain (BYOK cross-provider,
+	// e.g. a local LM Studio model). Empty = same provider as the brain.
+	Provider string `json:"provider,omitempty"`
+	// MaxOutputTokens overrides the agent's max generation tokens for the pinned
+	// model (BYOK models whose limits the gateway doesn't know). 0 = no override.
+	MaxOutputTokens int `json:"max_output_tokens,omitempty"`
 	// EntryAgent pins which agent handles this session (overrides the app's YAML
 	// entry agent) and ContextExtra is extra system-prompt text for the session.
 	// Both are set at creation by non-human launchers (e.g. a background channel
@@ -676,6 +683,10 @@ type BlobRef struct {
 	Hash string `json:"hash"`
 	Mime string `json:"mime"`
 	Size int64  `json:"size"`
+	// Name is the original client-supplied filename, used when materialising the
+	// attachment into the session workdir (<workdir>/attachments/<name>) so the
+	// agent can read it by a human name. Optional; falls back to the hash.
+	Name string `json:"name,omitempty"`
 }
 
 // TurnPayload carries lifecycle data for the three turn events. TurnID

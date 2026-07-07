@@ -196,6 +196,7 @@ func (p *ProxyModule) Invoke(ctx context.Context, toolName string, params []byte
 	if id, ok := tool.IdentityFromContext(ctx); ok {
 		req.AppID, req.SessionID, req.UserID, req.AgentID = id.AppID, id.SessionID, id.UserID, id.AgentID
 	}
+	req.AppDir = pkgmodule.AppDir(ctx)
 	// Forward the app's resolved per-module config so the worker-hosted
 	// module reads its app-specific configuration on this call.
 	if cfg := pkgmodule.ModuleConfigFrom(ctx); len(cfg) > 0 {

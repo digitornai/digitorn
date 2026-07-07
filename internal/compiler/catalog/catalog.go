@@ -1,7 +1,4 @@
-// Package catalog enumerates every identifier the compiler validates
-// references against: modules, tools, middleware, channel adapters, providers.
-// Module data is sourced from pluggable ManifestSources (a directory of YAML
-// manifests or the runtime module registry).
+
 package catalog
 
 import (
@@ -45,9 +42,6 @@ func New(sources ...ManifestSource) (*Catalog, error) {
 			}
 		}
 	}
-	// Seed the runtime-internal system modules (memory, agent_spawn) so apps
-	// can DECLARE them per the documented contract even though they have no
-	// bus manifest. A real ManifestSource may override them below.
 	merge(systemModuleManifests())
 	for _, src := range sources {
 		ms, err := src.Manifests()
@@ -105,7 +99,6 @@ func (c *Catalog) ToolsFor(id string) []string {
 	return names
 }
 
-// ToolSpec returns the full spec (params, risk, permissions...) for a tool.
 func (c *Catalog) ToolSpec(moduleID, toolName string) (tool.Spec, bool) {
 	entry, ok := c.modules[moduleID]
 	if !ok {
@@ -115,7 +108,6 @@ func (c *Catalog) ToolSpec(moduleID, toolName string) (tool.Spec, bool) {
 	return spec, ok
 }
 
-// ConfigSchema returns the module's declared config schema, if any.
 func (c *Catalog) ConfigSchema(moduleID string) (map[string]any, bool) {
 	entry, ok := c.modules[moduleID]
 	if !ok {

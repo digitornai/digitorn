@@ -118,3 +118,7 @@ bin/repomap-probe
 bin/streamprobe
 bin/voice-test-client
 bin/zzverify_evict
+
+# Compiled artifacts (never source)
+/digitorn-voice
+*.dgc

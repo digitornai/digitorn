@@ -491,11 +491,33 @@ func applyLocked(s *SessionState, ev *Event) {
 			if ev.Meta != nil {
 				if ev.Meta.Model == "" {
 					delete(s.ModelOverrides, ev.Meta.AgentID)
+					delete(s.ProviderOverrides, ev.Meta.AgentID)
+					delete(s.OutputTokenOverrides, ev.Meta.AgentID)
 				} else {
 					if s.ModelOverrides == nil {
 						s.ModelOverrides = map[string]string{}
 					}
 					s.ModelOverrides[ev.Meta.AgentID] = ev.Meta.Model
+					// Cross-provider pin (e.g. a local model): remember its provider
+					// so BYOK resolves the right vault credential; clear it otherwise
+					// so a same-provider switch never carries a stale provider.
+					if ev.Meta.Provider != "" {
+						if s.ProviderOverrides == nil {
+							s.ProviderOverrides = map[string]string{}
+						}
+						s.ProviderOverrides[ev.Meta.AgentID] = ev.Meta.Provider
+					} else {
+						delete(s.ProviderOverrides, ev.Meta.AgentID)
+					}
+					// Per-model max generation override (BYOK models w/ unknown limits).
+					if ev.Meta.MaxOutputTokens > 0 {
+						if s.OutputTokenOverrides == nil {
+							s.OutputTokenOverrides = map[string]int{}
+						}
+						s.OutputTokenOverrides[ev.Meta.AgentID] = ev.Meta.MaxOutputTokens
+					} else {
+						delete(s.OutputTokenOverrides, ev.Meta.AgentID)
+					}
 				}
 				if ev.Meta.MaxContextTokens > 0 {
 					s.EntryModelWindow = ev.Meta.MaxContextTokens

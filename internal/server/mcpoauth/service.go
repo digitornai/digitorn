@@ -23,6 +23,12 @@ type Service struct {
 	discoverer *discoverer
 	clients    *clientStore
 	redirectB  string
+	// pieceRedirectURL, when set, is the full public OAuth callback used for
+	// connector (piece) flows — a hosted bounce page (e.g.
+	// https://auth.digitorn.ai/oauth/callback) that forwards the code back to
+	// the local daemon. Needed for providers that reject loopback redirects
+	// (Slack, Notion…) and to keep one callback per app across desktop + cloud.
+	pieceRedirectURL string
 }
 
 func NewService(db *gorm.DB, sealer *Sealer) *Service {
@@ -90,9 +96,15 @@ func (s *Service) AuthorizeForPiece(ctx context.Context, cfg *schema.MCPAuthConf
 	if ra.AuthorizeURL == "" || ra.ClientID == "" {
 		return "", "", fmt.Errorf("mcpoauth: piece %q has no usable authorize_url/client_id", serverID)
 	}
-	// Generate redirect URI if not set.
+	// Generate redirect URI if not set. Prefer the hosted bounce URL when
+	// configured (works for loopback-hostile providers + unifies desktop/cloud);
+	// otherwise fall back to the daemon's own loopback callback.
 	if ra.RedirectURI == "" {
-		ra.RedirectURI = s.redirectB + "/api/oauth/mcp/callback"
+		if s.pieceRedirectURL != "" {
+			ra.RedirectURI = s.pieceRedirectURL
+		} else {
+			ra.RedirectURI = s.redirectB + "/api/oauth/mcp/callback"
+		}
 	}
 	state, err = generateState()
 	if err != nil {
@@ -146,6 +158,23 @@ func (s *Service) Exchange(ctx context.Context, cfg *schema.MCPAuthConfig, p *Pe
 		return fmt.Errorf("mcpoauth: token endpoint returned no access_token")
 	}
 	return s.tokens.Set(ctx, p.UserID, p.Provider, tok)
+}
+
+// ExchangeForPiece swaps the authorization code for a token using the piece's
+// config directly — no app enrich (mirrors AuthorizeForPiece, which also skips
+// it). Returns the token so the caller can store it in the pieces store; does
+// not touch the generic per-provider token store (pieces are keyed by
+// user+piece there, so there's no provider-key collision).
+func (s *Service) ExchangeForPiece(ctx context.Context, cfg *schema.MCPAuthConfig, p *PendingState, code string) (*Token, error) {
+	ra := resolveAuth(cfg)
+	tok, err := s.flow.exchange(ctx, ra, code, p.RedirectURI, p.Verifier)
+	if err != nil {
+		return nil, err
+	}
+	if tok.AccessToken == "" {
+		return nil, fmt.Errorf("mcpoauth: token endpoint returned no access_token")
+	}
+	return tok, nil
 }
 
 // SetManual stores a token supplied directly by the client (bypassing the flow).

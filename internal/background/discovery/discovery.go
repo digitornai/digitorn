@@ -159,20 +159,24 @@ func BuildPlan(apps []AppChannels, env func(string) string, secret func(appID, k
 				p.WhatsApps = append(p.WhatsApps, whatsappProvider(name, pc.Config, env))
 			case "discord":
 				p.Discords = append(p.Discords, discordProvider(name, pc.Config, env))
-		case "pieces":
-			if pp, ok := piecesProvider(app.AppID, name, pc.Config, env, &p); ok {
-				p.Pieces = append(p.Pieces, pp)
-			}
-		case "primitives":
-			// Primitives adapter is registered separately in Arm() — no provider config needed.
-			// The adapter polls the daemon's /api/events/recent endpoint for module events.
-		default:
+			case "pieces":
+				if pp, ok := piecesProvider(app.AppID, name, pc.Config, env, &p); ok {
+					p.Pieces = append(p.Pieces, pp)
+				}
+			case "primitives":
+				// Primitives adapter is registered separately in Arm() — no provider config needed.
+				// The adapter polls the daemon's /api/events/recent endpoint for module events.
+			default:
 				p.Warnings = append(p.Warnings, "provider "+name+": adapter "+pc.Adapter+" not wired (V1: webhook|cron|rss|telegram|whatsapp|discord|pieces)")
 			}
 			p.Triggers = append(p.Triggers, spec)
 		}
 	}
 	return p
+}
+
+func WebhookProviderFromConfig(name string, cfg map[string]any) webhook.Provider {
+	return webhookProvider(name, cfg, nil)
 }
 
 func webhookProvider(name string, cfg map[string]any, env func(string) string) webhook.Provider {
@@ -186,6 +190,7 @@ func webhookProvider(name string, cfg map[string]any, env func(string) string) w
 		APIKeyHeader: cfgStr(cfg, "api_key_header", env),
 		MaxBytes:     cfgInt(cfg, "max_payload_bytes"),
 		CallbackURL:  cfgStr(cfg, "callback_url", env),
+		AllowPrivate: cfgBool(cfg, "allow_private_callbacks"),
 	}
 }
 
@@ -426,6 +431,21 @@ func cfgStr(cfg map[string]any, key string, env func(string) string) string {
 	})
 }
 
+func cfgBool(cfg map[string]any, key string) bool {
+	v, ok := cfg[key]
+	if !ok {
+		return false
+	}
+	switch b := v.(type) {
+	case bool:
+		return b
+	case string:
+		return b == "true" || b == "1" || b == "yes"
+	default:
+		return false
+	}
+}
+
 func cfgInt(cfg map[string]any, key string) int64 {
 	switch v := cfg[key].(type) {
 	case int:
@@ -473,9 +493,9 @@ func RegisterChannelAdapters(reg *adapter.Registry, plan Plan, st *store.Store, 
 	if log == nil {
 		log = slog.Default()
 	}
-	if len(plan.Webhooks) > 0 {
-		reg.Register(webhook.New(plan.Webhooks))
-	}
+	// Webhooks are NOT registered here: the caller builds one webhook adapter
+	// (YAML plan + DB-persisted providers) and registers it explicitly, so
+	// runtime-pushed webhook triggers share the same live instance (Arm).
 	if len(plan.Feeds) > 0 {
 		reg.Register(rss.New(plan.Feeds, storeCursors{st: st}, log))
 	}
@@ -516,14 +536,7 @@ func ArmFromDB(ctx context.Context, st *store.Store, reg *adapter.Registry, log 
 		return nil, fmt.Errorf("background: load triggers from DB: %w", err)
 	}
 	for _, t := range triggers {
-		spec := processor.TriggerSpec{
-			AppID:    t.AppID,
-			Provider: t.Provider,
-			Adapter:  t.Adapter,
-		}
-		if _, err := mgr.Arm(ctx, spec); err != nil {
-			log.Warn("background: arm from DB failed", "trigger", t.ID, "err", err.Error())
-		}
+		mgr.Route(t.AppID, t.Provider, t.ID)
 	}
 	log.Info("background: armed from DB", "triggers", len(triggers))
 	return mgr, nil

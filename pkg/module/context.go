@@ -35,6 +35,7 @@ const (
 	keySessionID ctxKey = iota
 	keyUserID
 	keyAppID
+	keyAppDir
 	keyAgentID
 	keyWorkspace
 	keyCaller
@@ -51,8 +52,11 @@ func WithSessionID(ctx context.Context, id string) context.Context {
 }
 
 func SessionID(ctx context.Context) string {
-	v, _ := ctx.Value(keySessionID).(string)
-	return v
+	if v, _ := ctx.Value(keySessionID).(string); v != "" {
+		return v
+	}
+	id, _ := tool.IdentityFromContext(ctx)
+	return id.SessionID
 }
 
 func WithUserID(ctx context.Context, id string) context.Context {
@@ -60,8 +64,11 @@ func WithUserID(ctx context.Context, id string) context.Context {
 }
 
 func UserID(ctx context.Context) string {
-	v, _ := ctx.Value(keyUserID).(string)
-	return v
+	if v, _ := ctx.Value(keyUserID).(string); v != "" {
+		return v
+	}
+	id, _ := tool.IdentityFromContext(ctx)
+	return id.UserID
 }
 
 func WithAppID(ctx context.Context, id string) context.Context {
@@ -69,7 +76,19 @@ func WithAppID(ctx context.Context, id string) context.Context {
 }
 
 func AppID(ctx context.Context) string {
-	v, _ := ctx.Value(keyAppID).(string)
+	if v, _ := ctx.Value(keyAppID).(string); v != "" {
+		return v
+	}
+	id, _ := tool.IdentityFromContext(ctx)
+	return id.AppID
+}
+
+func WithAppDir(ctx context.Context, dir string) context.Context {
+	return context.WithValue(ctx, keyAppDir, dir)
+}
+
+func AppDir(ctx context.Context) string {
+	v, _ := ctx.Value(keyAppDir).(string)
 	return v
 }
 
@@ -78,8 +97,11 @@ func WithAgentID(ctx context.Context, id string) context.Context {
 }
 
 func AgentID(ctx context.Context) string {
-	v, _ := ctx.Value(keyAgentID).(string)
-	return v
+	if v, _ := ctx.Value(keyAgentID).(string); v != "" {
+		return v
+	}
+	id, _ := tool.IdentityFromContext(ctx)
+	return id.AgentID
 }
 
 func WithWorkspace(ctx context.Context, path string) context.Context {

@@ -23,6 +23,7 @@ import (
 
 	"github.com/digitornai/digitorn/internal/background/adapter/cron"
 	"github.com/digitornai/digitorn/internal/background/adapter/pieces"
+	"github.com/digitornai/digitorn/internal/background/adapter/webhook"
 	"github.com/digitornai/digitorn/internal/background/channels"
 	"github.com/digitornai/digitorn/internal/background/daemonclient"
 	"github.com/digitornai/digitorn/internal/background/discovery"
@@ -34,17 +35,66 @@ import (
 
 type inbound struct{ mgr *processor.Manager }
 
-func (i *inbound) Handler() http.Handler         { return i.mgr.Handler() }
+func (i *inbound) Handler() http.Handler           { return i.mgr.Handler() }
 func (i *inbound) Start(ctx context.Context) error { return i.mgr.Start(ctx) }
 
 // channelRuntimeAdapters are armed from the scanned app YAML (persistent
 // listeners), not the DB-trigger path — so a /ops/triggers push for one is a
 // no-op for arming. It still carries the owner's refresh token, which we store.
+// Webhook is NOT here: a pushed webhook trigger arms its live route at runtime
+// (rearmFunc "webhook" case) and persists its provider config for reboots.
 var channelRuntimeAdapters = map[string]bool{
-	"discord": true, "telegram": true, "webhook": true, "rss": true, "whatsapp": true,
+	"discord": true, "telegram": true, "rss": true, "whatsapp": true,
 }
 
-func rearmFunc(client *daemonclient.Client, st *store.Store, mgr *processor.Manager, ca *cron.Adapter, pa *pieces.Adapter, umgr *userauth.Manager) func(context.Context, service.CreateTriggerRequest) (store.Trigger, error) {
+// loadWebhooksFromDB rebuilds live webhook providers from DB-persisted triggers
+// (the push-based path: daemon → POST /ops/triggers with the adapter config).
+// Without this, a pushed webhook served requests only until the next restart.
+func loadWebhooksFromDB(ctx context.Context, st *store.Store) ([]webhook.Provider, error) {
+	triggers, err := st.AllTriggers(ctx, "", true)
+	if err != nil {
+		return nil, err
+	}
+	var out []webhook.Provider
+	for _, t := range triggers {
+		if t.Adapter != "webhook" || t.ConfigJSON == "" {
+			continue
+		}
+		var spec processor.TriggerSpec
+		if err := json.Unmarshal([]byte(t.ConfigJSON), &spec); err != nil || len(spec.Config) == 0 {
+			continue
+		}
+		p := discovery.WebhookProviderFromConfig(t.Provider, spec.Config)
+		if p.Path == "" {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out, nil
+}
+
+// mergeWebhookProviders overlays DB-persisted providers on the YAML plan's:
+// same path → the DB one wins (it carries the freshest pushed secrets).
+func mergeWebhookProviders(yaml, db []webhook.Provider) []webhook.Provider {
+	byPath := make(map[string]webhook.Provider, len(yaml)+len(db))
+	order := make([]string, 0, len(yaml)+len(db))
+	for _, p := range append(append([]webhook.Provider{}, yaml...), db...) {
+		if p.Path == "" {
+			continue
+		}
+		if _, seen := byPath[p.Path]; !seen {
+			order = append(order, p.Path)
+		}
+		byPath[p.Path] = p
+	}
+	out := make([]webhook.Provider, 0, len(order))
+	for _, path := range order {
+		out = append(out, byPath[path])
+	}
+	return out
+}
+
+func rearmFunc(client *daemonclient.Client, st *store.Store, mgr *processor.Manager, ca *cron.Adapter, pa *pieces.Adapter, wa *webhook.Adapter, umgr *userauth.Manager) func(context.Context, service.CreateTriggerRequest) (store.Trigger, error) {
 	return func(ctx context.Context, req service.CreateTriggerRequest) (store.Trigger, error) {
 		// Store the owner's refresh token regardless of adapter, so background
 		// turns for this app can mint a fresh per-user access token.
@@ -74,10 +124,24 @@ func rearmFunc(client *daemonclient.Client, st *store.Store, mgr *processor.Mana
 		spec := processor.TriggerSpec{
 			AppID: req.AppID, Provider: req.Provider, Adapter: req.Adapter,
 			DefaultAgent: req.Agent, Schedule: req.Schedule,
-			Activation: activation,
+			Activation: activation, Config: req.Config,
 		}
 
 		switch req.Adapter {
+		case "webhook":
+			if wa == nil {
+				return store.Trigger{}, fmt.Errorf("webhook adapter not initialized")
+			}
+			p := discovery.WebhookProviderFromConfig(req.Provider, req.Config)
+			if err := wa.Arm(p); err != nil {
+				return store.Trigger{}, err
+			}
+			id, err := mgr.Arm(ctx, spec)
+			if err != nil {
+				return store.Trigger{}, err
+			}
+			return st.GetTrigger(ctx, id)
+
 		case "cron":
 			sched, err := cron.Parse(req.Schedule)
 			if err != nil {
@@ -91,7 +155,14 @@ func rearmFunc(client *daemonclient.Client, st *store.Store, mgr *processor.Mana
 			if err != nil {
 				return store.Trigger{}, err
 			}
-			ca.Arm(cron.Provider{Name: req.Provider, Schedule: sched})
+			// Catch-up: if this schedule already ran before (a re-push after a
+			// restart/outage), replay the single most recent slot missed since its
+			// last run. The per-minute DedupKey keeps it idempotent.
+			var catchUp time.Time
+			if runs, rerr := st.ListRuns(ctx, store.RunFilter{TriggerID: id, Limit: 1}); rerr == nil && len(runs) == 1 {
+				catchUp = runs[0].StartedAt
+			}
+			ca.Arm(cron.Provider{Name: req.Provider, Schedule: sched, CatchUpFrom: catchUp})
 			return st.GetTrigger(ctx, id)
 
 		case "pieces":
@@ -123,6 +194,19 @@ func rearmFunc(client *daemonclient.Client, st *store.Store, mgr *processor.Mana
 			}
 			return store.Trigger{}, fmt.Errorf("adapter %q cannot be armed at runtime (supported: cron, pieces, channels)", req.Adapter)
 		}
+	}
+}
+
+// disarmFunc stops a trigger's live listener on a runtime disable. Cron
+// schedules are the ones that keep firing after a DB-only disable (their
+// goroutine outlives the flag), so those are stopped here; other adapters are
+// re-armed from YAML/DB on restart and gated by the disabled flag next boot.
+func disarmFunc(ca *cron.Adapter) func(context.Context, store.Trigger) error {
+	return func(_ context.Context, t store.Trigger) error {
+		if t.Adapter == "cron" {
+			ca.Disarm(t.Provider)
+		}
+		return nil
 	}
 }
 
@@ -316,6 +400,16 @@ func main() {
 			discovery.RegisterChannelAdapters(reg, channelPlan, st, log)
 		}
 
+		// One shared webhook adapter: YAML-scanned providers + DB-persisted ones
+		// (pushed at app install), always registered — even empty — so a webhook
+		// pushed later arms a live route on THIS instance without a restart.
+		dbHooks, werr := loadWebhooksFromDB(context.Background(), st)
+		if werr != nil {
+			log.Warn("background: could not load webhook triggers from DB", "err", werr.Error())
+		}
+		wa := webhook.New(mergeWebhookProviders(channelPlan.Webhooks, dbHooks))
+		reg.Register(wa)
+
 		mgr, err := discovery.ArmFromDB(context.Background(), st, reg, log)
 		if err != nil {
 			return service.Setup{}, err
@@ -332,7 +426,8 @@ func main() {
 		return service.Setup{
 			Processor: proc,
 			Inbound:   &inbound{mgr: mgr},
-			Rearm:     rearmFunc(client, st, mgr, ca, pa, umgr),
+			Rearm:     rearmFunc(client, st, mgr, ca, pa, wa, umgr),
+			Disarm:    disarmFunc(ca),
 		}, nil
 	}
 

@@ -9,6 +9,10 @@ type Literal struct {
 type Ref struct {
 	Namespace string
 	Path      []string
+	// Filters is the runtime filter chain ({{path | json}}). The compiler never
+	// applies filters — it preserves them so runtime-passthrough placeholders
+	// reach the runtime intact.
+	Filters []string
 }
 
 type Include struct {

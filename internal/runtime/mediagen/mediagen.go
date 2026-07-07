@@ -25,15 +25,13 @@ import (
 	"github.com/digitornai/digitorn/internal/llm"
 )
 
-// Client POSTs to a gateway's OpenAI-style media endpoints.
+
 type Client struct {
-	// Base is the gateway root (may or may not include a trailing /v1 — it's
-	// normalised per request).
+
 	Base string
 	HTTP *http.Client
 }
 
-// New builds a client for the given gateway base URL.
 func New(base string) *Client {
 	return &Client{
 		Base: strings.TrimSuffix(strings.TrimRight(base, "/"), "/v1"),
@@ -76,8 +74,7 @@ type imageResponse struct {
 	} `json:"data"`
 }
 
-// GenerateImage requests image generation and returns image parts with inline
-// bytes (decoded from b64_json or downloaded from the returned URL).
+
 func (c *Client) GenerateImage(ctx context.Context, model, prompt, bearer string) ([]llm.ContentPart, error) {
 	var out imageResponse
 	if err := c.post(ctx, "/v1/images/generations", bearer, map[string]any{
@@ -120,8 +117,7 @@ type videoResponse struct {
 	} `json:"video"`
 }
 
-// GenerateVideo requests video generation and returns a single video part
-// pointing at the gateway-hosted URL.
+
 func (c *Client) GenerateVideo(ctx context.Context, model, prompt, bearer string) ([]llm.ContentPart, error) {
 	var out videoResponse
 	if err := c.post(ctx, "/v1/videos/generations", bearer, map[string]any{
@@ -140,8 +136,7 @@ func (c *Client) GenerateVideo(ctx context.Context, model, prompt, bearer string
 	return []llm.ContentPart{{Type: llm.ContentTypeVideo, URL: out.Video.URL, Mime: mime}}, nil
 }
 
-// download fetches a generated-image URL into bytes + mime so it can be stored
-// permanently in the blob store (the CDN URLs expire).
+
 func (c *Client) download(ctx context.Context, url string) ([]byte, string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {

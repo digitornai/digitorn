@@ -2,6 +2,7 @@ package appmgr
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -111,6 +112,70 @@ func (m *gormManager) SetBYOK(ctx context.Context, appID string, enabled bool) e
 		slog.Bool("byok", enabled),
 	)
 	return nil
+}
+
+func (m *gormManager) SetAppPieces(ctx context.Context, appID string, pieces []string) error {
+	lock := m.lockFor(appID)
+	lock.Lock()
+	defer lock.Unlock()
+
+	var row models.App
+	if err := m.cfg.DB.WithContext(ctx).First(&row, "app_id = ?", appID).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return ErrAppNotFound
+		}
+		return err
+	}
+
+	seen := map[string]struct{}{}
+	clean := make([]string, 0, len(pieces))
+	for _, p := range pieces {
+		p = canonPiece(p)
+		if p == "" {
+			continue
+		}
+		if _, ok := seen[p]; ok {
+			continue
+		}
+		seen[p] = struct{}{}
+		clean = append(clean, p)
+	}
+
+	encoded := ""
+	if len(clean) > 0 {
+		b, err := json.Marshal(clean)
+		if err != nil {
+			return err
+		}
+		encoded = string(b)
+	}
+	if row.PiecesAllow == encoded {
+		return nil
+	}
+	row.PiecesAllow = encoded
+	row.UpdatedAt = time.Now().UTC()
+	if err := m.cfg.DB.WithContext(ctx).Save(&row).Error; err != nil {
+		return err
+	}
+
+	if row.Enabled {
+		ra, err := m.loadFromDisk(&row)
+		if err != nil {
+			return fmt.Errorf("appmgr: setpieces load: %w", err)
+		}
+		m.swapSnapshot(appID, ra)
+	}
+
+	m.cfg.Logger.Info("appmgr: app pieces updated",
+		slog.String("app_id", appID),
+		slog.Int("count", len(clean)),
+	)
+	return nil
+}
+
+func canonPiece(s string) string {
+	s = strings.TrimSpace(strings.ToLower(s))
+	return strings.ReplaceAll(s, "-", "_")
 }
 
 // SetDisplayName overrides the displayed label. The trimmed name is stored on

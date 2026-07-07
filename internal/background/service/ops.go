@@ -36,9 +36,9 @@ type CreateTriggerRequest struct {
 	RefreshToken string `json:"refresh_token,omitempty"`
 	// Config carries adapter-specific config stored in ConfigJSON.
 	// For pieces: {piece, trigger, auth, props, interval, trigger_url}.
-	Config      map[string]any           `json:"config,omitempty"`
+	Config      map[string]any             `json:"config,omitempty"`
 	Activation  *channels.ActivationConfig `json:"activation,omitempty"`
-	Attachments []channels.AttachmentRef  `json:"attachments"`
+	Attachments []channels.AttachmentRef   `json:"attachments"`
 }
 
 // OpsConfig configures the ops/admin API. Token, when set, is required as a
@@ -50,8 +50,9 @@ type CreateTriggerRequest struct {
 // the durable trigger AND arms the live adapter. nil → POST /ops/triggers returns
 // 501 (the wiring that can reach the adapters wasn't provided).
 type OpsConfig struct {
-	Token string
-	Rearm func(context.Context, CreateTriggerRequest) (store.Trigger, error)
+	Token  string
+	Rearm  func(context.Context, CreateTriggerRequest) (store.Trigger, error)
+	Disarm func(context.Context, store.Trigger) error
 }
 
 // opsRoutes builds the ops/admin HTTP surface over the durable store. It is
@@ -62,7 +63,7 @@ type OpsConfig struct {
 //
 // Mounted under /ops (the caller StripPrefixes), so patterns here are relative.
 func opsRoutes(st *store.Store, cfg OpsConfig) http.Handler {
-	h := &opsAPI{st: st, rearm: cfg.Rearm}
+	h := &opsAPI{st: st, rearm: cfg.Rearm, disarm: cfg.Disarm}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /triggers", h.listTriggers)
 	mux.HandleFunc("POST /triggers", h.createTrigger)
@@ -73,6 +74,12 @@ func opsRoutes(st *store.Store, cfg OpsConfig) http.Handler {
 	mux.HandleFunc("GET /jobs/{id}", h.getJob)
 	mux.HandleFunc("POST /jobs/{id}/replay", h.replayJob)
 	mux.HandleFunc("GET /runs", h.listRuns)
+	// Health surface: windowed metrics (success rate, durations, backlog), the
+	// dead-letter queue (terminally-failed jobs), and trigger alerts (channels
+	// failing repeatedly). Read-only; back the Overview + alerting.
+	mux.HandleFunc("GET /metrics", h.metrics)
+	mux.HandleFunc("GET /dlq", h.deadLetter)
+	mux.HandleFunc("GET /alerts", h.alerts)
 	// Session wake-ups (user-programmed schedules): bind a session to wake on a
 	// schedule with an injected payload. Backed by the same cron-arm machinery.
 	mux.HandleFunc("POST /schedules", h.createSchedule)
@@ -96,8 +103,9 @@ func withOpsAuth(token string, next http.Handler) http.Handler {
 }
 
 type opsAPI struct {
-	st    *store.Store
-	rearm func(context.Context, CreateTriggerRequest) (store.Trigger, error)
+	st     *store.Store
+	rearm  func(context.Context, CreateTriggerRequest) (store.Trigger, error)
+	disarm func(context.Context, store.Trigger) error
 }
 
 // channelOpsAdapters are persistent-listener adapters whose message comes from
@@ -156,12 +164,12 @@ func (a *opsAPI) createSchedule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		AppID     string `json:"app_id"`
-		SessionID string `json:"session_id"`
-		Owner     string `json:"owner"`
-		Schedule  string `json:"schedule"`
-		Message   string `json:"message"`
-		Context   string `json:"context"`
+		AppID       string                   `json:"app_id"`
+		SessionID   string                   `json:"session_id"`
+		Owner       string                   `json:"owner"`
+		Schedule    string                   `json:"schedule"`
+		Message     string                   `json:"message"`
+		Context     string                   `json:"context"`
 		Agent       string                   `json:"agent"`
 		Reply       string                   `json:"reply"`
 		Label       string                   `json:"label"`
@@ -238,16 +246,24 @@ func (a *opsAPI) getTrigger(w http.ResponseWriter, r *http.Request) {
 
 func (a *opsAPI) enableTrigger(enabled bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ok, err := a.st.SetTriggerEnabled(r.Context(), r.PathValue("id"), enabled)
+		id := r.PathValue("id")
+		ok, err := a.st.SetTriggerEnabled(r.Context(), id, enabled)
 		switch {
 		case err != nil:
 			writeOps(w, 500, map[string]any{"error": err.Error()})
+			return
 		case !ok:
 			writeOps(w, 404, map[string]any{"error": "trigger not found"})
-		default:
-			writeOps(w, 200, map[string]any{"id": r.PathValue("id"), "enabled": enabled,
-				"note": "runtime override; YAML config is re-applied on restart"})
+			return
 		}
+		disarmed := false
+		if !enabled && a.disarm != nil {
+			if t, gerr := a.st.GetTrigger(r.Context(), id); gerr == nil {
+				disarmed = a.disarm(r.Context(), t) == nil
+			}
+		}
+		writeOps(w, 200, map[string]any{"id": id, "enabled": enabled, "disarmed": disarmed,
+			"note": "runtime override; YAML config is re-applied on restart"})
 	}
 }
 
@@ -323,6 +339,71 @@ func (a *opsAPI) listRuns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeOps(w, 200, map[string]any{"runs": runViews(runs), "count": len(runs)})
+}
+
+// ── Health (metrics / DLQ / alerts) ──────────────────────────────────────────
+
+// windowSince parses a ?window duration (e.g. "24h", "1h", "7d-ish as 168h")
+// into a start time. Defaults to 24h; caps at 30d so a query can't scan forever.
+func windowSince(q string) (time.Time, string) {
+	d := 24 * time.Hour
+	if q != "" {
+		if parsed, err := time.ParseDuration(q); err == nil && parsed > 0 {
+			d = parsed
+		}
+	}
+	if d > 30*24*time.Hour {
+		d = 30 * 24 * time.Hour
+	}
+	return time.Now().UTC().Add(-d), d.String()
+}
+
+func (a *opsAPI) metrics(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	appID := q.Get("app_id")
+	if appID == "" {
+		appID = q.Get("app")
+	}
+	since, window := windowSince(q.Get("window"))
+	m, err := a.st.MetricsWindow(r.Context(), appID, since)
+	if err != nil {
+		writeOps(w, 500, map[string]any{"error": err.Error()})
+		return
+	}
+	m.Window = window
+	writeOps(w, 200, m)
+}
+
+func (a *opsAPI) deadLetter(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	appID := q.Get("app_id")
+	if appID == "" {
+		appID = q.Get("app")
+	}
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	jobs, err := a.st.DeadLetter(r.Context(), appID, limit)
+	if err != nil {
+		writeOps(w, 500, map[string]any{"error": err.Error()})
+		return
+	}
+	out := make([]map[string]any, 0, len(jobs))
+	for _, j := range jobs {
+		out = append(out, jobView(j))
+	}
+	writeOps(w, 200, map[string]any{"dlq": out, "count": len(out)})
+}
+
+func (a *opsAPI) alerts(w http.ResponseWriter, r *http.Request) {
+	streak, _ := strconv.Atoi(r.URL.Query().Get("streak"))
+	if streak <= 0 {
+		streak = defaultAlertStreak
+	}
+	alerts, err := a.st.TriggerAlerts(r.Context(), streak)
+	if err != nil {
+		writeOps(w, 500, map[string]any{"error": err.Error()})
+		return
+	}
+	writeOps(w, 200, map[string]any{"alerts": alerts, "count": len(alerts), "streak": streak})
 }
 
 // ── Views ────────────────────────────────────────────────────────────────────

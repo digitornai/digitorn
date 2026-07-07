@@ -60,6 +60,8 @@ type SessionSnapshot struct {
 	EntryAgent            string                    `json:"entry_agent,omitempty"`
 	ContextExtra          string                    `json:"context,omitempty"`
 	ModelOverrides        map[string]string         `json:"model_overrides,omitempty"`
+	ProviderOverrides     map[string]string         `json:"provider_overrides,omitempty"`
+	OutputTokenOverrides  map[string]int            `json:"output_token_overrides,omitempty"`
 	EntryModelWindow      int                       `json:"entry_model_window,omitempty"`
 	ReasoningEffort       string                    `json:"reasoning_effort,omitempty"`
 	EffortOverrides       map[string]string         `json:"effort_overrides,omitempty"`

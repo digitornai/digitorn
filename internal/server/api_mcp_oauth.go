@@ -1,8 +1,11 @@
 package server
 
 import (
+	"fmt"
 	"html"
 	"net/http"
+	"os"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -112,6 +115,13 @@ func (d *Daemon) mcpOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if p == nil {
+		// Browsers sometimes fire the callback twice; the state is single-use, so
+		// the duplicate lands here AFTER the first request already succeeded.
+		// Show success for a recently-completed state instead of a scary error.
+		if recentOAuthCompletions.done(state) {
+			writeOAuthHTML(w, http.StatusOK, "Authorization complete. You can close this window.")
+			return
+		}
 		writeOAuthHTML(w, http.StatusBadRequest, "This authorization link is invalid or has expired. Please try again.")
 		return
 	}
@@ -132,6 +142,7 @@ func (d *Daemon) mcpOAuthCallback(w http.ResponseWriter, r *http.Request) {
 			writeOAuthHTML(w, http.StatusBadGateway, "The provider rejected the authorization. Please try again.")
 			return
 		}
+		recentOAuthCompletions.mark(state)
 		writeOAuthHTML(w, http.StatusOK, "Authorization complete. You can close this window.")
 		return
 	}
@@ -185,25 +196,43 @@ func (d *Daemon) mcpOAuthCallback(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		// Build the auth config from the piece's OAuth schema, using client credentials from state.
+		// PKCE off: confidential client, and it must match the authorize step.
+		clientID, clientSecret := p.ClientID, p.ClientSecret
+		if clientID == "" && d.mcpHub != nil {
+			// State predates client-cred persistence (or was stored without them):
+			// fall back to the hub's system OAuth app.
+			if sys, serr := d.mcpHub.PiecesSystemConfig(r.Context(), pieceName); serr == nil && sys != nil {
+				if v, ok := sys.DigitornProvided["oauth_client_id"].(string); ok {
+					clientID = v
+				}
+				if v, ok := sys.DigitornProvided["oauth_client_secret"].(string); ok {
+					clientSecret = v
+				}
+			}
+		}
+		pkceOff := false
 		cfg := &schema.MCPAuthConfig{
 			Type:         "oauth2",
 			Provider:     "custom",
 			AuthorizeURL: authURL,
 			TokenURL:     tokenURL,
 			Scopes:       scopes,
-			ClientID:     p.ClientID,
-			ClientSecret: p.ClientSecret,
+			ClientID:     clientID,
+			ClientSecret: clientSecret,
 			RedirectURI:  p.RedirectURI,
+			PKCE:         &pkceOff,
 		}
-		if err := d.mcpOAuth.Exchange(r.Context(), cfg, p, code); err != nil {
+		tok, err := d.mcpOAuth.ExchangeForPiece(r.Context(), cfg, p, code)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "pieces oauth: exchange failed for %s: %v\n", pieceName, err)
 			writeOAuthHTML(w, http.StatusBadGateway, "The provider rejected the authorization. Please try again.")
 			return
 		}
-		// Store the token in the pieces store as well.
-		tok, err := d.mcpOAuth.GetToken(r.Context(), p.UserID, d.mcpOAuth.ProviderKeyResolved(r.Context(), cfg, piecesAppID, pieceName))
-		if err == nil && tok != nil {
-			pm.PiecesStore().UpsertOAuth(r.Context(), p.UserID, pieceName, tok.AccessToken, tok.RefreshToken, tok.TokenType, tok.ExpiresAt, tok.Scope)
+		if serr := pm.PiecesStore().UpsertOAuth(r.Context(), p.UserID, pieceName, tok.AccessToken, tok.RefreshToken, tok.TokenType, tok.ExpiresAt, tok.Scope, tokenURL, clientID, clientSecret); serr != nil {
+			writeOAuthHTML(w, http.StatusInternalServerError, "Could not store the connection. Please try again.")
+			return
 		}
+		recentOAuthCompletions.mark(state)
 		writeOAuthHTML(w, http.StatusOK, "Authorization complete. You can close this window.")
 		return
 	}
@@ -217,7 +246,36 @@ func (d *Daemon) mcpOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d.mcpCatalog.invalidate(p.AppID)
+	recentOAuthCompletions.mark(state)
 	writeOAuthHTML(w, http.StatusOK, "Authorization complete. You can close this window.")
+}
+
+// recentOAuthCompletions remembers states whose callback already succeeded so
+// a duplicate browser hit (states are single-use) shows success, not an error.
+var recentOAuthCompletions = &completedStates{seen: map[string]time.Time{}}
+
+type completedStates struct {
+	mu   sync.Mutex
+	seen map[string]time.Time
+}
+
+func (c *completedStates) mark(state string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	now := time.Now()
+	for s, t := range c.seen {
+		if now.Sub(t) > 10*time.Minute {
+			delete(c.seen, s)
+		}
+	}
+	c.seen[state] = now
+}
+
+func (c *completedStates) done(state string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	t, ok := c.seen[state]
+	return ok && time.Since(t) <= 10*time.Minute
 }
 
 // mcpOAuthTokenSet stores a token the client obtained out-of-band.

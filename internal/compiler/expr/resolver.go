@@ -7,7 +7,11 @@ import (
 )
 
 func passthrough(x Ref) string {
-	return "{{" + x.Namespace + "." + strings.Join(x.Path, ".") + "}}"
+	out := x.Namespace + "." + strings.Join(x.Path, ".")
+	for _, f := range x.Filters {
+		out += " | " + f
+	}
+	return "{{" + out + "}}"
 }
 
 // ErrUnresolved is returned by a Resolver when the requested key is not set.

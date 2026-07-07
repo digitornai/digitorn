@@ -226,7 +226,7 @@ function buildInputSchema(props: Record<string, PropDef>, auth: import('./types.
 
   for (const [key, prop] of Object.entries(props)) {
     if (prop.type === 'MARKDOWN') continue
-    properties[key] = propToJsonSchema(prop)
+    properties[key] = propToJsonSchema(prop, key)
     if (prop.required) required.push(key)
   }
 
@@ -290,8 +290,19 @@ function buildCustomAuthSchema(auth: import('./types.ts').AuthDef): unknown {
   }
 }
 
-function propToJsonSchema(prop: PropDef): unknown {
+function propToJsonSchema(prop: PropDef, key?: string): unknown {
   const base = { description: prop.description ?? prop.displayName }
+
+  if (prop.type === 'DYNAMIC_PROPERTIES' && key === 'url') {
+    return {
+      type: 'object',
+      properties: {
+        url: { type: 'string', description: 'Relative path (e.g. /user or /repos/{owner}/{repo}) or a full URL.' },
+      },
+      required: ['url'],
+      description: 'Endpoint to call. Pass as an object: { "url": "/path" }.',
+    }
+  }
 
   switch (prop.type) {
     case 'SHORT_TEXT':

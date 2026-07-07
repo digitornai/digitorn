@@ -200,6 +200,35 @@ func TestPlan_DirectMode_AppendsDomainTools(t *testing.T) {
 	}
 }
 
+func TestPlan_DirectMode_InjectsDiscoveryToolsForDynamicCatalog(t *testing.T) {
+	caps := &schema.CapabilitiesConfig{
+		DefaultPolicy: schema.CapAuto,
+		MaxRiskLevel:  schema.RiskLevel(tool.RiskHigh),
+	}
+	universe := []policy.AvailableAction{
+		{Module: "filesystem", Action: "read", Spec: &tool.Spec{
+			Name: "filesystem.read", Description: "Read a file.", RiskLevel: tool.RiskLow,
+		}},
+		{Module: "ap_github", Action: "custom_api_call", DiscoveryOnly: true, Spec: &tool.Spec{
+			Name: "ap_github.custom_api_call", Description: "Call the GitHub API.", RiskLevel: tool.RiskLow,
+		}},
+	}
+	idx := index.NewBuilder().Build(true, caps, &schema.Agent{ID: "main"}, universe)
+	d := (&injection.Planner{}).Plan(idx, agentWithWindow(128000), nil)
+	if d.Mode != injection.ModeDirect {
+		t.Fatalf("setup: tiny toolset should stay ModeDirect, got %v", d.Mode)
+	}
+	names := map[string]bool{}
+	for _, ts := range d.Tools {
+		names[ts.Name] = true
+	}
+	for _, want := range []string{"context_builder__search_tools", "context_builder__get_tool", "context_builder__execute_tool"} {
+		if !names[want] {
+			t.Errorf("direct mode with a discovery-only catalog must inject %q; got %v", want, names)
+		}
+	}
+}
+
 // TestPlan_CompactDirectMode_DomainToolsHaveNoParams : compact mode
 // emits domain tools WITHOUT Parameters → the LLM must call get_tool.
 func TestPlan_CompactDirectMode_DomainToolsHaveNoParams(t *testing.T) {

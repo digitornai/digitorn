@@ -95,12 +95,12 @@ type CreateSessionRequest struct {
 	Title           string    `json:"title,omitempty"`
 	Workdir         string    `json:"workdir,omitempty"`
 	SessionID       string    `json:"session_id,omitempty"`
-	Message         string `json:"message,omitempty"`
-	ClientMessageID string `json:"client_message_id,omitempty"`
-	Mode            string `json:"mode,omitempty"`
-	EntryAgent      string `json:"entry_agent,omitempty"`
-	Context         string `json:"context,omitempty"`
-	Model           string `json:"model,omitempty"`
+	Message         string    `json:"message,omitempty"`
+	ClientMessageID string    `json:"client_message_id,omitempty"`
+	Mode            string    `json:"mode,omitempty"`
+	EntryAgent      string    `json:"entry_agent,omitempty"`
+	Context         string    `json:"context,omitempty"`
+	Model           string    `json:"model,omitempty"`
 	Attachments     []BlobRef `json:"attachments,omitempty"`
 	// TriggerEvent is the structured inbound event (channels scope) attached to
 	// the inline first message so flow nodes can read {{event.payload.*}}.
@@ -168,6 +168,8 @@ type historyEvent struct {
 		Name       string `json:"name"`
 		Status     string `json:"status"`
 		DurationMs int64  `json:"duration_ms"`
+		Message    string `json:"message"`
+		Error      string `json:"error"`
 	} `json:"payload"`
 }
 
@@ -301,20 +303,60 @@ func (c *Client) History(ctx context.Context, appID, sessionID string, since uin
 	return out.Messages, nil
 }
 
-// WaitForReply polls history until the agentic turn ENDS (durable turn_ended event)
-// and returns the LAST non-empty assistant message it produced. Waiting for the whole
-// turn — not the first assistant message — is what makes a tool-using turn deliver its
-// FINAL answer to the channel ("here are the files") instead of a mid-loop preamble
-// ("let me look…").
-//
-// Completion is keyed on the turn_ended event, NOT turn_active: for an async
-// background-driven turn, turn_active in /history reads false the whole time, so
-// gating on !turn_active would return the first preamble before the tools even run
-// (the same trap that StreamReplies hit). The reply text is read from assistant_message
-// EVENTS rather than the projected Messages slice so a lagging projection can't make us
-// deliver stale or empty content at turn_ended. A startup grace bounds the wait if the
-// async turn never starts. Transient read errors are retried; a permanent 4xx aborts;
-// ctx end returns whatever final reply we have, else ErrReplyTimeout.
+
+func (c *Client) AwaitTurnOutcome(ctx context.Context, appID, sessionID string, afterSeq uint64) (string, error) {
+	t := time.NewTicker(c.pollEvery)
+	defer t.Stop()
+	path := fmt.Sprintf("/api/apps/%s/sessions/%s/history?since=%d", url(appID), url(sessionID), afterSeq)
+	started := false
+	startDeadline := time.Now().Add(streamStartGrace)
+	turnErr := ""
+	for {
+		var resp historyResponse
+		err := c.doJSON(ctx, http.MethodGet, path, nil, &resp, "history")
+		if err != nil {
+			if ae, ok := err.(*APIError); ok && !ae.Retryable() {
+				return turnErr, err
+			}
+		} else {
+			done := false
+			for _, e := range resp.Events {
+				if e.Seq <= afterSeq {
+					continue
+				}
+				switch e.Type {
+				case "error":
+					started = true
+					if m := strings.TrimSpace(e.Payload.Message); m != "" {
+						turnErr = m
+					} else if m := strings.TrimSpace(e.Payload.Error); m != "" {
+						turnErr = m
+					}
+				case "assistant_message", "tool_call", "tool_result", "assistant_delta", "turn_started", "turn_phase_changed":
+					started = true
+				case "turn_ended":
+					started = true
+					if e.Payload.Status == "errored" && turnErr == "" {
+						turnErr = "turn ended in error"
+					}
+					done = true
+				}
+			}
+			if done {
+				return turnErr, nil
+			}
+			if !started && time.Now().After(startDeadline) {
+				return "", nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return turnErr, nil
+		case <-t.C:
+		}
+	}
+}
+
 func (c *Client) WaitForReply(ctx context.Context, appID, sessionID string, afterSeq uint64) (Message, error) {
 	t := time.NewTicker(c.pollEvery)
 	defer t.Stop()
@@ -371,12 +413,7 @@ func (c *Client) WaitForReply(ctx context.Context, appID, sessionID string, afte
 	}
 }
 
-// Approval is one pending human-in-the-loop decision the daemon is blocked on: a
-// gated tool awaiting approval (Kind=="tool_call") or an ask_user question
-// (Kind=="question"). It mirrors the daemon's projected ApprovalState (subset).
-// For a tool_call, ToolName/ToolParams/RiskLevel describe what the agent wants to
-// run; for a question, Reason is the question text and Payload carries the shape
-// (choices/allow_custom/placeholder/multiline).
+
 type Approval struct {
 	ApprovalID string         `json:"id"`
 	Kind       string         `json:"kind"`
@@ -394,9 +431,7 @@ type stateApprovals struct {
 	Approvals map[string]Approval `json:"approvals"`
 }
 
-// PendingApprovals returns the session's currently-pending approvals (full detail),
-// read from the session snapshot. HTTP-only: an out-of-process client (the
-// background service) learns what the blocked turn is asking for without a socket.
+
 func (c *Client) PendingApprovals(ctx context.Context, appID, sessionID string) ([]Approval, error) {
 	path := fmt.Sprintf("/api/apps/%s/sessions/%s/state", url(appID), url(sessionID))
 	var snap stateApprovals
@@ -416,9 +451,7 @@ func (c *Client) PendingApprovals(ctx context.Context, appID, sessionID string) 
 	return out, nil
 }
 
-// ResolveApproval resolves a pending approval: action is "grant" (approve / answer)
-// or "deny" (reject); reason carries an ask_user answer or a refusal note. This is
-// the daemon's POST /approve — it unblocks the parked turn via the approval registry.
+
 func (c *Client) ResolveApproval(ctx context.Context, appID, sessionID, approvalID, action, reason string) error {
 	path := fmt.Sprintf("/api/apps/%s/approve", url(appID))
 	body := map[string]string{
@@ -430,20 +463,12 @@ func (c *Client) ResolveApproval(ctx context.Context, appID, sessionID, approval
 	return c.doJSON(ctx, http.MethodPost, path, body, nil, "approve")
 }
 
-// StreamReplies surfaces the FULL agentic turn live: it polls the session's event
-// stream and hands each new assistant message and finished tool call to onItem, in
-// seq order, until the turn settles (turn_active=false). This is what lets a channel
-// show "I'll analyze… → 🔧 filesystem.glob → here's the report" instead of only the
-// final answer. Transient read errors are retried; a permanent 4xx aborts; ctx end
-// stops the stream.
+
 func (c *Client) StreamReplies(ctx context.Context, appID, sessionID string, afterSeq uint64, onItem func(StreamItem)) error {
 	t := time.NewTicker(c.pollEvery)
 	defer t.Stop()
 	since := afterSeq
-	// The turn is triggered ASYNC after the message is posted, so the first poll may
-	// catch turn_active=false BEFORE the turn starts. Only conclude the turn is done
-	// once we've actually seen it active (or produced events) — else a startup grace
-	// expires so we never hang if the turn truly never starts.
+
 	started := false
 	startDeadline := time.Now().Add(streamStartGrace)
 	for {
@@ -480,9 +505,7 @@ func (c *Client) StreamReplies(ctx context.Context, appID, sessionID string, aft
 					done = true
 				}
 			}
-			// Completion is the durable turn_ended event. turn_active in /history is NOT
-			// a reliable "running" signal for an async background turn (it can read false
-			// the whole time), so relying on it ends the stream before the reply lands.
+
 			if done {
 				return nil
 			}
@@ -510,7 +533,6 @@ func toolLine(name, status string) string {
 	return "🔧 " + name + " " + mark
 }
 
-// ── HTTP plumbing ───────────────────────────────────────────────────────────
 
 func (c *Client) doJSON(ctx context.Context, method, path string, body, out any, op string) error {
 	var rdr io.Reader
@@ -536,18 +558,12 @@ func (c *Client) doJSON(ctx context.Context, method, path string, body, out any,
 	return nil
 }
 
-// WithActAs returns a context that makes the client impersonate the given end-user
-// (X-Act-As-User) on EVERY request under it — for callers that must touch a
-// user-owned session across several calls (e.g. polling/resolving approvals while a
-// turn runs). Empty user → ctx unchanged (the service owns the session).
+
 func WithActAs(ctx context.Context, user string) context.Context { return withActAs(ctx, user) }
 
 type actAsKey struct{}
 
-// withActAs marks a context so every request made under it carries X-Act-As-User :
-// the daemon then owns any session created / touched as that end-user (the service
-// JWT must carry the impersonation grant). One Launch = one owner, propagated to all
-// its sub-calls (exists / create / message / history).
+
 func withActAs(ctx context.Context, user string) context.Context {
 	if user == "" {
 		return ctx
@@ -560,9 +576,7 @@ func actAsFromCtx(ctx context.Context) string {
 	return v
 }
 
-// PieceAuth fetches the configured _ap_auth wire for an installed piece,
-// acting as the trigger owner so the background runtime uses THAT user's
-// credentials. Returned as a generic map (sent to the bridge as-is).
+
 func (c *Client) PieceAuth(ctx context.Context, owner, pieceName string) (map[string]any, error) {
 	if owner != "" {
 		ctx = withActAs(ctx, owner)
@@ -582,9 +596,7 @@ func (c *Client) PieceAuth(ctx context.Context, owner, pieceName string) (map[st
 	return out, nil
 }
 
-// AppChannelSecret fetches the installation's stored value for one channel
-// secret key (a bot token pasted in the UI), so BuildPlan can resolve a
-// {{secret.X}} placeholder at arm time. Returns "" (no error) when unset.
+
 func (c *Client) AppChannelSecret(ctx context.Context, appID, key string) (string, error) {
 	status, raw, err := c.do(ctx, http.MethodGet,
 		"/api/apps/"+neturl.PathEscape(appID)+"/channel-secret?key="+neturl.QueryEscape(key), nil, nil)
@@ -603,16 +615,13 @@ func (c *Client) AppChannelSecret(ctx context.Context, appID, key string) (strin
 	return out.Value, nil
 }
 
-// do executes a request, returning (status, body, error). A transport failure
-// returns a Status-0 *APIError (retryable).
+
 func (c *Client) do(ctx context.Context, method, path string, body io.Reader, headers map[string]string) (int, []byte, error) {
 	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, body)
 	if err != nil {
 		return 0, nil, &APIError{Op: "request", Message: err.Error()}
 	}
-	// On behalf of a user: prefer that user's real access token (so a background
-	// turn carries a UserJWT the gateway accepts). Fall back to the service JWT +
-	// X-Act-As-User impersonation when no per-user token is available.
+
 	authed := false
 	if u := actAsFromCtx(ctx); u != "" {
 		if c.userToken != nil {
@@ -640,8 +649,7 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader, he
 	return resp.StatusCode, raw, nil
 }
 
-// codeOf / messageOf extract the daemon's {error,code,message} error envelope
-// (best-effort; falls back to the raw body).
+
 func codeOf(raw []byte) string {
 	var e struct {
 		Code string `json:"code"`
@@ -673,6 +681,5 @@ func messageOf(raw []byte) string {
 	return s
 }
 
-// url path-escapes a single path segment (app ids / session ids are slugs or
-// uuids, but escape defensively against a hostile id).
+
 func url(seg string) string { return neturl.PathEscape(seg) }

@@ -1,38 +1,13 @@
-// Package embeddings is the wire contract for the dedicated
-// embeddings worker (cmd/digitorn-worker-embeddings). Doc reference :
-// docs-site/language/04-tools.md "Semantic search" — the reference
-// daemon uses FastEmbed + Qdrant with
-// `paraphrase-multilingual-MiniLM-L12-v2` (384 dims).
-//
-// Architecture :
-//
-//	daemon          ── gRPC ──>  worker subprocess (this binary)
-//	ContextBuilder                ONNX runtime (paraphrase-multilingual-MiniLM-L12-v2)
-//	WithEmbeddings                384-dim L2-normalised float32 outputs
-//
-// The worker pool is managed by internal/worker.Manager. Multiple
-// instances run in parallel for throughput ; each one holds the
-// model in memory once. Sub-ms p50 batch latency on commodity CPU.
+
 package embeddings
 
 import "time"
 
-// EmbedRequest is the payload the daemon sends to the worker.
-//
-// Inputs are pre-batched on the daemon side ; the worker iterates
-// and returns one vector per input. Tokenisation, padding, and
-// mean-pooling all happen in the worker — the daemon never sees
-// raw tensors.
 type EmbedRequest struct {
-	// Inputs is the batch of texts to embed. 1..MaxBatchSize per
-	// call. Empty Inputs returns an empty Vectors slice without
-	// error.
+
 	Inputs []string `json:"inputs"`
 
-	// Model selects which catalogue model serves the request
-	// (canonical id or shortcut, see internal/embeddings/models).
-	// Empty resolves to the default model — the historic behaviour,
-	// so legacy callers need no change. An unknown id is an error.
+
 	Model string `json:"model,omitempty"`
 
 	// Role hints retrieval intent for models that prepend a prefix

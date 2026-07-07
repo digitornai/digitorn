@@ -477,6 +477,7 @@ func (s *Service) buildContext(parent context.Context, req *llm.ChatRequest) (*s
 	// request completes.
 	route := acquireRouteInfo(req.BYOK, req.APIKey, req.UserJWT, req.BaseURL)
 	bc.SetValue(ctxKeyRoute, route)
+	applyProviderProtocol(bc, req.Provider, req.BYOK)
 	// Gateway mode carries max_tokens through ExtraParams (buildChatRequest) ;
 	// Bifrost only merges ExtraParams into the outgoing body when passthrough
 	// is enabled. Direct mode promotes its knobs to native fields, so it never

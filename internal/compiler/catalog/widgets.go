@@ -1,7 +1,5 @@
 package catalog
 
-// WidgetFilters is the closed set of template filters allowed inside widget
-// expressions such as `{{ value | upper | truncate:80 }}`.
 var WidgetFilters = []string{
 	"upper", "lower", "title", "capitalize", "truncate",
 	"default", "length", "date", "relative_time", "time", "money", "number",

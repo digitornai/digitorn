@@ -200,6 +200,18 @@ func autoChooseMode(toolTokens, compactTokens, budget int) Mode {
 // and as the final output for direct mode.
 //
 // nil idx returns an empty slice.
+func hasDynamicCatalog(idx *index.ToolIndex) bool {
+	if idx == nil {
+		return false
+	}
+	for _, fqn := range idx.FQNList() {
+		if t := idx.Get(fqn); t != nil && t.DiscoveryOnly {
+			return true
+		}
+	}
+	return false
+}
+
 func buildDirectSchemas(idx *index.ToolIndex) []llm.ToolSpec {
 	if idx == nil {
 		return nil
@@ -267,7 +279,7 @@ func buildCompactSchemas(idx *index.ToolIndex) []llm.ToolSpec {
 // discovery meta-tools. The mode-relevant builtins go first.
 func assembleToolList(mode Mode, direct []llm.ToolSpec, idx *index.ToolIndex) []llm.ToolSpec {
 	hasTools := idx != nil && len(idx.Tools) > 0
-	builtins := builtinsForMode(mode, hasTools)
+	builtins := builtinsForMode(mode, hasTools, hasDynamicCatalog(idx))
 	// Sanitize builtin names to match the doc-conform OpenAI wire
 	// form. The Inner side (MetaDispatcher) canonicalises back.
 	for i := range builtins {

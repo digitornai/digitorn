@@ -46,14 +46,7 @@ func Encode(w io.Writer, a *Artifact) error {
 	if err := writeLenString(w, a.Header.VersionHash); err != nil {
 		return err
 	}
-	// Deterministic encoding : we use encoding/json for the payload
-	// because Go's json.Marshal sorts map keys alphabetically by
-	// design — required for content-addressable caching, reproducible
-	// builds and signed releases. msgpack v5 was tried first but its
-	// SetSortMapKeys flag only sorts a hardcoded subset of map
-	// element types (map[string]string|bool|interface{}) and silently
-	// random-orders everything else (e.g. map[string]ModuleBlock),
-	// which made artifacts byte-unequal across runs.
+
 	payload, err := json.Marshal(a.Definition)
 	if err != nil {
 		return fmt.Errorf("codegen: encode payload: %w", err)

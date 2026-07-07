@@ -6,126 +6,176 @@ app:
   short_name: Support
   icon: "🎧"
   color: "#4F46E5"
-  version: "1.0.0"
+  version: "2.0.0"
   description: >
-    Omnichannel AI customer-support desk. Answers from your knowledge base,
-    routes by intent across specialist agents, and asks for human approval
-    before any sensitive action (refunds, cancellations).
+    Omnichannel AI customer-support desk. Requests arrive on any wired channel
+    (webhook from your ticketing/CRM/contact form, Discord, WhatsApp...), an
+    agent triages them, a specialist answers from YOUR knowledge base (RAG),
+    sensitive actions (refunds) go through a human approval gate, and the reply
+    is delivered back on the SAME channel it came from. Swap the kb/ folder for
+    your docs and it becomes your desk.
   author: "Digitorn"
   category: "support"
+  tags: [support, customer-service, omnichannel, rag, background]
+
+runtime:
+  mode: background
+  max_turns: 30
+  timeout: 120
 
 # ---------------------------------------------------------------------------
 # Agents — one coordinator that classifies, four specialists that act.
+# Specialists ground every answer in the company knowledge base via RAG.
 # ---------------------------------------------------------------------------
 agents:
   - id: triage
     role: coordinator
     brain:
       provider: openai
-      model: zen-deepseek-v4-flash-free
-      temperature: 0.1
+      backend: openai_compat
+      model: zen-mimo-v2.5-free
+      temperature: 0
+      max_tokens: 1024
       config:
-        api_key: "{{env.OPENAI_API_KEY}}"
+        api_key: placeholder
+        base_url: https://api.openai.com/v1
     system_prompt: |
-      You are the triage brain of a customer-support desk. Read the customer
-      message and classify its intent into exactly one category:
+      You are the triage brain of a customer-support desk — a CLASSIFIER, not
+      a solver. You never write answers, steps, or explanations.
+      Classify the customer message into exactly one category:
         - "question"  : general how-to / informational question
         - "refund"    : wants money back, cancellation, billing dispute
         - "bug"       : something is broken, an error, an outage
         - "sales"     : pricing, plans, upgrades, buying intent
         - "human"     : explicitly asks for a human, or is angry/complex
-      Respond with ONLY a JSON object: {"category": "<one of the five>"}.
+      OUTPUT CONTRACT (strict): your ENTIRE reply is exactly one line of JSON,
+      nothing before or after, no markdown, no code fence:
+      {"category": "question"}
 
   - id: kb_agent
     role: specialist
     specialty: "Answers questions strictly from the knowledge base with citations."
-    brain:
+    brain: &specialist_brain
       provider: openai
-      model: zen-deepseek-v4-flash-free
+      backend: openai_compat
+      model: zen-mimo-v2.5-free
       temperature: 0.2
+      max_tokens: 700
       config:
-        api_key: "{{env.OPENAI_API_KEY}}"
+        api_key: placeholder
+        base_url: https://api.openai.com/v1
+    modules:
+      rag: [query]
     system_prompt: |
-      You answer customer questions using ONLY the knowledge base in your context. Answer concisely and cite the source section. If the knowledge base does not contain the answer, say so and
-      recommend escalating to a human — never invent policy.
+      You answer customer questions. FIRST call rag.query on the "company_kb"
+      knowledge base with the customer's question. Then answer concisely and
+      warmly, in the customer's language, using ONLY the retrieved content. If
+      the knowledge base does not contain the answer, say so and recommend
+      escalating to a human — never invent policy.
+
+      OUTPUT FORMAT — IMPORTANT: after querying, respond with ONLY a single
+      JSON string literal (a double-quoted, JSON-escaped string) containing
+      your reply. No object, no markdown, no code fences.
 
   - id: refund
     role: specialist
     specialty: "Handles refund and cancellation requests against policy."
-    brain:
-      provider: openai
-      model: zen-deepseek-v4-flash-free
-      temperature: 0.1
-      config:
-        api_key: "{{env.OPENAI_API_KEY}}"
+    brain: *specialist_brain
+    modules:
+      rag: [query]
     system_prompt: |
-      You handle refunds. Read the refund policy in your context. Decide
-      whether the request is eligible and whether it needs human approval
-      (any refund above $200, or annual plans, require approval).
-      Respond with ONLY JSON:
-      {"eligible": "<yes|no>", "needs_approval": "<yes|no>", "amount": "<number>", "reason": "<short>"}.
+      You handle refunds. FIRST call rag.query on the "company_kb" knowledge
+      base for the refund policy. Decide whether the request is eligible and
+      whether it needs human approval (any refund above $200, or annual plans,
+      require approval).
+      OUTPUT CONTRACT (strict): your ENTIRE reply is exactly one line of JSON:
+      {"eligible": "yes", "needs_approval": "no", "amount": "49", "reason": "within 14-day window"}
 
   - id: tech
     role: specialist
     specialty: "Diagnoses technical problems and collects bug reports."
-    brain:
-      provider: openai
-      model: zen-deepseek-v4-flash-free
-      temperature: 0.3
-      config:
-        api_key: "{{env.OPENAI_API_KEY}}"
+    brain: *specialist_brain
+    modules:
+      rag: [query]
     system_prompt: |
-      You are technical support. Use the troubleshooting guide in your context. Give clear, numbered steps. If it looks like a
-      real bug, summarize a reproducible report the engineering team can act on.
+      You are technical support. FIRST call rag.query on the "company_kb"
+      knowledge base with the customer's problem. Then give clear, numbered
+      steps in the customer's language, using ONLY the retrieved procedures.
+      If it looks like a real bug, end with a one-line reproducible summary
+      for the engineering team.
+
+      OUTPUT FORMAT — IMPORTANT: after querying, respond with ONLY a single
+      JSON string literal (a double-quoted, JSON-escaped string) containing
+      your reply. No object, no markdown, no code fences.
 
   - id: sales
     role: specialist
     specialty: "Answers pricing/plan questions and qualifies buying intent."
-    brain:
-      provider: openai
-      model: zen-deepseek-v4-flash-free
-      temperature: 0.4
-      config:
-        api_key: "{{env.OPENAI_API_KEY}}"
+    brain: *specialist_brain
+    modules:
+      rag: [query]
     system_prompt: |
-      You are a friendly sales assistant. Use the plan and pricing details in your context. Recommend the right plan for the customer's described needs and
-      invite them to upgrade. Never quote prices not in the knowledge base.
+      You are a friendly sales assistant. FIRST call rag.query on the
+      "company_kb" knowledge base for plans and pricing. Recommend the right
+      plan for the customer's described needs and invite them to upgrade.
+      Never quote prices not in the knowledge base.
+
+      OUTPUT FORMAT — IMPORTANT: after querying, respond with ONLY a single
+      JSON string literal (a double-quoted, JSON-escaped string) containing
+      your reply. No object, no markdown, no code fences.
 
 # ---------------------------------------------------------------------------
-# Flow — the orchestration graph. Intent routing + a human approval gate on
-# high-value refunds. This is what makes the desk deterministic and auditable.
+# Flow — intent routing + a human approval gate on high-value refunds.
+# Informational answers ship directly; only sensitive actions gate on a human.
+# Transient LLM failures retry with backoff; hard failures degrade to a polite
+# holding reply instead of silence.
 # ---------------------------------------------------------------------------
 flow:
   id: support
   entry: triage_node
   max_iterations: 30
-  description: "Triage → specialist → (approval gate for refunds) → resolution."
+  description: "Triage → RAG-grounded specialist → (approval gate on refunds) → reply on the origin channel."
   nodes:
     - id: triage_node
       type: agent
       agent: triage
       params:
         task: "{{event.payload.message}}"
+      retry:
+        max_attempts: 3
+        backoff_ms: 2000
+        multiplier: 3
+        match: "rate limit|circuit breaker|timeout|overloaded"
       routes:
         - { when: "category == 'question'", to: kb_node }
         - { when: "category == 'refund'", to: refund_check }
         - { when: "category == 'bug'", to: tech_node }
         - { when: "category == 'sales'", to: sales_node }
         - { default: true, to: human_handoff }
+      on_error:
+        - { default: true, to: degraded }
 
     - id: kb_node
       type: agent
       agent: kb_agent
       params:
         task: "{{event.payload.message}}"
+      retry: &specialist_retry
+        max_attempts: 3
+        backoff_ms: 2000
+        multiplier: 3
+        match: "rate limit|circuit breaker|timeout|overloaded"
       routes:
-        - { to: end }
+        - { to: reply_kb }
+      on_error: &specialist_on_error
+        - { default: true, to: degraded }
 
     - id: refund_check
       type: agent
       agent: refund
       params:
         task: "{{event.payload.message}}"
+      retry: *specialist_retry
       # Safe by default : a refund auto-completes ONLY when the specialist
       # explicitly judged it eligible AND below the approval threshold. Anything
       # ambiguous, unparseable, or high-value falls through to the human gate —
@@ -134,6 +184,7 @@ flow:
         - { when: "eligible == 'no'", to: refund_denied }
         - { when: "eligible == 'yes' and needs_approval == 'no'", to: refund_done }
         - { default: true, to: refund_gate }
+      on_error: *specialist_on_error
 
     - id: refund_gate
       type: approval
@@ -158,40 +209,137 @@ flow:
       agent: tech
       params:
         task: "{{event.payload.message}}"
+      retry: *specialist_retry
       routes:
-        - { to: end }
+        - { to: reply_tech }
+      on_error: *specialist_on_error
 
     - id: sales_node
       type: agent
       agent: sales
       params:
         task: "{{event.payload.message}}"
+      retry: *specialist_retry
       routes:
-        - { to: end }
+        - { to: reply_sales }
+      on_error: *specialist_on_error
+
+    # The terminal output IS the customer reply: the channel pipeline delivers
+    # it back on the origin channel (webhook callback_url, Discord thread,
+    # WhatsApp chat...) — no per-system write-back code in the flow.
+    - id: reply_kb
+      type: terminal
+      params:
+        output: "{{kb_node.output}}"
+
+    - id: reply_tech
+      type: terminal
+      params:
+        output: "{{tech_node.output}}"
+
+    - id: reply_sales
+      type: terminal
+      params:
+        output: "{{sales_node.output}}"
 
     - id: human_handoff
       type: terminal
       params:
         output: "I'm connecting you with a human specialist — one moment."
 
+    - id: degraded
+      type: terminal
+      params:
+        output: "We received your request and a specialist is on it — you'll get a personal reply shortly. [assistant unavailable: {{error.message}}]"
+
 # ---------------------------------------------------------------------------
-# Context — keep the agents grounded in time.
+# Tools — RAG over the kb/ folder (swap it for your docs), and the inbound
+# channels that turn an external event into a session launch.
 # ---------------------------------------------------------------------------
+tools:
+  capabilities:
+    default_policy: auto
+    grant:
+      - { module: rag, actions: [query] }
+
+  modules:
+    rag:
+      config:
+        embedding_model: minilm-l12
+        backend:
+          type: pgvector
+          dsn: "postgres://digitorn:digitorn@localhost:5433/digitorn_hub"
+        chunking:
+          strategy: recursive
+          size: 500
+          overlap: 60
+        pipeline:
+          final_top_k: 5
+        citations:
+          enabled: true
+          format: inline
+        default_knowledge_base: company_kb
+        sources:
+          - name: company_docs
+            type: file
+            path: kb
+            extensions: [".md"]
+            recursive: true
+            knowledge_base: company_kb
+            triggers:
+              - { type: on_start }
+        auto_index:
+          on_start: true
+
+    channels:
+      config:
+        default_agent: triage
+        max_turns: 30
+        timeout: 120
+        providers:
+          # Generic inbox: POST any customer request here from your ticketing,
+          # CRM, contact form or ESB. Include "callback_url" in the payload and
+          # the reply is POSTed back there as {"text": "..."}.
+          inbox:
+            adapter: webhook
+            config:
+              inbound_path: /hook/support
+              auth: api_key
+              api_key: "{{secret.SUPPORT_WEBHOOK_KEY}}"
+              # Intranet ticketing/CRM callbacks often live on RFC-1918 space;
+              # without this opt-in the SSRF guard blocks private hosts.
+              allow_private_callbacks: true
+            activation:
+              session: "case-{{event.payload.id}}"
+              owner: "{{event.payload.user_id}}"
+              message: |
+                Customer request {{event.payload.id}} — {{event.payload.subject}}
+
+                {{event.payload.message}}
+              reply: auto
+          # More channels: uncomment and add the secrets to go live.
+          # discord:
+          #   adapter: discord
+          #   config:
+          #     bot_token: "{{secret.DISCORD_BOT_TOKEN}}"
+          #   activation:
+          #     session: per_thread
+          #     reply: auto
+          # whatsapp:
+          #   adapter: whatsapp
+          #   config:
+          #     access_token: "{{secret.WHATSAPP_ACCESS_TOKEN}}"
+          #     verify_token: "{{secret.WHATSAPP_VERIFY_TOKEN}}"
+          #     phone_number_id: "{{secret.WHATSAPP_PHONE_ID}}"
+          #   activation:
+          #     session: per_chat
+          #     reply: auto
+
 context:
   sections:
     - builtin: datetime
-    - title: "Knowledge Base — answer ONLY from this"
-      priority: 100
-      template: |
-        {{include:kb/refunds.md}}
-
-        {{include:kb/billing.md}}
-
-        {{include:kb/troubleshooting.md}}
 
 ui:
-  greeting: "Hi! I'm your support assistant. Ask me anything about your account, billing, or a problem you're hitting."
-  # Chat-only desk : no files, no IDE surface. Removes the workspace panel
-  # affordance entirely (the web defaults position to "right" otherwise).
+  greeting: "Support Desk — every request is triaged, answered from YOUR knowledge base, gated on a human for sensitive actions, and delivered back on its origin channel."
   workspace:
     position: hidden

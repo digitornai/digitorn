@@ -53,7 +53,10 @@ func (s *Store) Get(ctx context.Context, userID string) (UserToken, bool) {
 // (so a pure access-token refresh never drops the long-lived secret).
 func (s *Store) Upsert(ctx context.Context, t UserToken) error {
 	t.UpdatedAt = time.Now().UTC()
-	cols := []string{"access_token", "expires_at", "updated_at"}
+	cols := []string{"updated_at"}
+	if t.AccessToken != "" {
+		cols = append(cols, "access_token", "expires_at")
+	}
 	if t.RefreshToken != "" {
 		cols = append(cols, "refresh_token")
 	}

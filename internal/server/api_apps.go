@@ -9,10 +9,12 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/digitornai/digitorn/internal/appmgr"
+	"github.com/digitornai/digitorn/internal/compiler/schema"
 )
 
 // osReadDir aliases os.ReadDir so we keep the os dependency local to
@@ -60,7 +62,20 @@ func (d *Daemon) installApp(w http.ResponseWriter, r *http.Request) {
 		writeError(w, appMgrErrStatus(err), "install_failed", err.Error())
 		return
 	}
-	go d.pushTriggersToBackground(r.Context(), app)
+	// Drop the cached per-agent tool index for this app. It is keyed on the app's
+	// YAML `version`, so re-installing at the same version (the common dev loop)
+	// would otherwise keep serving the STALE toolset built from the previous
+	// bundle — a new session would see the old tools (or none) until a daemon
+	// restart. Same call `setAppPieces` already makes; every mutation of an app's
+	// definition must invalidate this cache.
+	if d.promptBuilder != nil {
+		d.promptBuilder.Invalidate(app.AppID, "", "")
+	}
+	go func(app *appmgr.App) {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		d.pushTriggersToBackground(ctx, app)
+	}(app)
 	writeJSON(w, http.StatusOK, installResponse{
 		AppID: app.AppID, Name: app.Name, Version: app.Version,
 		Source: req.Source, InstallDir: filepath.Join(d.cfg.Apps.Root, app.AppID),
@@ -81,6 +96,9 @@ func (d *Daemon) upgradeApp(w http.ResponseWriter, r *http.Request) {
 		writeError(w, appMgrErrStatus(err), "upgrade_failed", err.Error())
 		return
 	}
+	if d.promptBuilder != nil {
+		d.promptBuilder.Invalidate(appID, "", "")
+	}
 	writeJSON(w, http.StatusOK, installResponse{
 		AppID: app.AppID, Name: app.Name, Version: app.Version,
 		Source: req.Source, InstallDir: filepath.Join(d.cfg.Apps.Root, app.AppID),
@@ -98,6 +116,9 @@ func (d *Daemon) uninstallApp(w http.ResponseWriter, r *http.Request) {
 	if err := d.appMgr.Uninstall(r.Context(), appID, purge); err != nil {
 		writeError(w, appMgrErrStatus(err), "uninstall_failed", err.Error())
 		return
+	}
+	if d.promptBuilder != nil {
+		d.promptBuilder.Invalidate(appID, "", "")
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"app_id":      appID,
@@ -150,6 +171,86 @@ func (d *Daemon) setAppBYOK(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (d *Daemon) setAppPieces(w http.ResponseWriter, r *http.Request) {
+	appID := chi.URLParam(r, "app_id")
+	var body struct {
+		Pieces []string `json:"pieces"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	if pm := d.piecesModule(); pm != nil && pm.PiecesStore() != nil {
+		userID := userIDOf(r.Context())
+		store := pm.PiecesStore()
+		for _, p := range body.Pieces {
+			view, ok, err := store.Get(r.Context(), userID, p)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "check_failed", err.Error())
+				return
+			}
+			if !ok || len(view.SecretKeys) == 0 {
+				writeError(w, http.StatusBadRequest, "not_configured",
+					"connector \""+p+"\" must be configured before it can be associated with an app")
+				return
+			}
+		}
+	}
+	if err := d.appMgr.SetAppPieces(r.Context(), appID, body.Pieces); err != nil {
+		writeError(w, appMgrErrStatus(err), "set_pieces_failed", err.Error())
+		return
+	}
+	if d.piecesCatalog != nil {
+		d.piecesCatalog.invalidate(appID)
+	}
+	if d.promptBuilder != nil {
+		d.promptBuilder.Invalidate(appID, "", "")
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"app_id": appID,
+		"pieces": body.Pieces,
+	})
+}
+
+func (d *Daemon) getAppPieces(w http.ResponseWriter, r *http.Request) {
+	appID := chi.URLParam(r, "app_id")
+	def, err := d.appMgr.GetManifest(r.Context(), appID)
+	if err != nil {
+		writeError(w, appMgrErrStatus(err), "get_pieces_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"app_id": appID,
+		"pieces": manifestAllowedPieces(def),
+	})
+}
+
+func manifestAllowedPieces(def *schema.AppDefinition) []string {
+	out := []string{}
+	if def == nil || def.Tools == nil {
+		return out
+	}
+	mb, ok := def.Tools.Modules["pieces"]
+	if !ok || mb.Constraints == nil {
+		return out
+	}
+	raw, ok := mb.Constraints["allowed_pieces"]
+	if !ok {
+		return out
+	}
+	switch v := raw.(type) {
+	case []string:
+		out = append(out, v...)
+	case []any:
+		for _, e := range v {
+			if s, ok := e.(string); ok {
+				out = append(out, s)
+			}
+		}
+	}
+	return out
+}
+
 // setAppDisplayName overrides the displayed label for an app. An empty/blank
 // name clears the override (falls back to the bundle's short name). Returns the
 // new effective short name.
@@ -183,6 +284,12 @@ func (d *Daemon) reloadApp(w http.ResponseWriter, r *http.Request) {
 	if err := d.appMgr.Reload(r.Context(), appID); err != nil {
 		writeError(w, appMgrErrStatus(err), "reload_failed", err.Error())
 		return
+	}
+	// Reload recompiled the definition from disk; drop the stale tool-index cache
+	// so the next session rebuilds from it (the cache key's app version doesn't
+	// change on a same-version hand-edit + reload).
+	if d.promptBuilder != nil {
+		d.promptBuilder.Invalidate(appID, "", "")
 	}
 	app, err := d.appMgr.GetApp(r.Context(), appID)
 	if err != nil {
@@ -403,6 +510,38 @@ func (d *Daemon) serveAsset(w http.ResponseWriter, r *http.Request) {
 	serveBundleFile(w, r, bundle, target)
 }
 
+// serveAppWeb serves an app's EMBEDDED preview UI — the built static bundle the
+// app ships in its install dir at {app}/web/dist/. It is served once and SHARED
+// by every session of the app (one build, never copied per-workdir), which is
+// the whole point: 10k sessions do NOT mean 10k preview copies. Distinct from
+// the agent-built workdir preview (preview/serve). The bundle is static,
+// non-secret app UI code; the in-page SDK carries the session context and
+// handles per-session authorization. A missing or directory path serves
+// index.html so client-side routing works (SPA).
+func (d *Daemon) serveAppWeb(w http.ResponseWriter, r *http.Request) {
+	appID := chi.URLParam(r, "app_id")
+	if _, err := d.appMgr.GetApp(r.Context(), appID); err != nil {
+		writeError(w, appMgrErrStatus(err), "web_failed", err.Error())
+		return
+	}
+	bundle := filepath.Join(d.cfg.Apps.Root, appID)
+	root := filepath.Join(bundle, "web", "dist")
+	rest := strings.TrimPrefix(filepath.Clean("/"+chi.URLParam(r, "*")), "/")
+	if rest == "" || rest == "." {
+		rest = "index.html"
+	}
+	target := filepath.Join(root, rest)
+	if !strings.HasPrefix(target, root) {
+		writeError(w, http.StatusForbidden, "forbidden", "path escapes web dir")
+		return
+	}
+	// SPA fallback: unknown non-asset path → index.html.
+	if fi, err := os.Stat(target); err != nil || fi.IsDir() {
+		target = filepath.Join(root, "index.html")
+	}
+	serveBundleFile(w, r, bundle, target)
+}
+
 // getIndex handles GET /api/apps/{app_id}/index : returns the tool
 // catalogue (modules + tools) from the compiled manifest.
 func (d *Daemon) getIndex(w http.ResponseWriter, r *http.Request) {
@@ -475,6 +614,12 @@ func serveBundleFile(w http.ResponseWriter, r *http.Request, bundle, path string
 	}
 	if !strings.HasPrefix(abs, bundleAbs) {
 		writeError(w, http.StatusForbidden, "forbidden", "path escapes bundle")
+		return
+	}
+	// HTML entries get the platform theme shim injected so the app adopts the
+	// host theme even if it doesn't use @digitorn/sdk.
+	if isHTMLFile(abs) {
+		serveHTMLWithShim(w, abs)
 		return
 	}
 	// Set Content-Type from extension so /assets/foo.png serves PNG.

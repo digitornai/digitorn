@@ -26,8 +26,11 @@ func TestExampleApps_Parse(t *testing.T) {
 		if err := yaml.Unmarshal(data, &def); err != nil {
 			t.Fatalf("%s: yaml: %v", rel, err)
 		}
+		if def.App.AppID == "" {
+			t.Errorf("%s: empty app_id", rel)
+		}
 		if def.App.AppID != "digitorn-code" {
-			t.Errorf("%s: app_id = %q", rel, def.App.AppID)
+			continue
 		}
 		if def.Context == nil || len(def.Context.Sections) == 0 {
 			t.Fatalf("%s: context block missing", rel)

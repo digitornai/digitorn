@@ -220,7 +220,7 @@ func builtinToolSpecs() []llm.ToolSpec {
 //     behind them) + run_parallel + background_run.
 //
 // Names stay dotted ; assembleToolList sanitizes to the wire form.
-func builtinsForMode(mode Mode, hasTools bool) []llm.ToolSpec {
+func builtinsForMode(mode Mode, hasTools, hasDynamicCatalog bool) []llm.ToolSpec {
 	if !hasTools {
 		return nil
 	}
@@ -237,13 +237,22 @@ func builtinsForMode(mode Mode, hasTools bool) []llm.ToolSpec {
 		}
 		return out
 	}
+	discovery := func() []llm.ToolSpec {
+		return pick("search_tools", "get_tool", "execute_tool", "run_parallel", "background_run")
+	}
 	switch mode {
 	case ModeCompactDirect:
+		if hasDynamicCatalog {
+			return discovery()
+		}
 		return pick("get_tool", "execute_tool", "run_parallel", "background_run")
 	case ModeDiscovery:
 		// search_tools is the unified discovery tool (search + list + browse).
-		return pick("search_tools", "get_tool", "execute_tool", "run_parallel", "background_run")
+		return discovery()
 	default: // ModeDirect (and any fallback)
+		if hasDynamicCatalog {
+			return discovery()
+		}
 		return pick("run_parallel", "background_run")
 	}
 }

@@ -41,6 +41,11 @@ func (s *Service) SetServerURLLookup(fn ServerURLLookup) { s.serverURL = fn }
 // used to build the OAuth callback redirect URI for discovered servers.
 func (s *Service) SetRedirectBase(base string) { s.redirectB = strings.TrimRight(base, "/") }
 
+// SetPieceRedirectURL sets the full hosted OAuth callback used for connector
+// flows (the bounce page that forwards the code to the local daemon). Empty =
+// fall back to the daemon's loopback callback.
+func (s *Service) SetPieceRedirectURL(u string) { s.pieceRedirectURL = strings.TrimRight(u, "/") }
+
 func (s *Service) discoveryRedirectURI() string { return s.redirectB + discoveryCallbackPath }
 
 // enrich fills an oauth2 auth block that lacks explicit endpoints/client by

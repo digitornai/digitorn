@@ -132,8 +132,8 @@ func (d *Daemon) credentialsModels(w http.ResponseWriter, r *http.Request) {
 	if !d.credsReady(w) {
 		return
 	}
-	list := d.creds.ListUserModels(r.Context(), userIDOf(r.Context()))
-	writeJSON(w, http.StatusOK, map[string]any{"models": list, "count": len(list)})
+	list, offline := d.creds.ListUserModelsWithOffline(r.Context(), userIDOf(r.Context()))
+	writeJSON(w, http.StatusOK, map[string]any{"models": list, "count": len(list), "offline_providers": offline})
 }
 
 // credentialsGrants keeps the endpoint alive for the UI. The vault is per-user

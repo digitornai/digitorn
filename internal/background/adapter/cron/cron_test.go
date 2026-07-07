@@ -2,6 +2,7 @@ package cron
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -148,7 +149,7 @@ func TestAdapter_ArmIdempotent(t *testing.T) {
 	defer cancel()
 	go func() { _ = a.Start(ctx, func(context.Context, adapter.Event) error { return nil }) }()
 
-	isArmed := func() bool { a.mu.Lock(); defer a.mu.Unlock(); return a.armed["dup"] }
+	isArmed := func() bool { a.mu.Lock(); defer a.mu.Unlock(); _, ok := a.armed["dup"]; return ok }
 	deadline := time.After(2 * time.Second)
 	for !isArmed() {
 		a.Arm(Provider{Name: "dup", Schedule: s})
@@ -160,5 +161,61 @@ func TestAdapter_ArmIdempotent(t *testing.T) {
 	}
 	if a.Arm(Provider{Name: "dup", Schedule: s}) {
 		t.Fatal("re-arming an already-armed name must not launch a second goroutine")
+	}
+}
+
+func TestAdapter_DisarmStopsFiring(t *testing.T) {
+	s := mustParse(t, "* * * * *")
+	a := New(nil)
+	var fires int64
+	sink := func(context.Context, adapter.Event) error { atomic.AddInt64(&fires, 1); return nil }
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = a.Start(ctx, sink) }()
+
+	deadline := time.After(2 * time.Second)
+	for {
+		a.Arm(Provider{Name: "d", Schedule: s})
+		a.mu.Lock()
+		_, ok := a.armed["d"]
+		a.mu.Unlock()
+		if ok {
+			break
+		}
+		select {
+		case <-time.After(2 * time.Millisecond):
+		case <-deadline:
+			t.Fatal("never armed")
+		}
+	}
+	if !a.Disarm("d") {
+		t.Fatal("Disarm returned false for an armed provider")
+	}
+	a.mu.Lock()
+	_, stillArmed := a.armed["d"]
+	a.mu.Unlock()
+	if stillArmed {
+		t.Fatal("provider still armed after Disarm")
+	}
+	if a.Disarm("d") {
+		t.Fatal("second Disarm should return false")
+	}
+}
+
+func TestAdapter_CatchUpFiresMissedSlot(t *testing.T) {
+	s := mustParse(t, "* * * * *")
+	// Frozen 'now'; CatchUpFrom is 3 minutes earlier → the latest missed slot is
+	// the minute just before now.
+	now := time.Date(2026, 7, 5, 10, 30, 0, 0, time.UTC)
+	a := New(nil)
+	a.now = func() time.Time { return now }
+
+	got := a.missedSlot(Provider{Name: "c", Schedule: s, CatchUpFrom: now.Add(-3 * time.Minute)})
+	if got != "2026-07-05T10:30" {
+		t.Errorf("missedSlot = %q, want 2026-07-05T10:30 (latest slot <= now, not covered by the normal loop)", got)
+	}
+
+	if s := a.missedSlot(Provider{Name: "c", Schedule: mustParse(t, "* * * * *")}); s != "" {
+		t.Errorf("no CatchUpFrom → missedSlot = %q, want empty", s)
 	}
 }

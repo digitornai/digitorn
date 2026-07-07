@@ -2,6 +2,18 @@
 # Boot: bin\digitornd.exe -config bin\config.yaml
 # Port 8000 is the CLI's default target — no env overrides needed.
 
+# DEV: point the connector catalog at the local hub while we build/validate the
+# clean catalog. For production this is removed (defaults to https://hub.digitorn.ai).
+apps:
+  hub:
+    url: http://localhost:8001
+    daemon_key: dev-daemon-key-digitorn-2026
+
+# Hosted OAuth bounce (auth.digitorn.ai) — one HTTPS callback for all connector
+# OAuth apps, works for loopback-hostile providers + desktop/cloud.
+oauth:
+  piece_redirect_url: https://auth.digitorn.ai/oauth/mcp/callback
+
 server:
   host: 127.0.0.1
   port: 8000
@@ -34,8 +46,8 @@ auth:
   # JWKS and identifies the user from the token (no more X-User-ID dev pinning).
   # Values matched to the actual token : iss="digitorn", user id in the "sub" claim,
   # no "aud" claim (audience left empty → audience check skipped).
-  enabled: false
-  dev_mode: true
+  enabled: true
+  dev_mode: false
   issuer: digitorn
   jwks_url: https://auth.digitorn.ai/.well-known/jwks.json
   user_id_claim: sub
@@ -108,7 +120,14 @@ workers:
 # the background service's ops API server-side, enforcing per-user ownership.
 background:
   ops_url: http://127.0.0.1:8090  # must match the bg service's DIGITORN_BG_HTTP_ADDR (default :8090)
+  manage: true                    # daemon spawns + watchdogs digitorn-background
+
+voice:
+  manage: true          # daemon spawns + watchdogs digitorn-voice
+  app_id: support-desk  # the app whose agent answers calls
+  transport: asterisk   # AudioSocket on :9092 (twilio switches to Media Streams :9093)
   # ops_token: set when the bg sets DIGITORN_BG_OPS_TOKEN
+  # service_jwt: set for per-user impersonation in production
 
 runtime:
   max_concurrent_llm_calls: 128

@@ -2,6 +2,7 @@ package appmgr
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -293,11 +294,67 @@ func (m *gormManager) loadFromDisk(row *models.App) (*RuntimeApp, error) {
 	if art.Definition.App.AppID != row.AppID {
 		return nil, fmt.Errorf("app.dgc app_id %q != row %q", art.Definition.App.AppID, row.AppID)
 	}
+	applyPiecesOverlay(art.Definition, row.PiecesAllow)
 	return &RuntimeApp{
 		Meta:       metaFromRow(row),
 		Definition: art.Definition,
 		BundleDir:  dir,
 	}, nil
+}
+
+func applyPiecesOverlay(def *schema.AppDefinition, piecesAllowJSON string) {
+	if def == nil || piecesAllowJSON == "" {
+		return
+	}
+	var list []string
+	if err := json.Unmarshal([]byte(piecesAllowJSON), &list); err != nil || len(list) == 0 {
+		return
+	}
+	if def.Tools == nil {
+		def.Tools = &schema.ToolsBlock{}
+	}
+	if def.Tools.Modules == nil {
+		def.Tools.Modules = map[string]schema.ModuleBlock{}
+	}
+	mb := def.Tools.Modules["pieces"]
+	if mb.Constraints == nil {
+		mb.Constraints = map[string]any{}
+	}
+	mb.Constraints["allowed_pieces"] = list
+	def.Tools.Modules["pieces"] = mb
+
+	if def.Tools.Capabilities == nil {
+		def.Tools.Capabilities = &schema.CapabilitiesConfig{}
+	}
+	hasGrant := false
+	for _, g := range def.Tools.Capabilities.Grant {
+		if g.Module == "pieces" {
+			hasGrant = true
+			break
+		}
+	}
+	if !hasGrant {
+		def.Tools.Capabilities.Grant = append(def.Tools.Capabilities.Grant, schema.CapabilityGrant{
+			Module: "pieces",
+			Tools:  []string{"*"},
+		})
+	}
+
+	for i := range def.Agents {
+		if len(def.Agents[i].Modules) == 0 {
+			continue
+		}
+		hasPieces := false
+		for _, m := range def.Agents[i].Modules {
+			if m.ID == "pieces" {
+				hasPieces = true
+				break
+			}
+		}
+		if !hasPieces {
+			def.Agents[i].Modules = append(def.Agents[i].Modules, schema.ModuleRef{ID: "pieces"})
+		}
+	}
 }
 
 // Silence "unused" complaints for net/http import on platforms where

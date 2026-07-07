@@ -47,14 +47,11 @@ func TestManager_ReapsTerminalAgentsAndEmptyRoots(t *testing.T) {
 		t.Fatalf("wait: %v", err)
 	}
 
-	// Within the retention window : the terminal agent is kept.
 	m.reapAll()
 	if got := len(m.List("root")); got != 1 {
 		t.Fatalf("inside retention: List=%d, want 1 (reaped too early)", got)
 	}
 
-	// Past the retention window : the agent is reaped and its now-empty root
-	// table is removed from the registry.
 	nowNano.Store(base.Add(2 * time.Minute).UnixNano())
 	m.reapAll()
 	if got := len(m.List("root")); got != 0 {
@@ -82,15 +79,14 @@ func TestManager_ReaperKeepsRunningAgents(t *testing.T) {
 		t.Fatalf("spawn: %v", err)
 	}
 
-	// Advance well past the retention window while the agent is still running :
-	// a running agent (endedNano == 0) must never be reaped.
+
 	nowNano.Store(base.Add(time.Hour).UnixNano())
 	m.reapAll()
 	if got := len(m.List("root")); got != 1 {
 		t.Fatalf("running agent reaped: List=%d, want 1", got)
 	}
 
-	// Let it finish, then it becomes eligible.
+
 	close(release)
 	if _, err := m.Wait(context.Background(), "root", id, 2*time.Second); err != nil {
 		t.Fatalf("wait: %v", err)

@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
+	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -38,6 +41,7 @@ type InstalledPieceView struct {
 	AuthType  string
 	SecretKeys []string // names only, no values
 	Enabled   bool
+	NeedsReconnect bool
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -141,8 +145,7 @@ func (s *Store) Delete(ctx context.Context, userID, pieceName string) error {
 		Delete(&models.InstalledPiece{}).Error
 }
 
-// UpsertOAuth stores OAuth2 credentials for a piece.
-func (s *Store) UpsertOAuth(ctx context.Context, userID, pieceName, accessToken, refreshToken, tokenType string, expiresAt int64, scope string) error {
+func (s *Store) UpsertOAuth(ctx context.Context, userID, pieceName, accessToken, refreshToken, tokenType string, expiresAt int64, scope, tokenURL, clientID, clientSecret string) error {
 	pieceName = canonicalPieceName(pieceName)
 	creds := map[string]string{
 		"access_token":  accessToken,
@@ -153,6 +156,23 @@ func (s *Store) UpsertOAuth(ctx context.Context, userID, pieceName, accessToken,
 	if expiresAt > 0 {
 		creds["expires_at"] = fmt.Sprintf("%d", expiresAt)
 	}
+	if tokenURL != "" {
+		creds["token_url"] = tokenURL
+	}
+	if clientID != "" {
+		creds["client_id"] = clientID
+	}
+	if clientSecret != "" {
+		creds["client_secret"] = clientSecret
+	}
+	if err := s.saveOAuthCreds(ctx, userID, pieceName, creds); err != nil {
+		return err
+	}
+	s.setNeedsReconnect(ctx, userID, pieceName, false)
+	return nil
+}
+
+func (s *Store) saveOAuthCreds(ctx context.Context, userID, pieceName string, creds map[string]string) error {
 	sealed, err := s.seal(creds)
 	if err != nil {
 		return fmt.Errorf("seal credentials: %w", err)
@@ -187,7 +207,167 @@ func (s *Store) RevealAuth(ctx context.Context, userID, pieceName string) (*APAu
 	if err != nil {
 		return nil, fmt.Errorf("unseal credentials: %w", err)
 	}
+	if row.AuthType == "oauth2" {
+		s.refreshOAuthIfExpired(ctx, userID, pieceName, creds)
+	}
 	return credsToWire(row.AuthType, creds), nil
+}
+
+// ForceRefresh unconditionally refreshes an oauth2 piece's token (ignoring the
+// stored expiry, which may be missing or wrong) and returns the fresh auth wire.
+// Used for reactive self-healing when a live action comes back 401. Returns
+// (nil,false) when the piece isn't oauth2 or the refresh could not be performed.
+func (s *Store) ForceRefresh(ctx context.Context, userID, pieceName string) (*APAuthWire, bool) {
+	pieceName = canonicalPieceName(pieceName)
+	var row models.InstalledPiece
+	err := s.db.WithContext(ctx).
+		Where("user_id = ? AND piece_name = ?", userID, pieceName).
+		First(&row).Error
+	if err != nil || row.AuthType != "oauth2" {
+		return nil, false
+	}
+	creds, err := s.unseal(row.SealedAuth)
+	if err != nil {
+		return nil, false
+	}
+	if !s.refreshOAuthNow(ctx, userID, pieceName, creds) {
+		return nil, false
+	}
+	return credsToWire(row.AuthType, creds), true
+}
+
+func (s *Store) refreshOAuthIfExpired(ctx context.Context, userID, pieceName string, creds map[string]string) {
+	const bufferSeconds = 300
+	var expiresAt int64
+	if v := creds["expires_at"]; v != "" {
+		fmt.Sscan(v, &expiresAt)
+	}
+	if expiresAt == 0 || time.Now().UTC().Unix() < expiresAt-bufferSeconds {
+		return
+	}
+	s.refreshOAuthNow(ctx, userID, pieceName, creds)
+}
+
+func (s *Store) refreshOAuthNow(ctx context.Context, userID, pieceName string, creds map[string]string) bool {
+	refresh := creds["refresh_token"]
+	tokenURL := creds["token_url"]
+	clientID := creds["client_id"]
+	if refresh == "" || tokenURL == "" || clientID == "" {
+		return false
+	}
+	tok, err := refreshOAuthToken(ctx, tokenURL, clientID, creds["client_secret"], refresh)
+	if err != nil {
+		if isPermanentOAuthError(err) {
+			s.setNeedsReconnect(ctx, userID, pieceName, true)
+		}
+		return false
+	}
+	if tok.AccessToken == "" {
+		return false
+	}
+	creds["access_token"] = tok.AccessToken
+	if tok.RefreshToken != "" {
+		creds["refresh_token"] = tok.RefreshToken
+	}
+	if tok.ExpiresAt > 0 {
+		creds["expires_at"] = fmt.Sprintf("%d", tok.ExpiresAt)
+	}
+	_ = s.saveOAuthCreds(ctx, userID, pieceName, creds)
+	s.setNeedsReconnect(ctx, userID, pieceName, false)
+	return true
+}
+
+func (s *Store) setNeedsReconnect(ctx context.Context, userID, pieceName string, v bool) {
+	_ = s.db.WithContext(ctx).
+		Model(&models.InstalledPiece{}).
+		Where("user_id = ? AND piece_name = ?", userID, pieceName).
+		Update("needs_reconnect", v).Error
+}
+
+func (s *Store) RefreshExpiring(ctx context.Context, within time.Duration) (int, int) {
+	var rows []models.InstalledPiece
+	if err := s.db.WithContext(ctx).Where("auth_type = ?", "oauth2").Find(&rows).Error; err != nil {
+		return 0, 0
+	}
+	cutoff := time.Now().UTC().Add(within).Unix()
+	refreshed, failed := 0, 0
+	for _, r := range rows {
+		creds, err := s.unseal(r.SealedAuth)
+		if err != nil {
+			continue
+		}
+		var expiresAt int64
+		if v := creds["expires_at"]; v != "" {
+			fmt.Sscan(v, &expiresAt)
+		}
+		if expiresAt == 0 || expiresAt > cutoff {
+			continue
+		}
+		if creds["refresh_token"] == "" || creds["token_url"] == "" || creds["client_id"] == "" {
+			continue
+		}
+		if s.refreshOAuthNow(ctx, r.UserID, r.PieceName, creds) {
+			refreshed++
+		} else {
+			failed++
+		}
+	}
+	return refreshed, failed
+}
+
+type refreshedToken struct {
+	AccessToken  string
+	RefreshToken string
+	ExpiresAt    int64
+}
+
+func isPermanentOAuthError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "invalid_grant") ||
+		strings.Contains(msg, "invalid_token") ||
+		strings.Contains(msg, "unauthorized_client")
+}
+
+func refreshOAuthToken(ctx context.Context, tokenURL, clientID, clientSecret, refreshToken string) (*refreshedToken, error) {
+	form := url.Values{}
+	form.Set("grant_type", "refresh_token")
+	form.Set("refresh_token", refreshToken)
+	form.Set("client_id", clientID)
+	if clientSecret != "" {
+		form.Set("client_secret", clientSecret)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenURL, strings.NewReader(form.Encode()))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("refresh failed: %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+	var data map[string]any
+	if err := json.Unmarshal(body, &data); err != nil {
+		return nil, err
+	}
+	out := &refreshedToken{}
+	out.AccessToken, _ = data["access_token"].(string)
+	out.RefreshToken, _ = data["refresh_token"].(string)
+	if secs, ok := data["expires_in"].(float64); ok && secs > 0 {
+		out.ExpiresAt = time.Now().UTC().Unix() + int64(secs)
+	}
+	return out, nil
 }
 
 func credsToWire(authType string, creds map[string]string) *APAuthWire {
@@ -277,6 +457,7 @@ func toView(row models.InstalledPiece, secretKeys []string) *InstalledPieceView 
 		AuthType:  row.AuthType,
 		SecretKeys: secretKeys,
 		Enabled:   row.Enabled,
+		NeedsReconnect: row.NeedsReconnect,
 		CreatedAt: row.CreatedAt,
 		UpdatedAt: row.UpdatedAt,
 	}

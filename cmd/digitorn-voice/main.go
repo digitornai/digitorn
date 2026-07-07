@@ -73,8 +73,8 @@ func main() {
 		Rate:          atoiOr(os.Getenv("DIGITORN_VOICE_RATE"), 8000),
 		Engine:        env("DIGITORN_VOICE_ENGINE", "pipeline"),
 		RealtimeModel: os.Getenv("DIGITORN_VOICE_REALTIME_MODEL"),
-		STTModel:      os.Getenv("DIGITORN_VOICE_STT_MODEL"),
-		TTSModel:      os.Getenv("DIGITORN_VOICE_TTS_MODEL"),
+		STTModel:      env("DIGITORN_VOICE_STT_MODEL", "whisper-1"),
+		TTSModel:      env("DIGITORN_VOICE_TTS_MODEL", "tts-1"),
 		TTSVoice:      os.Getenv("DIGITORN_VOICE_TTS_VOICE"),
 		Language:      os.Getenv("DIGITORN_VOICE_LANGUAGE"),
 	}
@@ -98,6 +98,17 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	if httpAddr := env("DIGITORN_VOICE_HTTP_ADDR", ":9091"); httpAddr != "" && httpAddr != "off" {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"status":"ok","transport":"` + strings.ToLower(cfg.Transport) + `"}`))
+		})
+		srv := &http.Server{Addr: httpAddr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+		go func() { _ = srv.ListenAndServe() }()
+		go func() { <-ctx.Done(); _ = srv.Close() }()
+	}
 
 	log.Info("voice: adapter serving", "transport", transport.Name(), "addr", addr,
 		"app", cfg.AppID, "daemon", cfg.BaseURL, "rate", cfg.Rate, "engine", cfg.Engine)

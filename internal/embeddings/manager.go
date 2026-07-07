@@ -17,25 +17,18 @@ import (
 type Mode string
 
 const (
-	// ModeONNX requires the real ONNX runtime ; a model that fails to
-	// load is an error (no silent semantic degradation).
+
 	ModeONNX Mode = "onnx"
-	// ModeDeterministic uses the pure-Go hashing fallback for every
-	// model (CI / no-CGO builds). Vectors are NOT semantic.
+
 	ModeDeterministic Mode = "deterministic"
-	// ModeAuto tries ONNX and falls back to deterministic per model.
 	ModeAuto Mode = "auto"
 )
 
-// Manager serves multiple embedding models from one worker process.
-// Each model is loaded once on first use and cached ; loads for
-// distinct models run concurrently and never block requests for an
-// already-resident model. Routing is by the request's Model field
-// (canonical id or shortcut, resolved via the models catalogue).
+
 type Manager struct {
 	baseDir   string
 	mode      Mode
-	modelFile string // "model.onnx" or "model_quantized.onnx"
+	modelFile string 
 	log       *slog.Logger
 
 	mu      sync.Mutex
@@ -51,17 +44,14 @@ type rerankEntry struct {
 	err  error
 }
 
-// modelEntry guards one model's one-time load. once ensures a single
-// loader runs even under concurrent first-use ; be/err hold the result.
+
 type modelEntry struct {
 	once sync.Once
 	be   backend.Backend
 	err  error
 }
 
-// NewManager builds a multi-model manager. baseDir is the parent of the
-// per-model directories (default ~/.digitorn/models). quantized selects
-// the int8 graph.
+
 func NewManager(baseDir string, mode Mode, quantized bool, log *slog.Logger) *Manager {
 	if baseDir == "" {
 		home, _ := os.UserHomeDir()
@@ -87,8 +77,6 @@ func NewManager(baseDir string, mode Mode, quantized bool, log *slog.Logger) *Ma
 	}
 }
 
-// DefaultModel reports the id + dimension of the catalogue default,
-// loading it if necessary. Used for Info and empty-input responses.
 func (m *Manager) DefaultModel(ctx context.Context) (string, int, error) {
 	be, _, err := m.backendFor(ctx, "")
 	if err != nil {
@@ -97,8 +85,7 @@ func (m *Manager) DefaultModel(ctx context.Context) (string, int, error) {
 	return be.Model(), be.Dimension(), nil
 }
 
-// Embed resolves the model, applies any role prefix, and returns one
-// vector per input plus the resolved model id and dimension.
+
 func (m *Manager) Embed(ctx context.Context, model, role string, inputs []string, normalize bool) ([][]float32, string, int, error) {
 	be, spec, err := m.backendFor(ctx, model)
 	if err != nil {
@@ -112,8 +99,7 @@ func (m *Manager) Embed(ctx context.Context, model, role string, inputs []string
 	return vecs, be.Model(), be.Dimension(), nil
 }
 
-// backendFor resolves a model id/shortcut to its (lazily loaded)
-// backend + spec.
+
 func (m *Manager) backendFor(ctx context.Context, model string) (backend.Backend, models.Spec, error) {
 	spec, ok := models.Resolve(model)
 	if !ok {
@@ -136,8 +122,7 @@ func (m *Manager) backendFor(ctx context.Context, model string) (backend.Backend
 	return e.be, spec, nil
 }
 
-// load builds the backend for one spec per the manager's mode,
-// downloading the model files first when an ONNX path is in play.
+
 func (m *Manager) load(ctx context.Context, spec models.Spec) (backend.Backend, error) {
 	if m.mode == ModeDeterministic {
 		m.log.Info("embeddings: deterministic backend", "model", spec.ID, "dim", spec.Dim)
@@ -149,8 +134,7 @@ func (m *Manager) load(ctx context.Context, spec models.Spec) (backend.Backend, 
 		{Name: m.modelFile, URL: spec.ModelURL(m.modelFile)},
 		{Name: "tokenizer.json", URL: spec.TokenizerURL()},
 	}
-	// The full graph may carry its weights in a sibling external-data
-	// file (models >2 GB). The quantized graph is self-contained.
+	
 	if m.modelFile == "model.onnx" {
 		for _, extra := range spec.ExtraFiles {
 			files = append(files, loader.File{Name: extra, URL: spec.ExtraURL(extra)})
@@ -176,9 +160,7 @@ func (m *Manager) load(ctx context.Context, spec models.Spec) (backend.Backend, 
 	return be, nil
 }
 
-// Rerank scores (query, doc) pairs with a cross-encoder, lazily loading
-// the reranker model. Returns one score per doc (higher = more relevant)
-// plus the resolved model id.
+
 func (m *Manager) Rerank(ctx context.Context, model, query string, docs []string) ([]float32, string, error) {
 	ce, err := m.crossEncoderFor(ctx, model)
 	if err != nil {
@@ -208,9 +190,7 @@ func (m *Manager) crossEncoderFor(ctx context.Context, model string) (backend.Cr
 	return e.ce, e.err
 }
 
-// loadReranker builds the cross-encoder for a spec. Rerankers always use
-// the int8 graph (model_quantized.onnx) — fp32 cross-encoders are large
-// and int8 reranking quality is excellent.
+
 func (m *Manager) loadReranker(ctx context.Context, spec models.Spec) (backend.CrossEncoder, error) {
 	if m.mode == ModeDeterministic {
 		return backend.NewDeterministicCrossEncoder(spec), nil
@@ -240,7 +220,7 @@ func (m *Manager) loadReranker(ctx context.Context, spec models.Spec) (backend.C
 	return ce, nil
 }
 
-// Close releases every loaded backend.
+
 func (m *Manager) Close() error {
 	m.mu.Lock()
 	for _, e := range m.entries {
@@ -259,8 +239,7 @@ func (m *Manager) Close() error {
 	return nil
 }
 
-// applyPrefix prepends the spec's retrieval prefix for the given role.
-// No-op when the spec defines no prefix or the role is unset.
+
 func applyPrefix(spec models.Spec, role string, inputs []string) []string {
 	var prefix string
 	switch role {

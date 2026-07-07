@@ -3,7 +3,7 @@ version: 1.0.0
 description: Retrieval-augmented generation (knowledge bases, embeddings, citations).
 config_schema:
   backend: { type: object }
-  embedding_model: { type: string }
+  embedding_model: { type: any }  # string id or {id, dimensions, pooling} object
   retrieval_strategy: { type: string }
   pipeline: { type: object }
   chunking: { type: object }

@@ -100,8 +100,18 @@ func resolveAuth(cfg *schema.MCPAuthConfig) resolvedAuth {
 		ExtraAuthorize:  stringMap(cfg.ExtraParams),
 		Resource:        cfg.Resource,
 	}
+	ra.AuthorizeURL = strings.ReplaceAll(ra.AuthorizeURL, "{cloud}", "login.microsoftonline.com")
+	ra.TokenURL = strings.ReplaceAll(ra.TokenURL, "{cloud}", "login.microsoftonline.com")
+	ra.AuthorizeURL = strings.ReplaceAll(ra.AuthorizeURL, "{environment}", "login.salesforce.com")
+	ra.TokenURL = strings.ReplaceAll(ra.TokenURL, "{environment}", "login.salesforce.com")
 	if ra.TokenAuthMethod == "" {
 		ra.TokenAuthMethod = "body"
+	}
+	if tl := strings.ToLower(ra.TokenURL); strings.Contains(tl, "api.notion.com") || strings.Contains(tl, "zoom.us") {
+		ra.TokenAuthMethod = "basic"
+	}
+	if strings.Contains(strings.ToLower(ra.AuthorizeURL), "salesforce.com") {
+		ra.PKCE = true
 	}
 	known, ok := wellKnownProviders[provider]
 	if !ok {
@@ -158,13 +168,25 @@ func generateState() (string, error) {
 }
 
 func buildAuthorizeURL(ra resolvedAuth, state, codeChallenge string) string {
+	base := ra.AuthorizeURL
 	params := url.Values{}
+	if i := strings.IndexByte(base, '?'); i >= 0 {
+		if pre, err := url.ParseQuery(base[i+1:]); err == nil {
+			for k, vs := range pre {
+				for _, v := range vs {
+					params.Add(k, v)
+				}
+			}
+		}
+		base = base[:i]
+	}
 	params.Set("client_id", ra.ClientID)
 	params.Set("redirect_uri", ra.RedirectURI)
 	params.Set("response_type", "code")
 	params.Set("state", state)
-	if len(ra.Scopes) > 0 {
-		params.Set("scope", strings.Join(ra.Scopes, " "))
+	scopes := durableScopes(ra.AuthorizeURL, ra.Scopes)
+	if len(scopes) > 0 {
+		params.Set("scope", strings.Join(scopes, " "))
 	}
 	if ra.PKCE && codeChallenge != "" {
 		params.Set("code_challenge", codeChallenge)
@@ -175,10 +197,41 @@ func buildAuthorizeURL(ra resolvedAuth, state, codeChallenge string) string {
 	if ra.Resource != "" {
 		params.Set("resource", ra.Resource)
 	}
+	for k, v := range durableAuthorizeParams(ra.AuthorizeURL) {
+		params.Set(k, v)
+	}
 	for k, v := range ra.ExtraAuthorize {
 		params.Set(k, v)
 	}
-	return ra.AuthorizeURL + "?" + params.Encode()
+	return base + "?" + params.Encode()
+}
+
+func durableAuthorizeParams(authorizeURL string) map[string]string {
+	host := strings.ToLower(authorizeURL)
+	if strings.Contains(host, "google.com") {
+		return map[string]string{"access_type": "offline", "prompt": "consent"}
+	}
+	if strings.Contains(host, "api.notion.com") {
+		return map[string]string{"owner": "user"}
+	}
+	if strings.Contains(host, "dropbox.com") {
+		return map[string]string{"token_access_type": "offline"}
+	}
+	return nil
+}
+
+func durableScopes(authorizeURL string, scopes []string) []string {
+	host := strings.ToLower(authorizeURL)
+	needsOffline := strings.Contains(host, "microsoftonline.com") || strings.Contains(host, "login.live.com")
+	if !needsOffline {
+		return scopes
+	}
+	for _, s := range scopes {
+		if s == "offline_access" {
+			return scopes
+		}
+	}
+	return append(append([]string{}, scopes...), "offline_access")
 }
 
 // Flow runs the network half of the OAuth dance (code exchange + refresh).

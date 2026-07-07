@@ -5,20 +5,6 @@ import (
 	"github.com/digitornai/digitorn/pkg/module"
 )
 
-// systemModuleManifests are the runtime-internal modules implemented as engine
-// subsystems rather than service-bus modules: `memory` (MemoryWriter) and
-// `agent_spawn` (AgentManager). They never appear in a ManifestSource built
-// from the module registry, yet an app must be able to DECLARE them — that is
-// the documented activation contract (docs-site/docs/language/04b-builtin-tools.md
-// "Memory tools (gated by tools.modules.memory)" / "Agent-spawn tool (gated by
-// agent_spawn module loaded)"). Seeding them into every Catalog lets
-// `tools.modules.memory` / `tools.modules.agent_spawn` and capability grants on
-// their actions validate at compile time, while the runtime keeps handling
-// their dispatch in-process.
-// askUserPrompt is the behaviour-shaping description the agent sees for ask_user.
-// It is deliberately forceful : the agent's default bias is to push forward, so
-// this hammers "ask before you guess" with concrete triggers, anti-patterns, and
-// one worked example per question shape.
 const askUserPrompt = `ask_user is HOW YOU TALK TO THE USER while you work. It is not a last resort — it is your live conversation channel. Use it literally to speak to them: to clarify what they meant, to propose options, to confirm before a risky step, to collect the details you need, to report a fork and let them choose. Calling it does NOT end the turn — it suspends the turn until they reply, then you continue with their answer. So you can have a real back-and-forth WITHOUT stopping. When in doubt, ALWAYS ask.
 
 THE RULE — default to asking. You are NOT here to take initiative on decisions the user has not made; you are here to do exactly what they want, and the only way to know is to ask. If you are not certain what they want, do not act on a guess and do not end the turn — ask.
@@ -105,10 +91,7 @@ Bounded multi-select — require between a minimum and a maximum number of picks
 
 Bottom line: in doubt → ask. It is never wrong to ask, and it is usually wrong to assume.`
 
-// askUserToolPrompt is the concise mandate injected into the SYSTEM PROMPT for any
-// agent that has ask_user (via tool.Spec.ToolPrompt → # Tool Usage Instructions).
-// The long askUserPrompt with examples lives in the tool schema ; this short, blunt
-// rule lives in the running instructions so "ask first" governs the whole turn.
+
 const askUserToolPrompt = `ask_user is your live channel to TALK TO THE USER while you work — USE IT, and use it often. Clarify, propose, confirm, and collect input through it instead of guessing or ending the turn. Default to asking over guessing: the MOMENT the request is ambiguous, a detail is unspecified, several valid approaches exist, a step is risky or irreversible, or only the user holds a needed fact — STOP and call ask_user. Asking does NOT end the turn; it pauses for the answer, then you continue, so you can have a real back-and-forth. Never invent a name/path/value and run with it, never silently pick one approach, never finish a turn on "I'll assume…". Skip asking only when you can find the answer yourself or the step is clearly authorized and low-risk. Batch several unknowns into ONE form, and when you offer choices keep the custom-answer field on so the user can answer what you didn't anticipate.`
 
 func systemModuleManifests() []module.Manifest {
@@ -133,8 +116,7 @@ func systemModuleManifests() []module.Manifest {
 	strArr := func(name, desc string) tool.ParamSpec {
 		return tool.ParamSpec{Name: name, Type: "array", Description: desc, Items: &tool.ParamSpec{Type: "string"}}
 	}
-	// askForm declares the structured-form field object : one entry per field,
-	// answers keyed by `name` in the returned JSON.
+
 	askForm := tool.ParamSpec{
 		Name: "form", Type: "array",
 		Description: "Structured form — one object per field; the answer is a JSON object keyed by each field's `name`.",
@@ -157,10 +139,7 @@ func systemModuleManifests() []module.Manifest {
 			strOpt("pattern", "Regex the text answer must match."),
 		}},
 	}
-	// askUser also carries a ToolPrompt : a concise, forceful "ask-first" mandate
-	// injected into the SYSTEM PROMPT (# Tool Usage Instructions) every turn for any
-	// agent that has ask_user — so the habit shapes the whole turn, not just the
-	// moment the tool schema is read.
+
 	askUser := low("ask_user", askUserPrompt,
 		str("question", "The question to put to the user.", true),
 		strArr("choices", "Proposed options to pick from (renders as buttons / a dropdown)."),
@@ -205,13 +184,7 @@ func systemModuleManifests() []module.Manifest {
 			},
 		},
 		{
-			// context_builder hosts the meta-tools + human-in-the-loop
-			// primitives. They are dispatched in-process (never on the
-			// service bus), but an app must be able to grant / deny them —
-			// notably `ask_user` and `call_app`, which are exposed ONLY
-			// when granted (docs-site/docs/language/04-tools.md
-			// "context_builder primitives"). Seeding the module lets those
-			// capability grants validate at compile time.
+
 			ID:          "context_builder",
 			Version:     "1.0.0",
 			Description: "Tool discovery + human-in-the-loop primitives (search_tools, get_tool, execute_tool, run_parallel, background_run, use_skill, call_app, ask_user).",
@@ -244,15 +217,7 @@ func systemModuleManifests() []module.Manifest {
 			},
 		},
 		{
-			// channels is a BACKGROUND-only module : the background service (not
-			// the daemon) reads tools.modules.channels.config from the installed
-			// bundle to arm inbound adapters (webhook / cron / telegram / discord /
-			// …) AND declarative schedules (a cron provider whose activation carries
-			// message + reports + input attachments + owner). The daemon runs the
-			// woken turns but loads no "channels" module — yet an app must be able
-			// to DECLARE its background config in the SAME app.yaml. Seeding it here
-			// (tool-less, config opaque) lets that declaration validate at compile
-			// time, so one file declares the agent AND its background schedules.
+	
 			ID:          "channels",
 			Version:     "1.0.0",
 			Description: "Background channels & schedules (inbound adapters + declarative cron with message/reports/attachments) — read by the background service.",

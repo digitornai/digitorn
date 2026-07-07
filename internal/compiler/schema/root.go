@@ -11,6 +11,10 @@ type AppDefinition struct {
 	Dev           *DevBlock       `yaml:"dev,omitempty" json:"dev,omitempty"`
 	Flow          *FlowConfig     `yaml:"flow,omitempty" json:"flow,omitempty"`
 	Templates     []TemplateBlock `yaml:"templates,omitempty" json:"templates,omitempty"`
+	// Requirements : system binaries the app needs at runtime but does not ship.
+	// The daemon provisions them out-of-band (consent-gated, async) and puts them
+	// on the agent's PATH. See requirements.go.
+	Requirements []Requirement `yaml:"requirements,omitempty" json:"requirements,omitempty"`
 	// Context : app-wide system-prompt context sections injected each turn
 	// (user/session data, date, custom blocks). Applies to every agent.
 	Context *ContextBlock `yaml:"context,omitempty" json:"context,omitempty"`

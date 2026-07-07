@@ -44,6 +44,27 @@ func (d *Daemon) MountAPI() {
 		"/api/apps/{app_id}/sessions/{session_id}/preview/serve/*",
 		d.servePreviewFile,
 	)
+	// ----- App-embedded preview UI (unauthenticated static bundle) -----
+	// Apps that SHIP a built preview (Excalidraw, scribe…) place it in the
+	// install dir at {app}/web/dist/. Served once, SHARED by every session of the
+	// app (NOT copied per-workdir). Static, non-secret app UI code — the in-page
+	// SDK carries the session context and handles per-session auth. Distinct from
+	// the agent-built workdir preview above, which stays untouched.
+	r.With(d.panicRecoverer).Get(
+		"/api/apps/{app_id}/web-static/*",
+		d.serveAppWeb,
+	)
+	// Preview file R/W for the embedded-preview SDK — `?t=`-authed (the iframe
+	// can't carry the JWT). The read/write half of useSharedDoc; confined to the
+	// session workdir. The authenticated /workspace/files routes stay untouched.
+	r.With(d.panicRecoverer).Get(
+		"/api/apps/{app_id}/sessions/{session_id}/preview/files/*",
+		d.getPreviewFile,
+	)
+	r.With(d.panicRecoverer).Put(
+		"/api/apps/{app_id}/sessions/{session_id}/preview/files/*",
+		d.putPreviewFile,
+	)
 	// 404 fallback: serve the active preview's ROOT-absolute assets (/assets/* …)
 	// so a default Vite/CRA build renders in the iframe instead of going blank.
 	// Falls through to a normal 404 when no preview is active.
@@ -84,6 +105,10 @@ func (d *Daemon) MountAPI() {
 			r.Post("/schedules/{id}/enable", d.toggleAutomationSchedule(true))
 			r.Post("/schedules/{id}/disable", d.toggleAutomationSchedule(false))
 			r.Get("/runs", d.listAutomationRuns)
+			r.Get("/health", d.automationHealth)
+			r.Post("/triggers/{id}/enable", d.toggleAutomationTrigger(true))
+			r.Post("/triggers/{id}/disable", d.toggleAutomationTrigger(false))
+			r.Post("/jobs/{id}/replay", d.replayAutomationJob)
 		})
 
 		// ----- Sessions -----
@@ -236,9 +261,15 @@ func (d *Daemon) mountAppRoutes(r chi.Router) {
 	r.Post("/api/apps/{app_id}/enable", d.enableApp)
 	r.Post("/api/apps/{app_id}/disable", d.disableApp)
 	r.Put("/api/apps/{app_id}/byok", d.setAppBYOK)
+	r.Get("/api/apps/{app_id}/pieces", d.getAppPieces)
+	r.Put("/api/apps/{app_id}/pieces", d.setAppPieces)
 	r.Put("/api/apps/{app_id}/display-name", d.setAppDisplayName)
 	r.Post("/api/apps/{app_id}/reload", d.reloadApp)
 	r.Get("/api/apps/{app_id}/check-update", d.checkUpdate)
+
+	// Requirements provisioning (external binaries the app declares, consent-gated).
+	r.Get("/api/apps/{app_id}/requirements", d.getRequirements)
+	r.Post("/api/apps/{app_id}/requirements/provision", d.provisionRequirements)
 
 	// Read.
 	r.Get("/api/apps", d.listApps)

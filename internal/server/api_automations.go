@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -282,6 +283,113 @@ func (d *Daemon) toggleAutomationSchedule(enable bool) http.HandlerFunc {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"id": id, "enabled": enable})
 	}
+}
+
+// GET /api/automations/health?app= — one aggregated health snapshot for an
+// app's background dashboard: windowed metrics, failing-trigger alerts, the
+// DLQ and the armed triggers. One daemon round-trip for the whole Overview.
+func (d *Daemon) automationHealth(w http.ResponseWriter, r *http.Request) {
+	c, err := d.opsClient()
+	if err != nil {
+		writeError(w, http.StatusNotFound, "not_configured", err.Error())
+		return
+	}
+	app := r.URL.Query().Get("app")
+	window := r.URL.Query().Get("window")
+	if window == "" {
+		window = "24h"
+	}
+
+	var metrics map[string]any
+	mq := "/ops/metrics?window=" + url.QueryEscape(window)
+	if app != "" {
+		mq += "&app_id=" + url.QueryEscape(app)
+	}
+	if err := c.do(r.Context(), http.MethodGet, mq, nil, &metrics); err != nil {
+		writeError(w, http.StatusBadGateway, "background_unavailable", err.Error())
+		return
+	}
+
+	var alertsEnv struct {
+		Alerts []map[string]any `json:"alerts"`
+	}
+	_ = c.do(r.Context(), http.MethodGet, "/ops/alerts", nil, &alertsEnv)
+	alerts := make([]map[string]any, 0, len(alertsEnv.Alerts))
+	for _, a := range alertsEnv.Alerts {
+		if app == "" || a["app_id"] == app {
+			alerts = append(alerts, a)
+		}
+	}
+
+	var dlqEnv struct {
+		DLQ []map[string]any `json:"dlq"`
+	}
+	dq := "/ops/dlq?limit=20"
+	if app != "" {
+		dq += "&app_id=" + url.QueryEscape(app)
+	}
+	_ = c.do(r.Context(), http.MethodGet, dq, nil, &dlqEnv)
+
+	var trigEnv struct {
+		Triggers []map[string]any `json:"triggers"`
+	}
+	tq := "/ops/triggers"
+	if app != "" {
+		tq += "?app=" + url.QueryEscape(app)
+	}
+	_ = c.do(r.Context(), http.MethodGet, tq, nil, &trigEnv)
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"metrics":  metrics,
+		"alerts":   alerts,
+		"dlq":      dlqEnv.DLQ,
+		"triggers": trigEnv.Triggers,
+	})
+}
+
+// POST /api/automations/triggers/{id}/enable|disable — toggle an app trigger
+// (channel/cron listener). The trigger must exist on the bg service; the live
+// listener is disarmed server-side on disable.
+func (d *Daemon) toggleAutomationTrigger(enable bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		c, err := d.opsClient()
+		if err != nil {
+			writeError(w, http.StatusNotFound, "not_configured", err.Error())
+			return
+		}
+		id := chi.URLParam(r, "id")
+		var trig map[string]any
+		if err := c.do(r.Context(), http.MethodGet, "/ops/triggers/"+url.PathEscape(id), nil, &trig); err != nil {
+			writeError(w, http.StatusNotFound, "not_found", "trigger not found")
+			return
+		}
+		action := "disable"
+		if enable {
+			action = "enable"
+		}
+		var res map[string]any
+		if err := c.do(r.Context(), http.MethodPost, "/ops/triggers/"+url.PathEscape(id)+"/"+action, nil, &res); err != nil {
+			writeError(w, http.StatusBadGateway, "background_unavailable", err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, res)
+	}
+}
+
+// POST /api/automations/jobs/{id}/replay — re-queue a dead-lettered job.
+func (d *Daemon) replayAutomationJob(w http.ResponseWriter, r *http.Request) {
+	c, err := d.opsClient()
+	if err != nil {
+		writeError(w, http.StatusNotFound, "not_configured", err.Error())
+		return
+	}
+	id := chi.URLParam(r, "id")
+	var res map[string]any
+	if err := c.do(r.Context(), http.MethodPost, "/ops/jobs/"+url.PathEscape(id)+"/replay", nil, &res); err != nil {
+		writeError(w, http.StatusBadGateway, "background_unavailable", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
 }
 
 // GET /api/automations/runs[?app=] — runs born from the caller's triggers only.

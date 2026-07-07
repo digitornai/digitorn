@@ -25,9 +25,7 @@ func newMgr(fn func(ctx context.Context, spec dgruntime.SubAgentSpec) (dgruntime
 	return m
 }
 
-// TestSpawnWaitAndTelemetry : spawn returns a run id immediately, Wait collects
-// the structured result, and the real-time telemetry the engine reports via the
-// ctx Recorder is reflected in the snapshot.
+
 func TestSpawnWaitAndTelemetry(t *testing.T) {
 	m := newMgr(func(ctx context.Context, spec dgruntime.SubAgentSpec) (dgruntime.AgentResult, error) {
 		if r := dgruntime.RecorderFromContext(ctx); r != nil {
@@ -61,8 +59,6 @@ func TestSpawnWaitAndTelemetry(t *testing.T) {
 	}
 }
 
-// TestSpawnIsNonBlocking : Spawn must return immediately even when the agent
-// runs forever — the caller never blocks.
 func TestSpawnIsNonBlocking(t *testing.T) {
 	release := make(chan struct{})
 	m := newMgr(func(ctx context.Context, _ dgruntime.SubAgentSpec) (dgruntime.AgentResult, error) {
@@ -79,8 +75,7 @@ func TestSpawnIsNonBlocking(t *testing.T) {
 	close(release)
 }
 
-// TestPanicIsIsolated : an agent whose runner panics is marked errored and never
-// crashes the manager or a sibling agent.
+
 func TestPanicIsIsolated(t *testing.T) {
 	m := newMgr(func(_ context.Context, spec dgruntime.SubAgentSpec) (dgruntime.AgentResult, error) {
 		if spec.AgentID == "boom" {
@@ -101,8 +96,7 @@ func TestPanicIsIsolated(t *testing.T) {
 	}
 }
 
-// TestDepthGuard : delegation depth is capped — a buggy agent can't recurse
-// forever.
+
 func TestDepthGuard(t *testing.T) {
 	m := newMgr(func(_ context.Context, _ dgruntime.SubAgentSpec) (dgruntime.AgentResult, error) {
 		return dgruntime.AgentResult{Status: "completed"}, nil
@@ -118,7 +112,6 @@ func TestDepthGuard(t *testing.T) {
 	}
 }
 
-// TestBudgetGuard : a per-root agent budget stops a fork-bomb.
 func TestBudgetGuard(t *testing.T) {
 	m := newMgr(func(_ context.Context, _ dgruntime.SubAgentSpec) (dgruntime.AgentResult, error) {
 		return dgruntime.AgentResult{Status: "completed"}, nil
@@ -135,8 +128,7 @@ func TestBudgetGuard(t *testing.T) {
 	}
 }
 
-// TestCancelTree : cancelling a parent cancels its whole subtree via the ctx
-// tree.
+
 func TestCancelTree(t *testing.T) {
 	m := newMgr(func(ctx context.Context, _ dgruntime.SubAgentSpec) (dgruntime.AgentResult, error) {
 		<-ctx.Done() // block until cancelled
@@ -154,9 +146,8 @@ func TestCancelTree(t *testing.T) {
 	}
 }
 
-// TestCancelAll : a session abort must halt the WHOLE delegated tree — every
-// agent under the root, independent contexts and all. Each unwinds to
-// "cancelled".
+
+
 func TestCancelAll(t *testing.T) {
 	m := newMgr(func(ctx context.Context, _ dgruntime.SubAgentSpec) (dgruntime.AgentResult, error) {
 		<-ctx.Done()
@@ -177,7 +168,7 @@ func TestCancelAll(t *testing.T) {
 		}
 	}
 
-	// A DIFFERENT root is untouched — abort is strictly per-session.
+
 	if s, _ := m.Status("other", keep); s.Status != "running" {
 		t.Errorf("agent in another session must survive, got %q", s.Status)
 	}
@@ -186,11 +177,9 @@ func TestCancelAll(t *testing.T) {
 	if n := m.CancelAll("does-not-exist"); n != 0 {
 		t.Errorf("CancelAll on unknown root = %d, want 0", n)
 	}
-	m.CancelAll("other") // unblock the surviving agent's goroutine
+	m.CancelAll("other") 
 }
 
-// TestNoAgentBlocksAnother : a slow agent must never block a fast one — true
-// independence. The fast agent completes long before the slow one.
 func TestNoAgentBlocksAnother(t *testing.T) {
 	m := newMgr(func(ctx context.Context, spec dgruntime.SubAgentSpec) (dgruntime.AgentResult, error) {
 		if spec.AgentID == "slow" {
@@ -211,9 +200,7 @@ func TestNoAgentBlocksAnother(t *testing.T) {
 	}
 }
 
-// TestNestedWaitIsDeadlockFree : an agent that spawns a child and WAITS for it,
-// nested several levels deep, must complete. A parent waiting on a child holds
-// nothing scarce (the core invariant), so the tree drains without deadlock.
+
 func TestNestedWaitIsDeadlockFree(t *testing.T) {
 	m := agent.New(nil)
 	m.MaxDepth = 10
@@ -242,8 +229,7 @@ func TestNestedWaitIsDeadlockFree(t *testing.T) {
 	}
 }
 
-// TestStress_ThousandsOfConcurrentAgents : prove the registry + scheduling hold
-// thousands of agents at once with no blocking and no lost agents.
+
 func TestStress_ThousandsOfConcurrentAgents(t *testing.T) {
 	m := newMgr(func(ctx context.Context, _ dgruntime.SubAgentSpec) (dgruntime.AgentResult, error) {
 		if r := dgruntime.RecorderFromContext(ctx); r != nil {

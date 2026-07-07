@@ -131,10 +131,10 @@ func TestRoutesChain(t *testing.T) {
 
 func TestBooleanRouting(t *testing.T) {
 	cases := []struct {
-		name    string
+		name      string
 		agentJSON string
-		want    string
-		node    string
+		want      string
+		node      string
 	}{
 		{"refund", `{"category":"refund"}`, "tool:refund.process", "refund"},
 		{"tech", `{"category":"tech"}`, "tool:tech.handle", "tech"},

@@ -5,6 +5,53 @@ import (
 	"testing"
 )
 
+func TestRawArray_Native(t *testing.T) {
+	var p struct {
+		Patch RawArray `json:"patch"`
+	}
+	if err := json.Unmarshal([]byte(`{"patch":[{"op":"replace","path":"/x","value":1}]}`), &p); err != nil {
+		t.Fatal(err)
+	}
+	if string(p.Patch) != `[{"op":"replace","path":"/x","value":1}]` {
+		t.Fatalf("unexpected: %s", p.Patch)
+	}
+}
+
+func TestRawArray_DoubleEncodedString(t *testing.T) {
+	// Some models emit an array-typed argument as an escaped JSON string
+	// instead of native JSON — this is the exact shape that produced
+	// "cannot unmarshal string into Go value of type jsonpatch.Patch".
+	var p struct {
+		Patch RawArray `json:"patch"`
+	}
+	raw := []byte(`{"patch":"[{\"op\":\"replace\",\"path\":\"/x\",\"value\":1}]"}`)
+	if err := json.Unmarshal(raw, &p); err != nil {
+		t.Fatal(err)
+	}
+	if string(p.Patch) != `[{"op":"replace","path":"/x","value":1}]` {
+		t.Fatalf("unexpected: %s", p.Patch)
+	}
+	var decoded []map[string]any
+	if err := json.Unmarshal(p.Patch, &decoded); err != nil {
+		t.Fatalf("resulting bytes are not valid JSON: %v", err)
+	}
+}
+
+func TestRawArray_Empty(t *testing.T) {
+	var p struct {
+		Patch RawArray `json:"patch"`
+	}
+	if err := json.Unmarshal([]byte(`{"patch":null}`), &p); err != nil {
+		t.Fatal(err)
+	}
+	if p.Patch != nil {
+		t.Fatalf("expected nil, got %s", p.Patch)
+	}
+	if err := json.Unmarshal([]byte(`{}`), &p); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestStringSlice_Array(t *testing.T) {
 	var p struct {
 		Paths StringSlice `json:"paths"`

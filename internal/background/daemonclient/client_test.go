@@ -19,8 +19,7 @@ import (
 
 func errorsAs(err error, target any) bool { return errors.As(err, target) }
 
-// fakeDaemon is a minimal stand-in for the daemon's public HTTP API. It records
-// what the client did and is programmable per-test (status overrides, history).
+
 type fakeDaemon struct {
 	mu sync.Mutex
 
@@ -33,8 +32,6 @@ type fakeDaemon struct {
 	createStatus int // 0 → 200
 	postStatus   int // 0 → 201
 
-	// history is served by sid; historyGate, if >0, withholds the assistant reply
-	// until the Nth History poll, exercising the polling loop.
 	history     map[string][]Message
 	historyHits map[string]int
 	historyGate int
@@ -76,10 +73,7 @@ func (f *fakeDaemon) handle(w http.ResponseWriter, r *http.Request) {
 			}
 			msgs = held
 		}
-		// Model the real daemon: turn_active reads false the WHOLE time for an async
-		// background turn; completion is the durable turn_ended event, emitted only once
-		// an assistant reply exists. Each assistant message is mirrored as an event so
-		// the client reads its reply text from the durable stream, not the projection.
+	
 		var events []map[string]any
 		hasAssistant := false
 		var maxSeq uint64
@@ -168,7 +162,7 @@ func lastSeg(p string) string {
 	return p[i+1:]
 }
 
-// ── tests ────────────────────────────────────────────────────────────────
+
 
 func TestCreateSession_InlineMessage(t *testing.T) {
 	f := newFake()
@@ -202,8 +196,7 @@ func TestLaunch_PerJob_IdempotentOnRetry(t *testing.T) {
 	if err != nil || !r1.Created {
 		t.Fatalf("first launch: %+v err=%v", r1, err)
 	}
-	// Simulate a lease-expiry retry of the SAME job: the deterministic session id
-	// already exists → must be an idempotent no-op, NOT a second session/turn.
+
 	r2, err := c.Launch(context.Background(), spec, "bg-jobX")
 	if err != nil {
 		t.Fatalf("retry launch: %v", err)
@@ -280,11 +273,7 @@ func TestWaitForReply_TimesOut_NoResend(t *testing.T) {
 	}
 }
 
-// TestWaitForReply_ReturnsFinalNotPreamble locks the turn_active trap: an async
-// background turn keeps turn_active=false the WHOLE time while it emits a preamble
-// ("let me look…"), runs a tool, then emits the FINAL answer and turn_ended. The
-// client must deliver the final answer, never the preamble. (Gating on !turn_active
-// returned the preamble — the original "je reçois seulement la première réponse" bug.)
+
 func TestWaitForReply_ReturnsFinalNotPreamble(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// turn_active is FALSE on every poll — the durable turn_ended event is the only
@@ -319,8 +308,7 @@ func TestWaitForReply_ReturnsFinalNotPreamble(t *testing.T) {
 	}
 }
 
-// TestWaitForReply_TurnEndsNoText: a turn that ends without producing assistant text
-// (e.g. tool-only) is an honest no-reply — ErrReplyTimeout, not a hang.
+
 func TestWaitForReply_TurnEndsNoText(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeJSONT(w, 200, map[string]any{
@@ -392,5 +380,44 @@ func TestProcessor_NoMessage_Terminal(t *testing.T) {
 	var rt *runner.Retryable
 	if err == nil || errorsAs(err, &rt) {
 		t.Fatalf("missing message should be terminal, got %v", err)
+	}
+}
+
+
+func TestLaunch_StampsContinuedFlag(t *testing.T) {
+	f := newFake()
+	srv := f.server(t)
+	c := New(srv.URL, "tok")
+
+	spec := LaunchSpec{
+		AppID:        "desk",
+		SessionID:    "mail-thread-42",
+		Message:      "first mail",
+		TriggerEvent: map[string]any{"provider": "mailbox", "payload": map[string]any{"id": "m1"}},
+	}
+	if _, err := c.Launch(context.Background(), spec, "bg-job1"); err != nil {
+		t.Fatalf("first launch: %v", err)
+	}
+	var te map[string]any
+	if err := json.Unmarshal(f.lastBody["trigger_event"], &te); err != nil {
+		t.Fatalf("decode create trigger_event: %v", err)
+	}
+	if te["continued"] != false {
+		t.Errorf("create trigger_event.continued = %v, want false", te["continued"])
+	}
+
+	spec.Message = "reply in the same thread"
+	if _, err := c.Launch(context.Background(), spec, "bg-job2"); err != nil {
+		t.Fatalf("second launch: %v", err)
+	}
+	te = nil
+	if err := json.Unmarshal(f.lastBody["trigger_event"], &te); err != nil {
+		t.Fatalf("decode post trigger_event: %v", err)
+	}
+	if te["continued"] != true {
+		t.Errorf("post trigger_event.continued = %v, want true", te["continued"])
+	}
+	if spec.TriggerEvent["continued"] != nil {
+		t.Errorf("caller's TriggerEvent map was mutated")
 	}
 }

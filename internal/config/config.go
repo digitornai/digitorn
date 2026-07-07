@@ -37,6 +37,17 @@ type Config struct {
 	LLM           LLM           `koanf:"llm"`
 	Observability Observability `koanf:"observability"`
 	Background    Background    `koanf:"background"`
+	Voice         Voice         `koanf:"voice"`
+	OAuth         OAuth         `koanf:"oauth"`
+}
+
+// OAuth holds daemon-wide OAuth settings for connector (piece) flows.
+type OAuth struct {
+	// PieceRedirectURL is the hosted OAuth callback (a bounce page that forwards
+	// the code to the local daemon). Set it for loopback-hostile providers
+	// (Slack, Notion…) and to use one app across desktop + cloud. Empty falls
+	// back to the daemon's own loopback callback.
+	PieceRedirectURL string `koanf:"piece_redirect_url"`
 }
 
 // Background locates the background service's ops API so the daemon can expose
@@ -45,8 +56,29 @@ type Config struct {
 // the daemon relays server-side with the admin ops token, which therefore never
 // reaches a client. Empty OpsURL disables the surface (404s) — fully graceful.
 type Background struct {
-	OpsURL   string `koanf:"ops_url"`   // e.g. http://127.0.0.1:8091 ("" = disabled)
-	OpsToken string `koanf:"ops_token"` // bearer for /ops (DIGITORN_BG_OPS_TOKEN twin)
+	OpsURL     string `koanf:"ops_url"`     // e.g. http://127.0.0.1:8091 ("" = disabled)
+	OpsToken   string `koanf:"ops_token"`   // bearer for /ops (DIGITORN_BG_OPS_TOKEN twin)
+	Manage     bool   `koanf:"manage"`      // daemon spawns + watchdogs the bg service
+	Binary     string `koanf:"binary"`      // path to digitorn-background ("" = sibling of the daemon)
+	ServiceJWT string `koanf:"service_jwt"` // DIGITORN_BG_SERVICE_JWT for the managed process
+}
+
+// Voice configures the managed digitorn-voice adapter: the real-time media
+// process the daemon spawns and watchdogs (same mechanics as Background).
+// Manage=false (default) leaves voice entirely manual.
+type Voice struct {
+	Manage    bool   `koanf:"manage"`
+	Binary    string `koanf:"binary"`    // path to digitorn-voice ("" = sibling of the daemon)
+	AppID     string `koanf:"app_id"`    // the app whose agent answers calls (required when managed)
+	Transport string `koanf:"transport"` // asterisk (default) | twilio
+	Engine    string `koanf:"engine"`    // pipeline (default) | realtime
+	HTTPAddr  string `koanf:"http_addr"` // healthz addr (default :9091)
+	Asterisk  string `koanf:"asterisk"`  // AudioSocket listen addr (default :9092)
+	Twilio    string `koanf:"twilio"`    // Media Streams WS addr (default :9093)
+	STTModel  string `koanf:"stt_model"`
+	TTSModel  string `koanf:"tts_model"`
+	TTSVoice  string `koanf:"tts_voice"`
+	Language  string `koanf:"language"`
 }
 
 // Apps holds the install location for apps and the hub client settings.
@@ -70,6 +102,10 @@ type AppsHub struct {
 	Timeout         time.Duration `koanf:"timeout"`
 	VerifySSL       bool          `koanf:"verify_ssl"`
 	MaxArchiveBytes int64         `koanf:"max_archive_bytes"`
+	// DaemonKey authenticates the daemon to the hub's daemon-only endpoints
+	// (e.g. system OAuth config). Read from config so it survives restarts;
+	// falls back to the DIGITORN_DAEMON_KEY env var.
+	DaemonKey string `koanf:"daemon_key"`
 }
 
 // Workers groups subprocess worker pool configurations.

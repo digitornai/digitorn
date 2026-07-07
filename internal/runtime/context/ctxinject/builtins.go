@@ -171,6 +171,10 @@ func biSession(d Data) string {
 	if v := get("workdir"); v != "" {
 		lines = append(lines, "Working directory: "+v)
 	}
+	if v := get("attachments"); v != "" {
+		lines = append(lines, "The user attached these files: "+v+
+			". Use the read tool to open them before answering.")
+	}
 	return strings.Join(lines, "\n")
 }
 

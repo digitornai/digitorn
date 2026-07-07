@@ -1,9 +1,5 @@
 package catalog
 
-// HookConditionSpec declares the param schema for one condition type. The
-// validator (validate.CheckHookParams) checks every hook.condition map
-// against this — unknown keys become DGT-E0101, missing required keys become
-// DGT-E0100, type mismatches become DGT-E0102.
 type HookConditionSpec struct {
 	Name   string
 	Params []HookParamSpec
@@ -16,15 +12,11 @@ type HookActionSpec struct {
 
 type HookParamSpec struct {
 	Name     string
-	Type     string // string | string_list | string_or_string_list | integer | boolean | object | regex
+	Type     string 
 	Required bool
 	Enum     []string
 }
 
-// HookConditions enumerates the 14 built-in conditions, verbatim from
-// docs-site/language/31-tool-hooks.md "Conditions (14 built-in)". This
-// is the single source of truth for param validation ; names mirror
-// schema.AllHookConditions (asserted equal by the conformance test).
 var HookConditions = []HookConditionSpec{
 	{Name: "always", Params: nil},
 	{Name: "never", Params: nil},
@@ -42,8 +34,6 @@ var HookConditions = []HookConditionSpec{
 		{Name: "threshold", Type: "integer", Required: true},
 	}},
 	{Name: "tool_name", Params: []HookParamSpec{
-		// `match` accepts a single fnmatch pattern ("filesystem.write")
-		// or a list. Pipe / wildcard delimiters resolve at runtime.
 		{Name: "match", Type: "string_or_string_list", Required: true},
 	}},
 	{Name: "tool_failed", Params: nil},
@@ -67,10 +57,6 @@ var HookConditions = []HookConditionSpec{
 	}},
 }
 
-// HookActions enumerates the 15 built-in actions, verbatim from
-// docs-site/language/31-tool-hooks.md "Actions (15 built-in)". The
-// first 13 are general-purpose ; compile_yaml + auto_test_deploy are
-// builder-app scoped. Names mirror schema.AllHookActions.
 var HookActions = []HookActionSpec{
 	{Name: "compact_context", Params: []HookParamSpec{
 		{Name: "strategy", Type: "string", Enum: []string{"truncate", "summarize"}},
@@ -142,7 +128,7 @@ var HookActions = []HookActionSpec{
 	{Name: "auto_test_deploy", Params: nil},
 }
 
-// hookSpecsIndex builds an O(1) lookup keyed by name.
+
 func hookSpecsIndex[T any](items []T, keyOf func(T) string) map[string]T {
 	out := make(map[string]T, len(items))
 	for _, it := range items {

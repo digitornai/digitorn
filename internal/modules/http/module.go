@@ -168,18 +168,71 @@ func (m *Module) Init(_ context.Context, cfg map[string]any) error {
 	return nil
 }
 
-// callDefaultHeaders returns per-call default headers from the app's resolved
-// module config (tools.modules.http.config), when the dispatcher attached one.
-func (m *Module) callDefaultHeaders(ctx context.Context) map[string]string {
+// callConfig resolves the EFFECTIVE config for one call: the boot (daemon-
+// level) config overlaid with the calling app's tools.modules.http.config
+// block the dispatcher attached. A shared module instance previously honored
+// only default_headers from the app block — allow_private_hosts, timeout,
+// allowed/blocked hosts and credentials were silently read from the boot
+// config, so an app opting in (e.g. a self-hosted intranet GLPI) was still
+// blocked by the SSRF guard.
+func (m *Module) callConfig(ctx context.Context) Config {
+	eff := m.cfg
 	raw := module.ModuleConfigFrom(ctx)
 	if len(raw) == 0 {
-		return nil
+		return eff
 	}
-	var c Config
-	if err := m.BindConfig(raw, &c); err != nil || len(c.DefaultHeaders) == 0 {
-		return nil
+	var app Config
+	if err := m.BindConfig(raw, &app); err != nil {
+		return eff
 	}
-	return c.DefaultHeaders
+	eff.AllowPrivateHosts = eff.AllowPrivateHosts || app.AllowPrivateHosts
+	if app.TimeoutSecs > 0 {
+		eff.TimeoutSecs = app.TimeoutSecs
+	}
+	if len(app.AllowedHosts) > 0 {
+		eff.AllowedHosts = app.AllowedHosts
+	}
+	// Blocklists only ever extend — an app cannot unblock a daemon-blocked host.
+	if len(app.BlockedHosts) > 0 {
+		eff.BlockedHosts = append(append([]string{}, eff.BlockedHosts...), app.BlockedHosts...)
+	}
+	if len(app.DefaultHeaders) > 0 {
+		merged := make(map[string]string, len(eff.DefaultHeaders)+len(app.DefaultHeaders))
+		for k, v := range eff.DefaultHeaders {
+			merged[k] = v
+		}
+		for k, v := range app.DefaultHeaders {
+			merged[k] = v
+		}
+		eff.DefaultHeaders = merged
+	}
+	if len(app.Credentials) > 0 {
+		merged := make(map[string]credDef, len(eff.Credentials)+len(app.Credentials))
+		for k, v := range eff.Credentials {
+			merged[k] = v
+		}
+		for k, v := range app.Credentials {
+			merged[k] = v
+		}
+		eff.Credentials = merged
+	}
+	return eff
+}
+
+// clientFor returns the pooled boot client on the fast path, or a per-call
+// client when the effective config (or a per-call timeout) diverges from it.
+func (m *Module) clientFor(cfg Config, perCallTimeoutSecs int) *gohttp.Client {
+	if perCallTimeoutSecs <= 0 && cfg.AllowPrivateHosts == m.cfg.AllowPrivateHosts && cfg.TimeoutSecs == m.cfg.TimeoutSecs {
+		return m.client
+	}
+	timeout := defaultTimeout
+	if cfg.TimeoutSecs > 0 {
+		timeout = time.Duration(cfg.TimeoutSecs * float64(time.Second))
+	}
+	if perCallTimeoutSecs > 0 {
+		timeout = time.Duration(perCallTimeoutSecs) * time.Second
+	}
+	return safehttp.Client(timeout, cfg.AllowPrivateHosts, nil)
 }
 
 type reqParams struct {
@@ -206,7 +259,8 @@ func (m *Module) doRequest(ctx context.Context, method string, raw json.RawMessa
 	var p reqParams
 	_ = json.Unmarshal(raw, &p)
 
-	if err := m.checkHost(p.URL); err != nil {
+	cfg := m.callConfig(ctx)
+	if err := m.checkHost(cfg, p.URL); err != nil {
 		return errResult(err), err
 	}
 
@@ -216,25 +270,19 @@ func (m *Module) doRequest(ctx context.Context, method string, raw json.RawMessa
 		bodyR = strings.NewReader(body)
 	}
 
-	client := m.client
-	if p.Timeout > 0 {
-		client = safehttp.Client(time.Duration(int(p.Timeout))*time.Second, m.cfg.AllowPrivateHosts, nil)
-	}
+	client := m.clientFor(cfg, int(p.Timeout))
 
 	req, err := gohttp.NewRequestWithContext(ctx, method, p.URL, bodyR)
 	if err != nil {
 		return errResult(err), err
 	}
-	for k, v := range m.cfg.DefaultHeaders {
-		req.Header.Set(k, v)
-	}
-	for k, v := range m.callDefaultHeaders(ctx) {
+	for k, v := range cfg.DefaultHeaders {
 		req.Header.Set(k, v)
 	}
 	for k, v := range p.Headers {
 		req.Header.Set(k, v)
 	}
-	m.applyAuth(req, p.Auth)
+	m.applyAuth(req, p.Auth, cfg)
 	if body != "" && req.Header.Get("Content-Type") == "" {
 		if json.Valid([]byte(body)) {
 			req.Header.Set("Content-Type", "application/json")
@@ -300,15 +348,16 @@ func (m *Module) download(ctx context.Context, raw json.RawMessage) (tool.Result
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return errResult(err), err
 	}
-	if err := m.checkHost(p.URL); err != nil {
+	cfg := m.callConfig(ctx)
+	if err := m.checkHost(cfg, p.URL); err != nil {
 		return errResult(err), err
 	}
 	req, err := gohttp.NewRequestWithContext(ctx, gohttp.MethodGet, p.URL, nil)
 	if err != nil {
 		return errResult(err), err
 	}
-	m.applyAuth(req, p.Auth)
-	resp, err := m.client.Do(req)
+	m.applyAuth(req, p.Auth, cfg)
+	resp, err := m.clientFor(cfg, 0).Do(req)
 	if err != nil {
 		return errResult(err), err
 	}
@@ -341,7 +390,8 @@ func (m *Module) upload(ctx context.Context, raw json.RawMessage) (tool.Result, 
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return errResult(err), err
 	}
-	if err := m.checkHost(p.URL); err != nil {
+	cfg := m.callConfig(ctx)
+	if err := m.checkHost(cfg, p.URL); err != nil {
 		return errResult(err), err
 	}
 	if p.Field == "" {
@@ -367,8 +417,8 @@ func (m *Module) upload(ctx context.Context, raw json.RawMessage) (tool.Result, 
 	for k, v := range p.Headers {
 		req.Header.Set(k, v)
 	}
-	m.applyAuth(req, p.Auth)
-	resp, err := m.client.Do(req)
+	m.applyAuth(req, p.Auth, cfg)
+	resp, err := m.clientFor(cfg, 0).Do(req)
 	if err != nil {
 		return errResult(err), err
 	}
@@ -381,11 +431,11 @@ func (m *Module) upload(ctx context.Context, raw json.RawMessage) (tool.Result, 
 	}}, nil
 }
 
-func (m *Module) applyAuth(req *gohttp.Request, auth string) {
+func (m *Module) applyAuth(req *gohttp.Request, auth string, cfg Config) {
 	if auth == "" {
 		return
 	}
-	if cred, ok := m.cfg.Credentials[auth]; ok {
+	if cred, ok := cfg.Credentials[auth]; ok {
 		switch cred.Type {
 		case "bearer":
 			req.Header.Set("Authorization", "Bearer "+cred.Token)
@@ -405,19 +455,19 @@ func (m *Module) applyAuth(req *gohttp.Request, auth string) {
 	}
 }
 
-func (m *Module) checkHost(rawURL string) error {
+func (m *Module) checkHost(cfg Config, rawURL string) error {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return fmt.Errorf("invalid url: %w", err)
 	}
 	host := u.Hostname()
-	for _, b := range m.cfg.BlockedHosts {
+	for _, b := range cfg.BlockedHosts {
 		if strings.EqualFold(host, b) {
 			return fmt.Errorf("host %q is blocked", host)
 		}
 	}
-	if len(m.cfg.AllowedHosts) > 0 {
-		for _, a := range m.cfg.AllowedHosts {
+	if len(cfg.AllowedHosts) > 0 {
+		for _, a := range cfg.AllowedHosts {
 			if strings.EqualFold(host, a) {
 				return nil
 			}

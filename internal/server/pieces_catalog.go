@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"sync"
 
 	"github.com/digitornai/digitorn/internal/appmgr"
@@ -81,7 +82,8 @@ func (pc *piecesCatalog) fetch(appID string) []policy.AvailableAction {
 	// them via search_tools / get_tool.
 	// Explicit list → index normally; the auto-switch threshold still applies.
 	wildcardGrant := pc.isPiecesWildcard(appID)
-	slog.Debug("pieces_catalog: fetched tools from bridge", "app_id", appID, "count", len(specs), "discovery_only", wildcardGrant)
+	allowed := pc.allowedPieces(appID)
+	slog.Debug("pieces_catalog: fetched tools from bridge", "app_id", appID, "count", len(specs), "discovery_only", wildcardGrant, "allowed", len(allowed))
 
 	out := make([]policy.AvailableAction, 0, len(specs))
 	for i := range specs {
@@ -89,6 +91,11 @@ func (pc *piecesCatalog) fetch(appID string) []policy.AvailableAction {
 		modID, action := toolname.SplitFQN(canonical)
 		if modID == "" || action == "" {
 			continue
+		}
+		if allowed != nil {
+			if _, ok := allowed[canonPieceName(strings.TrimPrefix(modID, "ap_"))]; !ok {
+				continue
+			}
 		}
 		fqnSpec := specs[i]
 		fqnSpec.Name = canonical
@@ -159,6 +166,42 @@ func (pc *piecesCatalog) invalidate(appID string) {
 		return
 	}
 	delete(pc.byApp, appID)
+}
+
+func canonPieceName(s string) string {
+	return strings.ToLower(strings.ReplaceAll(s, "-", "_"))
+}
+
+func (pc *piecesCatalog) allowedPieces(appID string) map[string]struct{} {
+	if pc.apps == nil || appID == "" {
+		return nil
+	}
+	rt, err := pc.apps.Get(context.Background(), appID)
+	if err != nil || rt == nil || rt.Definition == nil || rt.Definition.Tools == nil {
+		return nil
+	}
+	mb, ok := rt.Definition.Tools.Modules["pieces"]
+	if !ok || mb.Constraints == nil {
+		return nil
+	}
+	raw, ok := mb.Constraints["allowed_pieces"]
+	if !ok {
+		return nil
+	}
+	set := map[string]struct{}{}
+	switch v := raw.(type) {
+	case []string:
+		for _, s := range v {
+			set[canonPieceName(s)] = struct{}{}
+		}
+	case []any:
+		for _, e := range v {
+			if s, ok := e.(string); ok {
+				set[canonPieceName(s)] = struct{}{}
+			}
+		}
+	}
+	return set
 }
 
 func (pc *piecesCatalog) declaredPieces(appID string) bool {

@@ -45,6 +45,9 @@ type Provider struct {
 	APIKeyHeader string // api-key header (default X-API-Key)
 	MaxBytes     int64  // payload cap (default 1 MB)
 	CallbackURL  string // reply:auto outbound target
+	// AllowPrivate lets THIS provider's replies target private/loopback hosts —
+	// for intranet ticketing systems whose callback lives on RFC-1918 space.
+	AllowPrivate bool
 }
 
 // Adapter handles a set of webhook providers.
@@ -63,18 +66,32 @@ type Adapter struct {
 func New(providers []Provider) *Adapter {
 	byPath := make(map[string]Provider, len(providers))
 	for _, p := range providers {
-		if p.MaxBytes <= 0 {
-			p.MaxBytes = defaultMaxBytes
-		}
-		if p.SigHeader == "" {
-			p.SigHeader = defaultSigHeader
-		}
-		if p.APIKeyHeader == "" {
-			p.APIKeyHeader = "X-API-Key"
-		}
-		byPath[p.Path] = p
+		byPath[p.Path] = normalize(p)
 	}
 	return &Adapter{byPath: byPath, hc: &http.Client{Timeout: 15 * time.Second}}
+}
+
+func normalize(p Provider) Provider {
+	if p.MaxBytes <= 0 {
+		p.MaxBytes = defaultMaxBytes
+	}
+	if p.SigHeader == "" {
+		p.SigHeader = defaultSigHeader
+	}
+	if p.APIKeyHeader == "" {
+		p.APIKeyHeader = "X-API-Key"
+	}
+	return p
+}
+
+func (a *Adapter) Arm(p Provider) error {
+	if strings.TrimSpace(p.Path) == "" {
+		return fmt.Errorf("webhook: provider %q has no inbound path", p.Name)
+	}
+	a.mu.Lock()
+	a.byPath[p.Path] = normalize(p)
+	a.mu.Unlock()
+	return nil
 }
 
 func (a *Adapter) Name() string { return "webhook" }
@@ -98,7 +115,9 @@ func (a *Adapter) currentSink() adapter.Sink {
 func (a *Adapter) Handler() http.Handler { return http.HandlerFunc(a.serve) }
 
 func (a *Adapter) serve(w http.ResponseWriter, r *http.Request) {
+	a.mu.RLock()
 	p, ok := a.byPath[r.URL.Path]
+	a.mu.RUnlock()
 	if !ok {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
@@ -144,8 +163,10 @@ func (a *Adapter) serve(w http.ResponseWriter, r *http.Request) {
 		Payload:  payload,
 		Metadata: map[string]any{"path": p.Path},
 	}
-	if p.CallbackURL != "" {
-		ev.ReplyRef = map[string]any{"url": p.CallbackURL}
+	if cb, _ := payload["callback_url"].(string); cb != "" {
+		ev.ReplyRef = map[string]any{"url": cb, "allow_private": p.AllowPrivate}
+	} else if p.CallbackURL != "" {
+		ev.ReplyRef = map[string]any{"url": p.CallbackURL, "allow_private": p.AllowPrivate}
 	}
 	if err := sink(r.Context(), ev); err != nil {
 		http.Error(w, "intake failed", http.StatusServiceUnavailable)
@@ -160,12 +181,18 @@ func (a *Adapter) authOK(p Provider, r *http.Request, body []byte) bool {
 	case "", "none":
 		return true
 	case "signature":
+		if p.Secret == "" {
+			return false
+		}
 		mac := hmac.New(sha256.New, []byte(p.Secret))
 		mac.Write(body)
 		want := hex.EncodeToString(mac.Sum(nil))
 		got := strings.TrimPrefix(r.Header.Get(p.SigHeader), "sha256=")
 		return subtle.ConstantTimeCompare([]byte(want), []byte(got)) == 1
 	case "api_key":
+		if p.APIKey == "" {
+			return false
+		}
 		return subtle.ConstantTimeCompare([]byte(p.APIKey), []byte(r.Header.Get(p.APIKeyHeader))) == 1
 	default:
 		return false
@@ -178,7 +205,8 @@ func (a *Adapter) Send(ctx context.Context, ref map[string]any, text string) err
 	if raw == "" {
 		return fmt.Errorf("webhook: no reply url")
 	}
-	if err := a.safeURL(raw); err != nil {
+	allowPrivate, _ := ref["allow_private"].(bool)
+	if err := a.safeURL(raw, allowPrivate); err != nil {
 		return err
 	}
 	body, _ := json.Marshal(map[string]string{"text": text})
@@ -201,7 +229,7 @@ func (a *Adapter) Send(ctx context.Context, ref map[string]any, text string) err
 
 // safeURL blocks SSRF: only http/https, and (unless AllowPrivate) no private,
 // loopback, link-local, unspecified, or cloud-metadata destinations.
-func (a *Adapter) safeURL(raw string) error {
+func (a *Adapter) safeURL(raw string, allowPrivate bool) error {
 	u, err := url.Parse(raw)
 	if err != nil {
 		return fmt.Errorf("webhook: bad url: %w", err)
@@ -209,7 +237,7 @@ func (a *Adapter) safeURL(raw string) error {
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return fmt.Errorf("webhook: scheme %q not allowed", u.Scheme)
 	}
-	if a.AllowPrivate {
+	if a.AllowPrivate || allowPrivate {
 		return nil
 	}
 	host := u.Hostname()

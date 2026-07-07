@@ -85,12 +85,15 @@ require (
 
 require (
 	github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.1
+	github.com/aymanbagabas/go-pty v0.2.3
 	github.com/bytedance/sonic v1.15.0
+	github.com/evanphx/json-patch/v5 v5.9.11
 	github.com/glebarez/sqlite v1.11.0
 	github.com/go-git/go-billy/v5 v5.9.0
 	github.com/go-git/go-git/v5 v5.19.1
 	github.com/gocolly/colly/v2 v2.3.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
+	github.com/invopop/jsonschema v0.13.0
 	github.com/jackc/pglogrepl v0.0.0-20260401131349-e37c41485510
 	github.com/kardianos/service v1.2.4
 	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
@@ -102,6 +105,8 @@ require (
 	github.com/segmentio/kafka-go v0.4.51
 	github.com/sergi/go-diff v1.4.0
 	github.com/smacker/go-tree-sitter v0.0.0-20240827094217-dd81d9e9be82
+	github.com/tidwall/gjson v1.18.0
+	github.com/tidwall/pretty v1.2.0
 	github.com/tiktoken-go/tokenizer v0.8.0
 	github.com/tsawler/tabula v1.6.6
 	github.com/yalue/onnxruntime_go v1.30.1
@@ -144,7 +149,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.35.19 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.41.10 // indirect
 	github.com/aws/smithy-go v1.25.1 // indirect
-	github.com/aymanbagabas/go-pty v0.2.3 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/bits-and-blooms/bitset v1.24.4 // indirect
 	github.com/buger/jsonparser v1.1.2 // indirect
@@ -164,7 +168,6 @@ require (
 	github.com/golang/groupcache v0.0.0-20241129210726-2c02b8208cf8 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/google/jsonschema-go v0.4.3 // indirect
-	github.com/invopop/jsonschema v0.13.0 // indirect
 	github.com/jackc/pgio v1.0.0 // indirect
 	github.com/jbenet/go-context v0.0.0-20150711004518-d14ea06fba99 // indirect
 	github.com/kennygrant/sanitize v1.2.4 // indirect
@@ -188,9 +191,7 @@ require (
 	github.com/skeema/knownhosts v1.3.1 // indirect
 	github.com/spf13/cast v1.10.0 // indirect
 	github.com/temoto/robotstxt v1.1.2 // indirect
-	github.com/tidwall/gjson v1.18.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
-	github.com/tidwall/pretty v1.2.0 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/u-root/u-root v0.16.0 // indirect

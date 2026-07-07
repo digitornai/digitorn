@@ -103,6 +103,9 @@ func sessionBag(snap sessionstore.SessionSnapshot, ctxMaxTokens int) map[string]
 			string(os.PathSeparator), "-",
 			" ", "-",
 		).Replace(snap.Workdir)
+		if descs := attachmentDescriptions(snap); len(descs) > 0 {
+			m["attachments"] = strings.Join(descs, ", ")
+		}
 	}
 	if snap.ContextTokens > 0 {
 		m["tokens"] = strconv.Itoa(snap.ContextTokens)

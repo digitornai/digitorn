@@ -27,6 +27,7 @@ export async function executeTool(
   const { auth: rawAuth, sessionId, propsValue } = extractPropsAndAuth(args)
   const auth = resolveAuthValue(rawAuth)
   coerceCustomAuthTypes(auth, piece.metadata.auth)
+  normalizeCustomApiCall(parsed.action, propsValue)
   const ctx = makeActionContext(auth, propsValue, sessionId, parsed.action)
 
   try {
@@ -37,6 +38,27 @@ export async function executeTool(
     process.stderr.write(`pieces-bridge: ${toolName} failed: ${msg}\n`)
     return { success: false, error: msg }
   }
+}
+
+function normalizeCustomApiCall(
+  action: string,
+  propsValue: Record<string, unknown>,
+): void {
+  if (action !== 'custom_api_call') return
+  const u = propsValue.url
+  if (typeof u === 'string') {
+    propsValue.url = { url: u }
+    return
+  }
+  if (u && typeof u === 'object') {
+    if (!('url' in (u as Record<string, unknown>))) {
+      const inner = Object.values(u as Record<string, unknown>).find(v => typeof v === 'string')
+      if (typeof inner === 'string') propsValue.url = { url: inner }
+    }
+    return
+  }
+  const alt = propsValue.path ?? propsValue.endpoint ?? propsValue.relativeUrl
+  if (typeof alt === 'string') propsValue.url = { url: alt }
 }
 
 // The daemon stores credentials as strings, so a CHECKBOX field arrives as

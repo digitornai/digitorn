@@ -101,7 +101,11 @@ func StdinPipeFromContext(ctx context.Context) io.Reader {
 // to the client. FileChanged MUST return immediately — it is called on the
 // tool's hot path and may never block on git or I/O.
 type FileChangeNotifier interface {
-	FileChanged(sessionID, workdir string)
+	// paths (optional) are the exact workdir-relative files just written. When
+	// given, the notifier emits an immediate, reliable per-file change — the
+	// git-status baseline can otherwise bake a brand-new file into the baseline
+	// and report no diff. No paths = discover the set via git status.
+	FileChanged(sessionID, workdir string, paths ...string)
 }
 
 type fileChangeNotifierKey struct{}

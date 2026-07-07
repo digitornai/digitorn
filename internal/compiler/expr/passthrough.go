@@ -23,6 +23,7 @@ var RuntimeNamespaces = []string{
 	"previous",
 	"approvals",
 	"tasks",
+	"error",
 }
 
 func isRuntimeNamespace(ns string) bool {

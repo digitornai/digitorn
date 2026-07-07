@@ -123,6 +123,15 @@ type SessionState struct {
 	// their logical id (so the choice applies to every future sub-turn). nil/empty
 	// = every agent uses its Brain default.
 	ModelOverrides map[string]string
+	// ProviderOverrides maps an agent's logical id → the provider of its pinned
+	// model, set only when that model belongs to a DIFFERENT provider than the
+	// agent's brain (BYOK cross-provider, e.g. a local LM Studio model). Parallel
+	// to ModelOverrides; empty = the model is served by the brain's own provider.
+	ProviderOverrides map[string]string
+	// OutputTokenOverrides maps an agent's logical id → the max generation tokens
+	// the user pinned for its model (BYOK models whose limits the gateway doesn't
+	// know). Parallel to ModelOverrides; 0/absent = the brain default applies.
+	OutputTokenOverrides map[string]int
 	// EntryModelWindow is the gateway's documented max_context_tokens for the
 	// entry agent's selected model, persisted from EventModelChanged so the
 	// background recount resolves the real window without a gateway call.
@@ -434,6 +443,8 @@ func (s *SessionState) Snapshot() SessionSnapshot {
 			EntryAgent:               s.EntryAgent,
 			ContextExtra:             s.ContextExtra,
 			ModelOverrides:           s.ModelOverrides,
+			ProviderOverrides:        s.ProviderOverrides,
+			OutputTokenOverrides:     s.OutputTokenOverrides,
 			EntryModelWindow:         s.EntryModelWindow,
 			ReasoningEffort:          s.ReasoningEffort,
 			EffortOverrides:          s.EffortOverrides,

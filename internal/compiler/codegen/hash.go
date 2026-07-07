@@ -10,9 +10,7 @@ import (
 	"github.com/digitornai/digitorn/internal/compiler/schema"
 )
 
-// VersionHash combines the catalog snapshot, the compiler version, and the
-// canonical JSON of the AppDefinition. Any drift in modules / middleware /
-// providers invalidates previously compiled artifacts.
+
 func VersionHash(def *schema.AppDefinition, cat *catalog.Catalog) (string, error) {
 	h := sha256.New()
 	h.Write([]byte(CompilerVersion))

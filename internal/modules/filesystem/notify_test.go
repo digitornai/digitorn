@@ -15,7 +15,7 @@ type capturingNotifier struct {
 	calls [][2]string // {sessionID, workdir}
 }
 
-func (n *capturingNotifier) FileChanged(sessionID, wd string) {
+func (n *capturingNotifier) FileChanged(sessionID, wd string, _ ...string) {
 	n.mu.Lock()
 	n.calls = append(n.calls, [2]string{sessionID, wd})
 	n.mu.Unlock()

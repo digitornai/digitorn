@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -91,6 +92,8 @@ type BusAdapter struct {
 	// EventEmitter can publish events. nil = no bus wired (modules skip
 	// event emission).
 	EventBus ports.EventBus
+
+	AppsRoot string
 }
 
 // ModuleConfigSource resolves the effective config block for a module on a
@@ -243,6 +246,9 @@ func (a *BusAdapter) Dispatch(ctx context.Context, call runtime.ToolInvocation) 
 		if cfg := a.ModuleConfigs.ModuleConfig(call.AppID, call.UserID, moduleID); len(cfg) > 0 {
 			ctx = pkgmodule.WithModuleConfig(ctx, cfg)
 		}
+	}
+	if a.AppsRoot != "" && call.AppID != "" {
+		ctx = pkgmodule.WithAppDir(ctx, filepath.Join(a.AppsRoot, call.AppID))
 	}
 	if a.Embedder != nil {
 		ctx = pkgmodule.WithEmbedder(ctx, a.Embedder)

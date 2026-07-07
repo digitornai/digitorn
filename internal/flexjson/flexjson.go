@@ -130,6 +130,33 @@ func (f *Float64) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+// RawArray tolerates a JSON array/object parameter that arrived double-encoded
+// as a JSON string — some models emit an array-typed tool argument (e.g. an
+// RFC 6902 `patch`) as an escaped string (`"[{...}]"`) instead of native JSON
+// (`[{...}]`). When the raw bytes are a JSON string, the decoded string is
+// used as the underlying JSON directly; otherwise the raw bytes pass through
+// unchanged so a well-formed native array/object still works.
+type RawArray json.RawMessage
+
+func (f *RawArray) UnmarshalJSON(b []byte) error {
+	t := strings.TrimSpace(string(b))
+	if t == "" || t == "null" {
+		*f = nil
+		return nil
+	}
+	if t[0] == '"' {
+		var s string
+		if err := json.Unmarshal(b, &s); err == nil {
+			if s = strings.TrimSpace(s); s != "" {
+				*f = RawArray(s)
+				return nil
+			}
+		}
+	}
+	*f = RawArray(append([]byte(nil), b...))
+	return nil
+}
+
 type StringSlice []string
 
 func (f *StringSlice) UnmarshalJSON(b []byte) error {

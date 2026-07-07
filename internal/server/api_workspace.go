@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"os"
@@ -413,6 +414,44 @@ func (d *Daemon) getWorkspaceFile(w http.ResponseWriter, r *http.Request) {
 	}
 	if fi.IsDir() {
 		writeError(w, http.StatusBadRequest, "is_dir", "path is a directory")
+		return
+	}
+
+	// ?as=pdf → high-fidelity read-only preview of an office doc (pptx/docx/xlsx)
+	// via the bounded, off-path LibreOffice converter. 200 + application/pdf when
+	// ready; 202 while converting (client polls); 501/503/502 when unavailable /
+	// busy / failed so the client falls back to the pure-JS viewer.
+	if r.URL.Query().Get("as") == "pdf" {
+		d.serveOfficePDF(w, r, abs, fi)
+		return
+	}
+
+	// ?raw=1 → stream the real bytes. The default JSON envelope below is the
+	// Monaco editor's TEXT view (and serves "" for binary), which mangles PDFs /
+	// office files. Downloads and the attachments viewer need the actual file, so
+	// they hit this branch and get a proper blob with a best-effort Content-Type.
+	switch r.URL.Query().Get("raw") {
+	case "1", "true", "yes":
+		f, ferr := os.Open(abs)
+		if ferr != nil {
+			writeError(w, http.StatusInternalServerError, "workspace_error", ferr.Error())
+			return
+		}
+		defer f.Close()
+		ct := mime.TypeByExtension(filepath.Ext(abs))
+		if ct == "" {
+			var head [512]byte
+			n, _ := f.Read(head[:])
+			ct = http.DetectContentType(head[:n])
+			if _, serr := f.Seek(0, io.SeekStart); serr != nil {
+				writeError(w, http.StatusInternalServerError, "workspace_error", serr.Error())
+				return
+			}
+		}
+		w.Header().Set("Content-Type", ct)
+		w.Header().Set("Content-Disposition", "inline; filename=\""+filepath.Base(abs)+"\"")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		http.ServeContent(w, r, filepath.Base(abs), fi.ModTime(), f)
 		return
 	}
 

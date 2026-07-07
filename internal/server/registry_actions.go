@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/digitornai/digitorn/internal/appmgr"
@@ -200,6 +202,7 @@ var _ interface {
 // invariant holds at the source.
 type registryContributors struct {
 	Registry *module.Registry
+	Pieces   *piecesCatalog
 }
 
 func (c registryContributors) Gather(scope domainmodule.PromptScope, authorizedModules []string) ([]domainmodule.PromptSection, map[string]string) {
@@ -208,7 +211,11 @@ func (c registryContributors) Gather(scope domainmodule.PromptScope, authorizedM
 	}
 	var sections []domainmodule.PromptSection
 	var dynamic map[string]string
+	piecesAuthorized := false
 	for _, id := range authorizedModules {
+		if id == "pieces" {
+			piecesAuthorized = true
+		}
 		m, err := c.Registry.Get(id)
 		if err != nil || m == nil {
 			continue
@@ -227,7 +234,69 @@ func (c registryContributors) Gather(scope domainmodule.PromptScope, authorizedM
 			dynamic[fqn] = p
 		}
 	}
+	if piecesAuthorized && c.Pieces != nil && scope.AppID != "" {
+		if sec := piecesConnectorSection(c.Pieces.forApp(scope.AppID)); sec != nil {
+			sections = append(sections, *sec)
+		}
+	}
 	return sections, dynamic
+}
+
+const piecesSectionMaxConnectors = 40
+
+func piecesConnectorSection(actions []policy.AvailableAction) *domainmodule.PromptSection {
+	if len(actions) == 0 {
+		return nil
+	}
+	discoveryOnly := actions[0].DiscoveryOnly
+	order := make([]string, 0, 8)
+	byConn := map[string][]string{}
+	for _, a := range actions {
+		conn := strings.TrimPrefix(a.Module, "ap_")
+		if _, seen := byConn[conn]; !seen {
+			order = append(order, conn)
+		}
+		if len(byConn[conn]) < 6 {
+			byConn[conn] = append(byConn[conn], a.Action)
+		}
+	}
+	sort.Strings(order)
+	total := len(order)
+
+	var b strings.Builder
+	if discoveryOnly && total > piecesSectionMaxConnectors {
+		fmt.Fprintf(&b, "This app can reach %d connectors on the user's behalf. Authentication is handled automatically — never ask the user for an API key, token, or login. The list below is a sample; use search_tools to find any connector by name or capability.\n\n", total)
+	} else {
+		b.WriteString("These connectors are wired to this app and ready to use on the user's behalf. Authentication is handled automatically — never ask the user for an API key, token, or login.\n\n")
+	}
+
+	shown := order
+	if total > piecesSectionMaxConnectors {
+		shown = order[:piecesSectionMaxConnectors]
+	}
+	for _, conn := range shown {
+		examples := byConn[conn]
+		b.WriteString("- ")
+		b.WriteString(conn)
+		b.WriteString(" (ap_")
+		b.WriteString(conn)
+		b.WriteString("__*)")
+		if len(examples) > 0 {
+			b.WriteString(" — e.g. ")
+			b.WriteString(strings.Join(examples, ", "))
+		}
+		b.WriteString("\n")
+	}
+	if total > piecesSectionMaxConnectors {
+		fmt.Fprintf(&b, "- …and %d more — use search_tools to find them.\n", total-piecesSectionMaxConnectors)
+	}
+	b.WriteString("\nTo act on a connector, run search_tools with the connector name to find its exact actions, inspect one with get_tool, then call ap_<connector>__<action>. If a call fails with an auth error, tell the user to connect that connector in Settings → Connectors.")
+
+	return &domainmodule.PromptSection{
+		Title:    "Connected connectors",
+		Content:  b.String(),
+		Priority: 60,
+	}
 }
 
 // registryToolSpecs implements runtime.ToolSpecLookup over the module

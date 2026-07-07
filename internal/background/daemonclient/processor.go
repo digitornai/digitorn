@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"time"
 
 	"github.com/digitornai/digitorn/internal/background/runner"
@@ -89,9 +90,25 @@ func (c *Client) Launch(ctx context.Context, spec LaunchSpec, perJobSessionID st
 		return LaunchResult{}, err
 	}
 
+	// continued tells the app whether this activation opens a NEW conversation or
+	// wakes an existing one — the generic signal a flow needs to route "create the
+	// external resource" vs "carry on the thread" ({{event.continued}}).
+	markContinued := func(v bool) {
+		if spec.TriggerEvent == nil {
+			return
+		}
+		te := make(map[string]any, len(spec.TriggerEvent)+1)
+		for k, val := range spec.TriggerEvent {
+			te[k] = val
+		}
+		te["continued"] = v
+		spec.TriggerEvent = te
+	}
+
 	res := LaunchResult{SessionID: sid}
 	switch {
 	case !exists:
+		markContinued(false)
 		cr, err := c.CreateSession(ctx, spec.AppID, CreateSessionRequest{
 			SessionID:       sid,
 			Message:         spec.Message,
@@ -119,6 +136,7 @@ func (c *Client) Launch(ctx context.Context, spec LaunchSpec, perJobSessionID st
 		// Shared session that already exists → (re)apply the trigger's model override
 		// (the create path sets it inline; an existing session was created without it),
 		// then append this event's message so the turn runs on the right model.
+		markContinued(true)
 		if spec.Model != "" {
 			if err := c.SetModel(ctx, spec.AppID, sid, spec.Model); err != nil {
 				return LaunchResult{}, err
@@ -212,6 +230,12 @@ func Classify(err error, attempts int) error {
 	var ae *APIError
 	if errors.As(err, &ae) {
 		if ae.Retryable() {
+			return runner.Retry(err, backoff(attempts))
+		}
+		// A 401/403 is usually transient here — a daemon still booting (cold
+		// JWKS), or an access token a refresh will heal — so retry a bounded
+		// number of times before dead-lettering.
+		if (ae.Status == http.StatusUnauthorized || ae.Status == http.StatusForbidden) && attempts < 5 {
 			return runner.Retry(err, backoff(attempts))
 		}
 		return err

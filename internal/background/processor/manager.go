@@ -54,12 +54,29 @@ func (m *Manager) ArmSchedule(ctx context.Context, spec TriggerSpec) (string, er
 }
 
 func (m *Manager) arm(ctx context.Context, spec TriggerSpec, kind string) (string, error) {
+	id := TriggerID(spec.AppID, spec.Provider)
+	// Re-arming must never lose values a previous push resolved (secrets like a
+	// webhook api_key): the YAML scan can't resolve {{secret.*}}, so any key the
+	// incoming config leaves empty keeps its stored value.
+	if prev, err := m.store.GetTrigger(ctx, id); err == nil && prev.ConfigJSON != "" {
+		var old TriggerSpec
+		if json.Unmarshal([]byte(prev.ConfigJSON), &old) == nil && len(old.Config) > 0 {
+			if spec.Config == nil {
+				spec.Config = map[string]any{}
+			}
+			for k, v := range old.Config {
+				if cur, ok := spec.Config[k]; !ok || cur == nil || cur == "" {
+					spec.Config[k] = v
+				}
+			}
+		}
+	}
 	cfg, err := json.Marshal(spec)
 	if err != nil {
 		return "", err
 	}
 	tr := &store.Trigger{
-		ID:         TriggerID(spec.AppID, spec.Provider),
+		ID:         id,
 		AppID:      spec.AppID,
 		Provider:   spec.Provider,
 		Adapter:    spec.Adapter,
@@ -72,6 +89,13 @@ func (m *Manager) arm(ctx context.Context, spec TriggerSpec, kind string) (strin
 	}
 	m.routes[spec.Provider] = route{appID: spec.AppID, triggerID: tr.ID}
 	return tr.ID, nil
+}
+
+// Route registers a provider→trigger route WITHOUT persisting anything — the
+// boot path for triggers already in the DB, whose stored config (pushed by the
+// daemon with resolved secrets) must not be rewritten by a minimal re-arm.
+func (m *Manager) Route(appID, provider, triggerID string) {
+	m.routes[provider] = route{appID: appID, triggerID: triggerID}
 }
 
 // Sink is the shared, durable, provider-routing intake. Every adapter pushes

@@ -42,18 +42,24 @@ func (s *StateStore) Put(ctx context.Context, p PendingState) error {
 	if err != nil {
 		return err
 	}
+	sealedSecret, err := s.sealer.Seal([]byte(p.ClientSecret))
+	if err != nil {
+		return err
+	}
 	now := time.Now().UTC()
 	row := models.OAuthState{
-		State:       p.State,
-		UserID:      p.UserID,
-		AppID:       p.AppID,
-		Provider:    p.Provider,
-		ServerID:    p.ServerID,
-		Verifier:    []byte(sealedVerifier),
-		Nonce:       p.Nonce,
-		RedirectURI: p.RedirectURI,
-		ExpiresAt:   now.Add(stateTTL),
-		CreatedAt:   now,
+		State:        p.State,
+		UserID:       p.UserID,
+		AppID:        p.AppID,
+		Provider:     p.Provider,
+		ServerID:     p.ServerID,
+		Verifier:     []byte(sealedVerifier),
+		Nonce:        p.Nonce,
+		RedirectURI:  p.RedirectURI,
+		ClientID:     p.ClientID,
+		ClientSecret: []byte(sealedSecret),
+		ExpiresAt:    now.Add(stateTTL),
+		CreatedAt:    now,
 	}
 	return s.db.WithContext(ctx).Create(&row).Error
 }
@@ -89,14 +95,22 @@ func (s *StateStore) TakeValid(ctx context.Context, state string) (*PendingState
 	if err != nil {
 		return nil, err
 	}
+	var clientSecret []byte
+	if len(row.ClientSecret) > 0 {
+		if clientSecret, err = s.sealer.Open(string(row.ClientSecret)); err != nil {
+			return nil, err
+		}
+	}
 	return &PendingState{
-		State:       row.State,
-		UserID:      row.UserID,
-		AppID:       row.AppID,
-		Provider:    row.Provider,
-		ServerID:    row.ServerID,
-		Verifier:    string(verifier),
-		Nonce:       row.Nonce,
-		RedirectURI: row.RedirectURI,
+		State:        row.State,
+		UserID:       row.UserID,
+		AppID:        row.AppID,
+		Provider:     row.Provider,
+		ServerID:     row.ServerID,
+		Verifier:     string(verifier),
+		Nonce:        row.Nonce,
+		RedirectURI:  row.RedirectURI,
+		ClientID:     row.ClientID,
+		ClientSecret: string(clientSecret),
 	}, nil
 }

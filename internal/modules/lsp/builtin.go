@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -191,6 +192,82 @@ func validateHTML(content string) []Diagnostic {
 			}}
 		}
 	}
+}
+
+// mermaidReserved are keywords that break the parser when used as an identifier
+// (node id, classDef name, or class-application style name).
+var mermaidReserved = map[string]bool{
+	"end": true, "graph": true, "subgraph": true, "style": true,
+	"classDef": true, "class": true, "click": true, "direction": true,
+	"linkStyle": true, "default": true, "flowchart": true,
+}
+
+var (
+	mermaidHeaderRe = regexp.MustCompile(`(?i)^(flowchart|graph|sequenceDiagram|classDiagram(-v2)?|erDiagram|stateDiagram(-v2)?|journey|gantt|pie|mindmap|timeline|gitGraph|quadrantChart|requirementDiagram|sankey(-beta)?|xychart(-beta)?|block(-beta)?|C4Context|C4Container|C4Component|C4Dynamic|C4Deployment)\b`)
+	mermaidClassDefRe  = regexp.MustCompile(`^classDef\s+([A-Za-z_][\w-]*)\b`)
+	mermaidClassApplyRe = regexp.MustCompile(`^class\s+[\w,\s]+?\s+([A-Za-z_][\w-]*)\s*$`)
+	// `end` glued to a shape bracket ( end[..], end(..), end{..} ) or as an
+	// explicit edge endpoint ( --> end , end --> ) — unambiguously a node id.
+	mermaidEndNodeRe = regexp.MustCompile(`(?i)(\bend\s*[\[({])|((--+>|--+|-\.-+>?|==+>)\s*end\b)|(\bend\s*(--+>|--+|==+>))`)
+)
+
+// validateMermaid is a fast, zero-dependency linter for the LLM-common Mermaid
+// mistakes that silently blank the canvas. It is NOT a full parser (mermaid.js
+// runs in the browser) — it catches the high-confidence breakages so the agent
+// gets them back in the SAME turn via the lsp_diagnose hook and self-corrects.
+func validateMermaid(content string) []Diagnostic {
+	if strings.TrimSpace(content) == "" {
+		return nil
+	}
+	var diags []Diagnostic
+	headerChecked := false
+	subgraphDepth := 0
+	for i, raw := range strings.Split(content, "\n") {
+		ln := i + 1
+		line := strings.TrimSpace(raw)
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "```") {
+			diags = append(diags, Diagnostic{Line: ln, Column: 1, Severity: "error", Source: "mermaid",
+				Message: "remove the ``` markdown fence — the file must contain only Mermaid, starting with a diagram header"})
+			continue
+		}
+		if strings.HasPrefix(line, "%%") {
+			continue
+		}
+		if !headerChecked {
+			headerChecked = true
+			if !mermaidHeaderRe.MatchString(line) {
+				diags = append(diags, Diagnostic{Line: ln, Column: 1, Severity: "error", Source: "mermaid",
+					Message: "first line must be a diagram header (flowchart TD, sequenceDiagram, classDiagram, erDiagram, stateDiagram-v2, …)"})
+			}
+		}
+		low := strings.ToLower(line)
+		if low == "subgraph" || strings.HasPrefix(low, "subgraph ") {
+			subgraphDepth++
+		}
+		if low == "end" { // legitimate block close — never a node here
+			subgraphDepth--
+			continue
+		}
+		if m := mermaidClassDefRe.FindStringSubmatch(line); m != nil && mermaidReserved[m[1]] {
+			diags = append(diags, Diagnostic{Line: ln, Column: 1, Severity: "error", Source: "mermaid",
+				Message: "'" + m[1] + "' is a reserved word and cannot be a classDef name — rename the style (e.g. '" + m[1] + "_s')"})
+		} else if m := mermaidClassApplyRe.FindStringSubmatch(line); m != nil && mermaidReserved[m[1]] {
+			diags = append(diags, Diagnostic{Line: ln, Column: 1, Severity: "error", Source: "mermaid",
+				Message: "'" + m[1] + "' is a reserved word and cannot be a class/style name — rename it (e.g. '" + m[1] + "_s')"})
+		}
+		if mermaidEndNodeRe.MatchString(line) {
+			diags = append(diags, Diagnostic{Line: ln, Column: 1, Severity: "error", Source: "mermaid",
+				Message: "'end' is a reserved word and cannot be a node id — use 'End'/'Done' or a quoted label like n1[\"end\"]"})
+		}
+	}
+	if subgraphDepth > 0 {
+		diags = append(diags, Diagnostic{Line: 1, Column: 1, Severity: "error", Source: "mermaid",
+			Message: fmt.Sprintf("unbalanced subgraph: %d subgraph block(s) missing a matching 'end'", subgraphDepth)})
+	}
+	return diags
 }
 
 // =============================================================================

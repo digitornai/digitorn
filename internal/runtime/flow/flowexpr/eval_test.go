@@ -21,11 +21,11 @@ func (m mapCtx) Lookup(path []string) (any, bool) {
 
 func TestEval(t *testing.T) {
 	ctx := mapCtx{
-		"category": "refund",
-		"ticket":   map[string]any{"priority": "p0", "score": float64(7)},
+		"category":  "refund",
+		"ticket":    map[string]any{"priority": "p0", "score": float64(7)},
 		"approvals": map[string]any{"gate": "approve"},
-		"count":    float64(3),
-		"flagged":  true,
+		"count":     float64(3),
+		"flagged":   true,
 	}
 	cases := []struct {
 		expr string

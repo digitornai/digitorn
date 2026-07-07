@@ -1,13 +1,11 @@
-// Package codegen serializes a validated AppDefinition to .dgc — a binary
-// artifact the runtime can load without re-validating the source manifest.
+
 package codegen
 
 import (
 	"github.com/digitornai/digitorn/internal/compiler/schema"
 )
 
-// FileMagic identifies a .dgc file. Magic + Format together gate forward
-// compatibility: bumping Format breaks old readers cleanly with a clear error.
+
 const (
 	FileMagic       = "DGTC"
 	FormatVersion   = uint8(2)

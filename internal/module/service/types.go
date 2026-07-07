@@ -65,6 +65,8 @@ type InvokeRequest struct {
 	UserID    string `json:"user_id,omitempty"`
 	AgentID   string `json:"agent_id,omitempty"`
 
+	AppDir string `json:"app_dir,omitempty"`
+
 	// Config carries the calling app's resolved per-module config block
 	// (tools.modules.<id>) as JSON, so a worker-hosted module reads its
 	// app-specific configuration per call (a shared worker instance can't

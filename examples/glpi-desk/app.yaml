@@ -1,0 +1,286 @@
+schema_version: 2
+
+app:
+  app_id: glpi-desk
+  name: GLPI Support Desk
+  short_name: GLPI Desk
+  icon: "🛠️"
+  color: "#1E88E5"
+  version: "1.0.0"
+  description: >
+    Autonomous IT support desk wired to GLPI. New tickets arrive by webhook, an
+    agent triages them, a specialist drafts a resolution grounded in your company
+    knowledge base (RAG), a human approves any write-back, and the answer is
+    posted to the ticket via the GLPI REST API. Deterministic, auditable,
+    human-in-the-loop.
+  author: "Digitorn"
+  category: "support"
+  tags: [glpi, support, itsm, rag, background]
+
+runtime:
+  mode: background
+  max_turns: 30
+  timeout: 120
+
+# ---------------------------------------------------------------------------
+# Agents — a triage coordinator + IT specialists. Specialists query the company
+# knowledge base (RAG) and draft the reply that is posted back after approval.
+# ---------------------------------------------------------------------------
+agents:
+  - id: triage
+    role: coordinator
+    brain:
+      provider: openai
+      backend: openai_compat
+      model: zen-mimo-v2.5-free
+      temperature: 0
+      # Reasoning models spend tokens thinking BEFORE the answer: a small cap
+      # gets fully consumed by reasoning and yields empty replies (then a
+      # retry drifts into prose). Leave real headroom.
+      max_tokens: 1024
+      config:
+        api_key: placeholder
+        base_url: https://api.openai.com/v1
+    system_prompt: |
+      You are a ticket CLASSIFIER — not a solver. You never write resolutions,
+      steps, or explanations.
+      Classify the GLPI ticket (title + body) into exactly one category:
+        - "network"  : VPN, Wi-Fi, DNS, firewall, connectivity, outages
+        - "software" : application install/config/crash, Office, mail client
+        - "account"  : password, lockout, MFA, access requests, offboarding
+        - "other"    : anything else, unclear, or explicitly needs a human
+      OUTPUT CONTRACT (strict): your ENTIRE reply is exactly one line of JSON,
+      nothing before or after, no markdown, no code fence:
+      {"category": "network"}
+
+  - id: network_expert
+    role: specialist
+    specialty: "Diagnoses network problems from the company knowledge base."
+    brain: &specialist_brain
+      provider: openai
+      backend: openai_compat
+      model: zen-mimo-v2.5-free
+      temperature: 0.2
+      max_tokens: 700
+      config:
+        api_key: placeholder
+        base_url: https://api.openai.com/v1
+    modules:
+      rag: [query]
+    system_prompt: &specialist_prompt |
+      You are an IT specialist answering a GLPI ticket. FIRST call rag.query on
+      the "acme_it" knowledge base with the user's problem to retrieve the
+      relevant procedure. Then draft a concise, friendly reply to the requester
+      with clear numbered steps, using ONLY the retrieved procedures. Never
+      invent infrastructure details. If the procedure says an action is
+      privileged (firewall change, admin rights, access grant, offboarding),
+      state that it will be escalated to the relevant L2/Security team instead
+      of giving steps.
+
+      OUTPUT FORMAT — IMPORTANT: after querying, respond with ONLY a single JSON
+      string literal (a double-quoted, JSON-escaped string) containing your
+      reply. No object, no markdown, no code fences.
+
+  - id: software_expert
+    role: specialist
+    specialty: "Resolves software problems from the company knowledge base."
+    brain: *specialist_brain
+    modules:
+      rag: [query]
+    system_prompt: *specialist_prompt
+
+  - id: account_expert
+    role: specialist
+    specialty: "Handles account/access questions from the company knowledge base."
+    brain: *specialist_brain
+    modules:
+      rag: [query]
+    system_prompt: *specialist_prompt
+
+# ---------------------------------------------------------------------------
+# Flow — triage → specialist draft (RAG-grounded) → human approval → GLPI
+# write-back. Every turn on the session runs the flow entry node.
+# ---------------------------------------------------------------------------
+flow:
+  id: glpi
+  entry: triage_node
+  max_iterations: 30
+  description: "Triage → RAG-grounded specialist draft → human approval → GLPI followup + resolve."
+  nodes:
+    - id: triage_node
+      type: agent
+      agent: triage
+      params:
+        task: "{{event.payload.message}}"
+      routes:
+        - { when: "category == 'network'", to: network_node }
+        - { when: "category == 'software'", to: software_node }
+        - { when: "category == 'account'", to: account_node }
+        - { default: true, to: human_handoff }
+
+    - id: network_node
+      type: agent
+      agent: network_expert
+      params:
+        task: "{{event.payload.message}}"
+      routes:
+        - { to: approval_gate }
+
+    - id: software_node
+      type: agent
+      agent: software_expert
+      params:
+        task: "{{event.payload.message}}"
+      routes:
+        - { to: approval_gate }
+
+    - id: account_node
+      type: agent
+      agent: account_expert
+      params:
+        task: "{{event.payload.message}}"
+      routes:
+        - { to: approval_gate }
+
+    # Human-in-the-loop: writing a public reply to the ticket is never done
+    # without explicit approval. The request is a durable event.
+    - id: approval_gate
+      type: approval
+      message: |
+        Post this reply to GLPI ticket #{{event.payload.id}}?
+
+        {{network_node.output}}{{software_node.output}}{{account_node.output}}
+      choices: [approve, reject]
+      routes:
+        - { when: "approvals.approval_gate == 'approve'", to: glpi_followup }
+        - { default: true, to: escalate }
+
+    # GLPI write-back #1 — add the approved reply as a public ITILFollowup.
+    - id: glpi_followup
+      type: tool
+      tool: http.post
+      params:
+        url: "{{secret.GLPI_URL}}/apirest.php/Ticket/{{event.payload.id}}/ITILFollowup"
+        body: |
+          {"input":{"items_id":{{event.payload.id}},"itemtype":"Ticket","is_private":0,"content":{{network_node.output}}{{software_node.output}}{{account_node.output}}}}
+      routes:
+        - { to: glpi_resolve }
+      on_error:
+        - { default: true, to: writeback_failed }
+
+    # GLPI write-back #2 — mark the ticket Solved (status 5).
+    - id: glpi_resolve
+      type: tool
+      tool: http.put
+      params:
+        url: "{{secret.GLPI_URL}}/apirest.php/Ticket/{{event.payload.id}}"
+        body: |
+          {"input":{"id":{{event.payload.id}},"status":5}}
+      routes:
+        - { to: resolved }
+      on_error:
+        - { default: true, to: writeback_failed }
+
+    - id: resolved
+      type: terminal
+      params:
+        output: "Reply posted to GLPI ticket #{{event.payload.id}} and the ticket was marked Solved."
+
+    - id: escalate
+      type: terminal
+      params:
+        output: "The drafted reply was rejected at the approval gate. Ticket #{{event.payload.id}} is left open for a human specialist."
+
+    - id: writeback_failed
+      type: terminal
+      params:
+        output: "Approved, but the GLPI write-back failed. Ticket #{{event.payload.id}} needs a manual follow-up."
+
+    - id: human_handoff
+      type: terminal
+      params:
+        output: "This ticket needs a human specialist; routing it to the queue."
+
+# ---------------------------------------------------------------------------
+# Tools — RAG (company knowledge base), http (GLPI REST write-back), channels
+# (the inbound webhook that turns a GLPI notification into a session launch).
+# ---------------------------------------------------------------------------
+tools:
+  capabilities:
+    default_policy: auto
+    grant:
+      - { module: http, actions: [post, put, get] }
+      - { module: rag, actions: [query] }
+
+  modules:
+    rag:
+      config:
+        embedding_model: minilm-l12
+        backend:
+          type: pgvector
+          dsn: "postgres://digitorn:digitorn@localhost:5433/digitorn_hub"
+        chunking:
+          strategy: recursive
+          size: 500
+          overlap: 60
+        pipeline:
+          final_top_k: 5
+        citations:
+          enabled: true
+          format: inline
+        default_knowledge_base: acme_it
+        sources:
+          - name: it_kb
+            type: file
+            path: kb
+            extensions: [".md"]
+            recursive: true
+            knowledge_base: acme_it
+            triggers:
+              - { type: on_start }
+        auto_index:
+          on_start: true
+
+    http:
+      config:
+        timeout: 30
+        # GLPI is typically self-hosted on a private/intranet network; without
+        # this opt-in the SSRF guard (correctly) blocks RFC-1918/loopback hosts.
+        allow_private_hosts: true
+        default_headers:
+          App-Token: "{{secret.GLPI_APP_TOKEN}}"
+          Session-Token: "{{secret.GLPI_SESSION_TOKEN}}"
+          Content-Type: "application/json"
+
+    channels:
+      config:
+        default_agent: triage
+        max_turns: 30
+        timeout: 120
+        providers:
+          glpi:
+            adapter: webhook
+            config:
+              inbound_path: /hook/glpi
+              auth: api_key
+              api_key: "{{secret.GLPI_WEBHOOK_KEY}}"
+            activation:
+              filter:
+                - { field: event.payload.status, equals: new }
+              session: "ticket-{{event.payload.id}}"
+              owner: "{{event.payload.users_id}}"
+              message: |
+                GLPI ticket #{{event.payload.id}} — {{event.payload.name}}
+                Category: {{event.payload.itilcategories_name}}
+
+                {{event.payload.content}}
+              reply: none
+
+context:
+  sections:
+    - builtin: datetime
+
+ui:
+  greeting: "GLPI Support Desk — new tickets are triaged, drafted from your knowledge base, approved, and answered automatically."
+  workspace:
+    position: hidden

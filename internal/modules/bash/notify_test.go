@@ -15,7 +15,7 @@ type capturingNotifier struct {
 	n  int
 }
 
-func (c *capturingNotifier) FileChanged(string, string) {
+func (c *capturingNotifier) FileChanged(string, string, ...string) {
 	c.mu.Lock()
 	c.n++
 	c.mu.Unlock()

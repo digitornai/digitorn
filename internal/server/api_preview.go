@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
@@ -216,6 +217,23 @@ func (d *Daemon) getWebPreview(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"attached": false, "url": nil})
 		return
 	}
+	// App-embedded preview takes precedence: if the app ships a built UI at
+	// {app}/web/dist, point the iframe there. It's the SAME bundle for every
+	// session (not workdir-resolved). The URL carries everything the in-page
+	// SDK needs to self-bootstrap — app, session, and the per-session preview
+	// token — so it can hit the `?t=`-authed /preview/files routes without a
+	// JWT and with zero host wiring. No workdir scan, no per-write reload.
+	if _, err := os.Stat(filepath.Join(d.cfg.Apps.Root, appID, "web", "dist", "index.html")); err == nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"attached": true,
+			"url": fmt.Sprintf("%s/api/apps/%s/web-static/?app=%s&session=%s&t=%s",
+				d.previewBaseURL(), appID,
+				url.QueryEscape(appID), url.QueryEscape(sid),
+				d.previewToken(appID, sid)),
+			"type": "web",
+		})
+		return
+	}
 	wd, err := d.sessionWorkdir(r.Context(), sid)
 	if err != nil {
 		writeError(w, errStatus(err), errCode(err), err.Error())
@@ -254,6 +272,12 @@ func (d *Daemon) pushPreviewSource(ctx context.Context, root string) {
 	if appID == "" || wd == "" {
 		return
 	}
+	// Embedded-web apps ({app}/web/dist) have a STABLE, shared preview UI — never
+	// push a reload on a workspace change: the in-page SDK applies live updates
+	// itself. Reloading the iframe on every agent write would wipe its state.
+	if _, err := os.Stat(filepath.Join(d.cfg.Apps.Root, appID, "web", "dist", "index.html")); err == nil {
+		return
+	}
 	entry := resolvePreviewEntry(wd)
 	if entry == "" {
 		d.previewLastKey.Delete(root) // build gone — next build re-pushes
@@ -286,6 +310,15 @@ func (d *Daemon) servePreviewFile(w http.ResponseWriter, r *http.Request) {
 	appID := chi.URLParam(r, "app_id")
 	sid := sessionIDParam(r)
 	if !d.checkPreviewToken(appID, sid, r.URL.Query().Get("t")) {
+		// The iframe's sub-resource requests (CSS/JS/img referenced by the
+		// preview HTML) don't carry the `?t=` query — browsers never propagate
+		// a query string to sub-resources. Serve static (non-HTML) assets
+		// tokenlessly from the currently ACTIVE preview build — exactly the
+		// trust model previewRootFallback already uses for root-absolute
+		// assets. HTML entries still require the token (they set active state).
+		if d.tryServeActivePreviewAsset(w, r) {
+			return
+		}
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
@@ -339,12 +372,189 @@ func (d *Daemon) servePreviewFile(w http.ResponseWriter, r *http.Request) {
 	d.serveStaticFile(w, r, abs)
 }
 
+// tryServeActivePreviewAsset serves a STATIC (non-HTML) asset from the currently
+// active preview build without a token — the fallback for the iframe's
+// sub-resource requests, which can't carry the `?t=` query. Mirrors
+// previewRootFallback's trust model: only the last authed preview's workdir,
+// confined by the workdir policy, shadow refused, GET only. Returns false (so
+// the caller 403s) for anything it won't serve.
+func (d *Daemon) tryServeActivePreviewAsset(w http.ResponseWriter, r *http.Request) bool {
+	if r.Method != http.MethodGet {
+		return false
+	}
+	ap := d.activePreview.Load()
+	if ap == nil {
+		return false
+	}
+	rel := chi.URLParam(r, "*")
+	if dec, derr := url.PathUnescape(rel); derr == nil {
+		rel = dec
+	}
+	rel = strings.TrimPrefix(rel, "/")
+	low := strings.ToLower(rel)
+	// Never HTML (entries set the active state — must be token-authed), never a
+	// directory, never the internal shadow tree.
+	if rel == "" || strings.HasSuffix(rel, "/") ||
+		strings.HasSuffix(low, ".html") || strings.HasSuffix(low, ".htm") ||
+		isShadowRel(rel) {
+		return false
+	}
+	abs, err := workdir.NewPolicy(workdir.Options{Root: ap.workdir}).Enforce(rel)
+	if err != nil {
+		return false
+	}
+	if fi, serr := os.Stat(abs); serr != nil || fi.IsDir() {
+		return false
+	}
+	d.serveStaticFile(w, r, abs)
+	return true
+}
+
+// previewFilePath authorizes the `?t=` preview token and resolves + confines a
+// workdir-relative path for the preview file R/W routes. On failure it writes the
+// HTTP error and returns ok=false.
+func (d *Daemon) previewFilePath(w http.ResponseWriter, r *http.Request) (abs, wd, sid string, ok bool) {
+	appID := chi.URLParam(r, "app_id")
+	sid = sessionIDParam(r)
+	if !d.checkPreviewToken(appID, sid, r.URL.Query().Get("t")) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return "", "", "", false
+	}
+	wd = d.previewWorkdir(sid)
+	if wd == "" {
+		http.Error(w, "no workspace", http.StatusNotFound)
+		return "", "", "", false
+	}
+	rel := chi.URLParam(r, "*")
+	if dec, derr := url.PathUnescape(rel); derr == nil {
+		rel = dec
+	}
+	rel = strings.TrimPrefix(rel, "/")
+	if rel == "" || strings.HasSuffix(rel, "/") || isShadowRel(rel) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return "", "", "", false
+	}
+	a, err := workdir.NewPolicy(workdir.Options{Root: wd}).Enforce(rel)
+	if err != nil {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return "", "", "", false
+	}
+	return a, wd, sid, true
+}
+
+// getPreviewFile serves the RAW bytes of one workdir file to the embedded preview
+// SDK. PUBLIC route — the `?t=` preview token is the auth (the iframe carries it;
+// it can't send the JWT). Confined to the session workdir; shadow refused. This
+// is the read half the SDK's useFile/useSharedDoc use.
+func (d *Daemon) getPreviewFile(w http.ResponseWriter, r *http.Request) {
+	abs, _, _, ok := d.previewFilePath(w, r)
+	if !ok {
+		return
+	}
+	data, _, err := readFileCapped(abs, workspaceFileMaxBytes)
+	if err != nil {
+		if os.IsNotExist(err) {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "read error", http.StatusInternalServerError)
+		return
+	}
+	if ct := mime.TypeByExtension(filepath.Ext(abs)); ct != "" {
+		w.Header().Set("Content-Type", ct)
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = w.Write(data)
+}
+
+// putPreviewFile writes one workdir file from the embedded preview SDK, then fires
+// the same FileChanged signal the agent's filesystem writes do — so the workspace
+// panel and any other watchers update. PUBLIC route, `?t=`-authed. This is the
+// write half of useSharedDoc's two-way sync.
+func (d *Daemon) putPreviewFile(w http.ResponseWriter, r *http.Request) {
+	abs, wd, sid, ok := d.previewFilePath(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		Content string `json:"content"`
+	}
+	if err := readJSONLenient(r, &body); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+		http.Error(w, "write error", http.StatusInternalServerError)
+		return
+	}
+	if err := os.WriteFile(abs, []byte(body.Content), 0o644); err != nil {
+		http.Error(w, "write error", http.StatusInternalServerError)
+		return
+	}
+	if d.workspaceLive != nil {
+		// Name the exact file so the change is pushed immediately + reliably
+		// (bypassing git-status baseline quirks) to the preview's live socket.
+		rel := "" // workdir-relative, slash form
+		if r, err := filepath.Rel(wd, abs); err == nil && !strings.HasPrefix(r, "..") {
+			rel = filepath.ToSlash(r)
+		}
+		d.workspaceLive.FileChanged(sid, wd, rel)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
 // activePreviewState is the build the workspace Preview iframe currently shows.
 // Its root-absolute assets are served from <workdir>/<buildRoot> by the 404
 // fallback. One active preview per daemon — the workspace shows one at a time.
 type activePreviewState struct {
 	workdir   string
 	buildRoot string // forward-slash, relative to workdir ("" = workdir root)
+}
+
+// previewThemeShim is injected into EVERY preview HTML document the daemon
+// serves, so any embedded app — whether or not it uses @digitorn/sdk — adopts
+// the host's light/dark theme. It mirrors the SDK's theme handling (contract:
+// digitorn_web/src/lib/preview-postmessage.ts) at the platform level: seed from
+// `?theme=`, follow `digi:theme-change`, and announce `digi:ready` so the host
+// (re)sends the current theme. Runs in <head> before paint to avoid a flash.
+const previewThemeShim = `<script>(function(){function r(m){m=(m||"").toLowerCase();if(m==="dark"||m==="light")return m;try{return window.matchMedia&&window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"}catch(e){return "light"}}function a(m,c){var e=document.documentElement;e.setAttribute("data-theme",m);e.style.colorScheme=m;if(c)e.style.setProperty("--digitorn-accent",c)}try{var q=new URLSearchParams(location.search);a(r(q.get("theme")||q.get("mode")),q.get("accent"))}catch(e){}window.addEventListener("message",function(e){var d=e.data;if(!d||d.type!=="digi:theme-change"||!d.theme)return;a(r(d.theme.mode),d.theme.accent)});try{if(window.parent&&window.parent!==window)window.parent.postMessage({type:"digi:ready"},"*")}catch(e){}})();</script>`
+
+// injectThemeShim inserts the theme shim into an HTML document — right before
+// </head> when present, else just after the opening <head>, else prepended.
+func injectThemeShim(html []byte) []byte {
+	shim := []byte(previewThemeShim)
+	low := bytes.ToLower(html)
+	if i := bytes.Index(low, []byte("</head>")); i >= 0 {
+		return append(append(append(make([]byte, 0, len(html)+len(shim)), html[:i]...), shim...), html[i:]...)
+	}
+	if i := bytes.Index(low, []byte("<head")); i >= 0 {
+		if j := bytes.IndexByte(html[i:], '>'); j >= 0 {
+			pos := i + j + 1
+			return append(append(append(make([]byte, 0, len(html)+len(shim)), html[:pos]...), shim...), html[pos:]...)
+		}
+	}
+	return append(append(make([]byte, 0, len(html)+len(shim)), shim...), html...)
+}
+
+// serveHTMLWithShim serves an HTML file with the platform theme shim injected.
+// Used for every preview HTML entry (workdir builds AND web-static app bundles).
+func serveHTMLWithShim(w http.ResponseWriter, abs string) {
+	data, err := os.ReadFile(abs)
+	if err != nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	out := injectThemeShim(data)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(out)
+}
+
+// isHTMLFile reports whether abs is an HTML document by extension.
+func isHTMLFile(abs string) bool {
+	e := strings.ToLower(filepath.Ext(abs))
+	return e == ".html" || e == ".htm"
 }
 
 // serveStaticFile streams a workdir file to the iframe with a browser
@@ -355,6 +565,11 @@ func (d *Daemon) serveStaticFile(w http.ResponseWriter, r *http.Request, abs str
 	fi, err := os.Stat(abs)
 	if err != nil || fi.IsDir() {
 		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	// HTML entries get the theme shim so the preview adopts the host theme.
+	if isHTMLFile(abs) {
+		serveHTMLWithShim(w, abs)
 		return
 	}
 	f, err := os.Open(abs)

@@ -10,8 +10,7 @@ import (
 	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
 )
 
-// captureReporter records every Warn call so tests can assert what was
-// dropped / skipped during conversion.
+
 type captureReporter struct {
 	calls []string
 }
@@ -26,7 +25,6 @@ func makeBlobLoader(blobs map[string][]byte) adapter.BlobLoader {
 	}
 }
 
-// ---- legacy text path (must keep working bit-for-bit) ----------------
 
 func TestMessagesToLLM_Empty(t *testing.T) {
 	if got := adapter.MessagesToLLM(context.Background(), nil, adapter.Options{}); got != nil {
@@ -84,10 +82,7 @@ func TestMessagesToLLM_DropsUnknownRoles(t *testing.T) {
 }
 
 func TestMessagesToLLM_AcceptsToolRole_LegacyContent(t *testing.T) {
-	// Old-style "tool" message with only Content : we have no
-	// ToolCallID to attach (Parts is empty) so it falls into the
-	// generic skip path. Verify the conversation still flows for the
-	// surrounding user/assistant turns.
+
 	in := []sessionstore.Message{
 		{Role: "user", Content: "list files"},
 		{Role: "assistant", Content: "I'll do that."},
@@ -95,14 +90,12 @@ func TestMessagesToLLM_AcceptsToolRole_LegacyContent(t *testing.T) {
 		{Role: "assistant", Content: "Found a.txt and b.txt."},
 	}
 	out := adapter.MessagesToLLM(context.Background(), in, adapter.Options{})
-	// Without a ToolResult part the tool message has nothing to render.
-	// Surrounding user/assistant survive.
+
 	if len(out) < 3 {
 		t.Fatalf("expected at least user+assistant+assistant, got %d : %+v", len(out), out)
 	}
 }
 
-// ---- multipart : image inlining --------------------------------------
 
 func TestMessagesToLLM_UserImage_LoadsBlobInline(t *testing.T) {
 	blobs := map[string][]byte{"img-hash": []byte("\x89PNG fake bytes")}
@@ -161,7 +154,6 @@ func TestMessagesToLLM_NoBlobLoader_ImageSkippedWithWarn(t *testing.T) {
 	}
 }
 
-// ---- tool calls + results --------------------------------------------
 
 func TestMessagesToLLM_AssistantToolCall(t *testing.T) {
 	msgs := []sessionstore.Message{
@@ -195,10 +187,7 @@ func TestMessagesToLLM_AssistantToolCall(t *testing.T) {
 }
 
 func TestMessagesToLLM_RepairsDanglingToolCallOnResume(t *testing.T) {
-	// A turn aborted (or daemon crashed) while a tool ran : the assistant's
-	// tool_call is durable but its result is missing. On the NEXT turn (a new
-	// user message follows) the adapter must synthesize a terminal result so the
-	// provider doesn't reject the whole request for an unanswered tool_call_id.
+
 	msgs := []sessionstore.Message{
 		{Role: "user", Parts: []sessionstore.MessagePart{{Type: sessionstore.PartTypeText, Text: "do X"}}},
 		{Role: "assistant", Parts: []sessionstore.MessagePart{
@@ -206,12 +195,12 @@ func TestMessagesToLLM_RepairsDanglingToolCallOnResume(t *testing.T) {
 				ID: "call-dangling", Name: "filesystem.read",
 			}},
 		}},
-		// no tool result here — interrupted mid-dispatch
+	
 		{Role: "user", Parts: []sessionstore.MessagePart{{Type: sessionstore.PartTypeText, Text: "actually, never mind — do Y"}}},
 	}
 	got := adapter.MessagesToLLM(context.Background(), msgs, adapter.Options{})
 
-	// Expect: user, assistant(tool_call), SYNTHETIC tool result, user.
+
 	if len(got) != 4 {
 		t.Fatalf("expected 4 messages (synthetic result inserted), got %d : %+v", len(got), got)
 	}
@@ -230,13 +219,7 @@ func TestMessagesToLLM_RepairsDanglingToolCallOnResume(t *testing.T) {
 }
 
 func TestMessagesToLLM_PullsResultForwardOverInterleavedMessage(t *testing.T) {
-	// The approval flow interleaves a user message (the user's "approve" reply)
-	// between an assistant's gated tool_call and the tool's result :
-	//   assistant(tool_call) → user("approve") → tool(result) → system(note)
-	// Providers require the tool result to IMMEDIATELY follow the tool_call.
-	// DeepSeek rejects the gap ("tool must be a response to a preceding message
-	// with tool_calls"). The adapter must pull the result forward so the wire
-	// reads assistant → tool → user → system.
+
 	msgs := []sessionstore.Message{
 		{Role: "user", Parts: []sessionstore.MessagePart{{Type: sessionstore.PartTypeText, Text: "run it"}}},
 		{Role: "assistant", Parts: []sessionstore.MessagePart{
@@ -256,8 +239,7 @@ func TestMessagesToLLM_PullsResultForwardOverInterleavedMessage(t *testing.T) {
 	if len(got) != 5 {
 		t.Fatalf("expected 5 messages (no synthetic, just reorder), got %d : %+v", len(got), got)
 	}
-	// Invariant : every tool message is immediately preceded by an assistant
-	// carrying its tool_call_id.
+
 	for i, g := range got {
 		if g.Role != "tool" {
 			continue
@@ -278,11 +260,11 @@ func TestMessagesToLLM_PullsResultForwardOverInterleavedMessage(t *testing.T) {
 	if got[1].Role != "assistant" || got[2].Role != "tool" || got[2].ToolCallID != "call-gated" {
 		t.Fatalf("result not pulled adjacent to its tool_call : %+v", got)
 	}
-	// The interleaved user + system fall in after the tool block, order kept.
+	
 	if got[3].Role != "user" || got[3].Content != "approve" || got[4].Role != "system" {
 		t.Fatalf("interleaved messages not preserved after tool block : %+v", got)
 	}
-	// Exactly one tool message — no synthetic duplicate.
+
 	tools := 0
 	for _, g := range got {
 		if g.Role == "tool" {
@@ -295,7 +277,7 @@ func TestMessagesToLLM_PullsResultForwardOverInterleavedMessage(t *testing.T) {
 }
 
 func TestMessagesToLLM_PairedToolCallUntouched(t *testing.T) {
-	// A properly answered tool_call must NOT get a synthetic duplicate.
+
 	msgs := []sessionstore.Message{
 		{Role: "assistant", Parts: []sessionstore.MessagePart{
 			{Type: sessionstore.PartTypeToolCall, ToolCall: &sessionstore.ToolCallSpec{ID: "call-1", Name: "x"}},
@@ -458,7 +440,6 @@ func TestMessagesToLLM_LegacyAttachments_StillVisible(t *testing.T) {
 	}
 }
 
-// ---- PrependSystemPrompt ---------------------------------------------
 
 func TestPrependSystemPrompt_EmptyPromptIsNoop(t *testing.T) {
 	in := []llm.ChatMessage{{Role: "user", Content: "hi"}}

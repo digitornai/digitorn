@@ -21,13 +21,7 @@ func launch(m *background.Manager, sid, tool string, args map[string]any) (strin
 	return m.Launch(context.Background(), meta.LaunchRequest{SessionID: sid, Tool: tool, Args: args})
 }
 
-// =====================================================================
-// Helpers
-// =====================================================================
 
-// simpleDispatcher runs a synchronous body and returns its outcome.
-// onDispatch is called before responding so tests can observe what
-// args reached the dispatcher.
 type simpleDispatcher struct {
 	body       func(ctx context.Context, c runtime.ToolInvocation) (string, error)
 	dispatched atomic.Int64

@@ -53,6 +53,13 @@ type Options struct {
 	// ok=false for anything it can't extract — the part then keeps its native
 	// (file) block. Optional: nil disables document extraction.
 	ExtractDoc func(hash, mime string, data []byte) (string, bool)
+	// DropAttachments omits the user message's binary attachment parts from the
+	// LLM prompt. The engine sets it when the app has a workdir + filesystem
+	// `read` tool: attachments are materialised on disk and the agent reads them
+	// on demand (read→vision), so inlining them here would duplicate (expensive)
+	// image blocks every turn. When false (no read tool), attachments are inlined
+	// so a model without file tools still sees them.
+	DropAttachments bool
 }
 
 // MessagesToLLM converts the projected session-store message list into
@@ -103,7 +110,7 @@ func repairToolPairing(msgs []llm.ChatMessage, opts Options) []llm.ChatMessage {
 	out := make([]llm.ChatMessage, 0, len(msgs))
 	for i := 0; i < len(msgs); i++ {
 		if consumed[i] {
-			continue // a tool message already pulled forward next to its assistant
+			continue 
 		}
 		m := msgs[i]
 		out = append(out, m)
@@ -126,9 +133,6 @@ func repairToolPairing(msgs []llm.ChatMessage, opts Options) []llm.ChatMessage {
 				consumed[found] = true
 				continue
 			}
-			// No result anywhere in the remaining stream. Synthesize an
-			// interrupted result only if the conversation continued past this
-			// assistant ; otherwise it's the pre-dispatch tail — leave it alone.
 			if moved {
 				warn(opts, "adapter: synthesizing interrupted result for unanswered tool_call",
 					"tool_call_id", tc.ID, "name", tc.Name)
@@ -143,8 +147,7 @@ func repairToolPairing(msgs []llm.ChatMessage, opts Options) []llm.ChatMessage {
 	return out
 }
 
-// findUnconsumedResult returns the index of the first not-yet-consumed tool
-// message answering toolCallID at or after `from`, or -1 if none exists.
+
 func findUnconsumedResult(msgs []llm.ChatMessage, consumed []bool, toolCallID string, from int) int {
 	for j := from; j < len(msgs); j++ {
 		if !consumed[j] && msgs[j].Role == "tool" && msgs[j].ToolCallID == toolCallID {
@@ -154,11 +157,7 @@ func findUnconsumedResult(msgs []llm.ChatMessage, consumed []bool, toolCallID st
 	return -1
 }
 
-// conversationContinuesAfter reports whether any message after index i is part
-// of the ongoing conversation rather than just this assistant's own (pending)
-// tool results — i.e. whether the turn moved on. A tool message answering one of
-// this assistant's tool_call_ids doesn't count as "continuation" ; anything else
-// does.
+
 func conversationContinuesAfter(msgs []llm.ChatMessage, consumed []bool, idSet map[string]bool, i int) bool {
 	for j := i + 1; j < len(msgs); j++ {
 		if consumed[j] {
@@ -172,10 +171,7 @@ func conversationContinuesAfter(msgs []llm.ChatMessage, consumed []bool, idSet m
 	return false
 }
 
-// convertOne handles ONE session-store Message. It can produce MULTIPLE
-// llm.ChatMessage entries — specifically for "tool" messages carrying
-// many ToolResultSpec parts, where each result becomes its own tool
-// message (this is the shape OpenAI requires).
+
 func convertOne(ctx context.Context, m sessionstore.Message, opts Options) []llm.ChatMessage {
 	switch m.Role {
 	case "user", "assistant", "system":
@@ -188,24 +184,17 @@ func convertOne(ctx context.Context, m sessionstore.Message, opts Options) []llm
 	}
 }
 
-// convertConversational handles user / assistant / system roles. The
-// Parts list becomes either a multi-part ChatMessage.Parts, or — when
-// it's pure text — collapses back into ChatMessage.Content so providers
-// that only accept strings (legacy Anthropic system prompts, etc.) work
-// without further translation.
+
 func convertConversational(ctx context.Context, m sessionstore.Message, opts Options) llm.ChatMessage {
-	parts := effectiveParts(m)
+	parts := effectiveParts(m, opts.DropAttachments)
 	cm := llm.ChatMessage{Role: m.Role}
 
-	// Replay the assistant's thinking-mode trace to the provider. Reasoning
-	// models (DeepSeek thinking mode, xAI) require the prior reasoning_content
-	// on assistant messages or they reject the request ; the worker maps this
-	// onto the provider's reasoning_content field. Other providers ignore it.
+
 	if m.Reasoning != "" {
 		cm.ReasoningContent = m.Reasoning
 	}
 
-	// Collect tool calls separately ; they live on a dedicated field, not in Parts.
+
 	var toolCalls []llm.ChatToolCall
 	var contentParts []llm.ContentPart
 	var textOnlyBuf string
@@ -241,7 +230,7 @@ func convertConversational(ctx context.Context, m sessionstore.Message, opts Opt
 				Arguments: p.ToolCall.Args,
 			})
 		case sessionstore.PartTypeToolResult:
-			// Shouldn't happen on user/assistant/system role — only "tool".
+
 			warn(opts, "adapter: tool_result in non-tool message, skipped",
 				"role", m.Role)
 		default:
@@ -254,8 +243,7 @@ func convertConversational(ctx context.Context, m sessionstore.Message, opts Opt
 	}
 	switch {
 	case pureText && len(contentParts) <= 1:
-		// Single-part text or empty : collapse into Content so simple
-		// providers don't need to parse multi-part.
+
 		cm.Content = textOnlyBuf
 	default:
 		cm.Parts = contentParts
@@ -263,12 +251,9 @@ func convertConversational(ctx context.Context, m sessionstore.Message, opts Opt
 	return cm
 }
 
-// convertToolMessage explodes a "tool" role Message into one ChatMessage
-// per ToolResult inside it. OpenAI requires one tool message per
-// tool_call_id ; Anthropic accepts grouped but we normalise to one-each
-// for portability.
+
 func convertToolMessage(ctx context.Context, m sessionstore.Message, opts Options) []llm.ChatMessage {
-	parts := effectiveParts(m)
+	parts := effectiveParts(m, opts.DropAttachments)
 	var out []llm.ChatMessage
 	for _, p := range parts {
 		if p.Type != sessionstore.PartTypeToolResult || p.ToolResult == nil {
@@ -281,7 +266,7 @@ func convertToolMessage(ctx context.Context, m sessionstore.Message, opts Option
 			Role:       "tool",
 			ToolCallID: tr.ToolCallID,
 		}
-		// Result parts can themselves be multi-part (text + image).
+
 		var resultParts []llm.ContentPart
 		var textOnlyBuf string
 		pureText := true
@@ -310,8 +295,7 @@ func convertToolMessage(ctx context.Context, m sessionstore.Message, opts Option
 			}
 		}
 		if tr.Error != "" {
-			// Errors are conveyed as text. Some providers (OpenAI) also accept
-			// an `is_error` flag — bifrost can apply that at serialise time.
+
 			errPrefix := fmt.Sprintf("[tool_error] %s", tr.Error)
 			textOnlyBuf = appendText(textOnlyBuf, errPrefix)
 			resultParts = append(resultParts, llm.ContentPart{
@@ -329,12 +313,22 @@ func convertToolMessage(ctx context.Context, m sessionstore.Message, opts Option
 	return out
 }
 
-// effectiveParts returns the message's Parts if set, otherwise
-// synthesises a single text part from the legacy Content + the
-// legacy Attachments — handles old events written before FT-1.
-func effectiveParts(m sessionstore.Message) []sessionstore.MessagePart {
+
+func effectiveParts(m sessionstore.Message, dropAttachments bool) []sessionstore.MessagePart {
 	if len(m.Parts) > 0 {
-		return m.Parts
+		if !dropAttachments {
+			return m.Parts
+		}
+		// Materialised-to-workdir mode: drop binary (blob) parts — the agent
+		// reads them on demand — but keep text / tool parts.
+		kept := make([]sessionstore.MessagePart, 0, len(m.Parts))
+		for _, p := range m.Parts {
+			if p.Blob != nil {
+				continue
+			}
+			kept = append(kept, p)
+		}
+		return kept
 	}
 	var parts []sessionstore.MessagePart
 	if m.Content != "" {
@@ -342,6 +336,9 @@ func effectiveParts(m sessionstore.Message) []sessionstore.MessagePart {
 			Type: sessionstore.PartTypeText,
 			Text: m.Content,
 		})
+	}
+	if dropAttachments {
+		return parts
 	}
 	for i := range m.Attachments {
 		att := m.Attachments[i]
@@ -353,9 +350,7 @@ func effectiveParts(m sessionstore.Message) []sessionstore.MessagePart {
 	return parts
 }
 
-// legacyPartTypeFromMime mirrors the helper in sessionstore.parts.go,
-// duplicated here so we don't introduce a circular dep on a private
-// helper. Tiny enough that the duplication is acceptable.
+
 func legacyPartTypeFromMime(mime string) string {
 	switch {
 	case len(mime) >= 6 && mime[:6] == "image/":
@@ -369,10 +364,7 @@ func legacyPartTypeFromMime(mime string) string {
 	}
 }
 
-// loadBinaryPart fetches the blob bytes for an image/audio/video/file
-// part and returns the corresponding llm.ContentPart. Returns
-// (zero, false) if the blob can't be loaded — the caller skips it
-// and the failure is reported.
+
 func loadBinaryPart(ctx context.Context, p sessionstore.MessagePart, opts Options) (llm.ContentPart, bool) {
 	if p.Blob == nil {
 		warn(opts, "adapter: binary part missing blob ref", "type", p.Type)
@@ -393,21 +385,14 @@ func loadBinaryPart(ctx context.Context, p sessionstore.MessagePart, opts Option
 		warn(opts, "adapter: blob is empty", "hash", p.Blob.Hash)
 		return llm.ContentPart{}, false
 	}
-	// A TEXTUAL document attachment must reach EVERY model as readable text — not
-	// an opaque "file" block that vision-less providers silently drop (the model
-	// then behaves as if nothing was attached). This is the single, universal
-	// state→wire boundary, so decoding textual blobs into a labelled, bounded text
-	// part here makes every app and every provider benefit, once and for all.
-	// (Genuinely binary files — images, audio, PDFs — keep their native block.)
+
 	if isTextualMime(p.Blob.Mime) && utf8.Valid(data) {
 		return llm.ContentPart{
 			Type: llm.ContentTypeText,
 			Text: inlineTextAttachment(p.Blob.Mime, data),
 		}, true
 	}
-	// A binary DOCUMENT (PDF, DOCX, …) is extracted to text by the same primitive
-	// so it reaches every model. Only a successful, non-empty extraction replaces
-	// the native block — a scanned/unsupported file keeps its file block.
+
 	if opts.ExtractDoc != nil {
 		if txt, ok := opts.ExtractDoc(p.Blob.Hash, p.Blob.Mime, data); ok {
 			return llm.ContentPart{
@@ -423,15 +408,10 @@ func loadBinaryPart(ctx context.Context, p sessionstore.MessagePart, opts Option
 	}, true
 }
 
-// maxInlinedTextBytes caps how much of a text attachment is inlined into the
-// prompt, so a huge log / CSV / transcript can't blow the context window.
-// Beyond it the content is truncated on a UTF-8 boundary with a visible marker.
+
 const maxInlinedTextBytes = 256 << 10 // 256 KiB
 
-// isTextualMime reports whether a blob is human/LLM-readable text that should be
-// inlined as a TEXT block rather than an opaque file block. Covers text/* plus
-// the common textual application/* types (json, xml, yaml, csv, code…). The
-// optional "; charset=…" suffix is ignored.
+
 func isTextualMime(mime string) bool {
 	mime = strings.ToLower(strings.TrimSpace(mime))
 	if i := strings.IndexByte(mime, ';'); i >= 0 {
@@ -451,14 +431,12 @@ func isTextualMime(mime string) bool {
 	return false
 }
 
-// inlineTextAttachment wraps a decoded text blob in a clearly delimited block so
-// the model knows it is an attached document, truncating oversize content on a
-// rune boundary.
+
 func inlineTextAttachment(mime string, data []byte) string {
 	truncated := false
 	if len(data) > maxInlinedTextBytes {
 		data = data[:maxInlinedTextBytes]
-		for len(data) > 0 && !utf8.Valid(data) { // back off to a complete rune
+		for len(data) > 0 && !utf8.Valid(data) { 
 			data = data[:len(data)-1]
 		}
 		truncated = true
@@ -504,10 +482,7 @@ func warn(opts Options, msg string, kv ...any) {
 	}
 }
 
-// PrependSystemPrompt returns a copy of msgs with a system message
-// inserted at position 0 (or replacing an existing system at 0).
-// Pure function ; multipart-safe (the prompt is added as Content, the
-// downstream multi-part messages stay intact).
+
 func PrependSystemPrompt(msgs []llm.ChatMessage, systemPrompt string) []llm.ChatMessage {
 	if systemPrompt == "" {
 		return msgs

@@ -353,16 +353,12 @@ func TestAppsAPI_Manifest_ReturnsAppDefinition(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("manifest: %d", code)
 	}
-	// schema.AppDefinition has no json tags → field names serialize
-	// Pascal-cased (App not app, AppID not app_id). This is a known
-	// API ugliness flagged as task H-API-JSON-TAGS — fix later by
-	// adding json: tags across compiler/schema/*.go.
-	app, ok := body["App"].(map[string]any)
+	app, ok := body["app"].(map[string]any)
 	if !ok {
-		t.Fatalf("manifest has no .App : keys=%v", mapKeys(body))
+		t.Fatalf("manifest has no .app : keys=%v", mapKeys(body))
 	}
-	if app["AppID"] != "chat" {
-		t.Errorf("manifest App.AppID=%v", app["AppID"])
+	if app["app_id"] != "chat" {
+		t.Errorf("manifest app.app_id=%v", app["app_id"])
 	}
 }
 

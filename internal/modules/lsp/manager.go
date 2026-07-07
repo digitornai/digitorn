@@ -127,10 +127,14 @@ func builtinSpecs() []serverSpec {
 		// Web — JSON/YAML/HTML/XML use builtin Go-native validators so an agent
 		// gets syntax diagnostics with zero install. CSS still routes to the
 		// external server (no good pure-Go validator that catches real CSS bugs).
-		b("json", []string{".json", ".jsonc"}),
+		b("json", []string{".json", ".jsonc", ".excalidraw"}),
 		b("yaml", []string{".yaml", ".yml"}),
 		b("html", []string{".html", ".htm"}),
 		b("xml", []string{".xml", ".xsd", ".xsl", ".svg"}),
+		// Mermaid diagram source — a Go-native linter for the LLM-common
+		// breakages (reserved words, fences, missing header, unbalanced
+		// subgraph). Feeds the agent real-time diagnostics via lsp_diagnose.
+		b("mermaid", []string{".mmd", ".mermaid"}),
 		s("css", "vscode-css-language-server --stdio", []string{".css", ".scss", ".sass", ".less"}),
 
 		// Markup
@@ -243,6 +247,8 @@ func builtinValidator(name string) (func(string) []Diagnostic, bool) {
 		return validateHTML, true
 	case "xml":
 		return validateXML, true
+	case "mermaid":
+		return validateMermaid, true
 	}
 	return nil, false
 }

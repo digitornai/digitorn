@@ -1,10 +1,4 @@
-//go:build onnx
 
-// Real-ONNX proof for the multi-model manager. Compiled + run only with
-// `-tags onnx` and a resolvable onnxruntime shared library
-// (ONNXRUNTIME_LIB or one next to the test binary). The default model
-// (minilm) must already be on disk under ~/.digitorn/models ; the
-// bge-m3 case downloads ~2 GB and is gated behind an env flag.
 package embeddings_test
 
 import (
@@ -23,8 +17,6 @@ func cosine(a, b []float32) float64 {
 	return dot // inputs are L2-normalised → dot == cosine
 }
 
-// minilm via the shortcut : real ONNX, 384-dim, mean pooling, and a
-// semantic sanity check (relevant doc beats irrelevant doc).
 func TestManager_ONNX_Minilm(t *testing.T) {
 	mgr := embeddings.NewManager("", embeddings.ModeONNX, false, nil)
 	defer mgr.Close()
@@ -52,9 +44,7 @@ func TestManager_ONNX_Minilm(t *testing.T) {
 	}
 }
 
-// WordPiece proof : bge-small-en (BERT WordPiece, CLS, 384) — validates
-// the WordPiece tokenizer produces correct embeddings (unlocks self-host
-// code embedders). Quantized graph (~30MB).
+
 func TestManager_ONNX_WordPiece(t *testing.T) {
 	if os.Getenv("DIGITORN_TEST_WORDPIECE") == "" {
 		t.Skip("set DIGITORN_TEST_WORDPIECE=1 to run (downloads bge-small-en int8)")
@@ -80,15 +70,11 @@ func TestManager_ONNX_WordPiece(t *testing.T) {
 	}
 }
 
-// bge-m3 : a SECOND real model proving routing + 1024-dim + CLS pooling.
-// Downloads ~2 GB on first run, so it's opt-in.
 func TestManager_ONNX_BGEM3(t *testing.T) {
 	if os.Getenv("DIGITORN_TEST_BGE_M3") == "" {
 		t.Skip("set DIGITORN_TEST_BGE_M3=1 to run (downloads bge-m3 ONNX)")
 	}
-	// Quantized graph (int8, ~543 MB, self-contained) keeps the real
-	// proof light ; set DIGITORN_TEST_BGE_M3_FP32=1 to exercise the
-	// full graph + external-data path instead (~2.2 GB).
+
 	quantized := os.Getenv("DIGITORN_TEST_BGE_M3_FP32") == ""
 	mgr := embeddings.NewManager("", embeddings.ModeONNX, quantized, nil)
 	defer mgr.Close()

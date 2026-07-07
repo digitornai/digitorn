@@ -142,8 +142,12 @@ func (a *account) GetKeysForProvider(ctx context.Context, _ schemas.ModelProvide
 		return nil, errors.New("bifrost: no route info in context")
 	}
 	if r.BYOK {
-		if r.APIKey == "" {
-			return nil, errors.New("bifrost: BYOK requested but APIKey is empty")
+		// Route exactly as configured: send the key the user provided, nothing
+		// more. A local / self-hosted OpenAI-compatible endpoint (LM Studio,
+		// Ollama…) has a base_url and NO key → we send no key. Only a missing key
+		// AND no base_url is a real error (a cloud provider needs one).
+		if r.APIKey == "" && r.BaseURL == "" {
+			return nil, errors.New("bifrost: BYOK requested but neither APIKey nor BaseURL is set")
 		}
 		key := schemas.Key{
 			ID:     "direct",
@@ -152,10 +156,15 @@ func (a *account) GetKeysForProvider(ctx context.Context, _ schemas.ModelProvide
 			Weight: 1.0,
 		}
 		// BYOK + custom BaseURL: attach it as VLLMKeyConfig so the VLLM
-		// provider uses this URL instead of the provider-level default.
+		// provider uses this URL instead of the provider-level default. The VLLM
+		// provider appends "/v1/chat/completions" itself, so the base must NOT
+		// already end in /v1 (a base stored as ".../v1" would become
+		// ".../v1/v1/..." → 404 / non-SSE). Strip a trailing /v1 so both the
+		// with- and without-/v1 forms the user might store work.
 		if r.BaseURL != "" {
+			base := strings.TrimSuffix(strings.TrimRight(r.BaseURL, "/"), "/v1")
 			key.VLLMKeyConfig = &schemas.VLLMKeyConfig{
-				URL: schemas.EnvVar{Val: r.BaseURL, FromEnv: false},
+				URL: schemas.EnvVar{Val: base, FromEnv: false},
 			}
 		}
 		return []schemas.Key{key}, nil
@@ -211,6 +220,26 @@ func (a *account) GetConfigForProvider(p schemas.ModelProvider) (*schemas.Provid
 // at most one switch lookup. For gateway routing we always use the
 // OpenAI-compatible adapter (the gateway speaks OpenAI via LiteLLM,
 // regardless of the underlying provider).
+// applyProviderProtocol installs provider-specific wire details that the
+// generic OpenAI-compatible path can't infer. GitHub Copilot: the resolver
+// already swapped the stored GitHub token for a Copilot session token +
+// https://api.githubcopilot.com, but the API serves /chat/completions (no /v1
+// prefix) and requires editor identification headers — both injected here via
+// Bifrost's per-request context hooks. Same role as ResolveProvider's switch:
+// a protocol adapter keyed by the provider slug, not configuration.
+func applyProviderProtocol(bc *schemas.BifrostContext, provider string, byok bool) {
+	if !byok || !strings.EqualFold(provider, "github_copilot") {
+		return
+	}
+	bc.SetValue(schemas.BifrostContextKeyURLPath, "/chat/completions")
+	bc.SetValue(schemas.BifrostContextKeyExtraHeaders, map[string][]string{
+		"Copilot-Integration-Id": {"vscode-chat"},
+		"Editor-Version":         {"vscode/1.96.0"},
+		"Editor-Plugin-Version":  {"copilot-chat/0.27.0"},
+		"User-Agent":             {"GithubCopilot/1.270.0"},
+	})
+}
+
 func ResolveProvider(req *llm.ChatRequest) schemas.ModelProvider {
 	if !req.BYOK {
 		return schemas.OpenAI

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/invopop/jsonschema"
 )
 
 // Config is the per-app RAG configuration. Field names + defaults mirror
@@ -114,6 +116,19 @@ type EmbeddingModel struct {
 	ID         string `json:"id"`
 	Dimensions int    `json:"dimensions,omitempty"`
 	Pooling    string `json:"pooling,omitempty"`
+}
+
+func (EmbeddingModel) JSONSchema() *jsonschema.Schema {
+	props := jsonschema.NewProperties()
+	props.Set("id", &jsonschema.Schema{Type: "string"})
+	props.Set("dimensions", &jsonschema.Schema{Type: "integer"})
+	props.Set("pooling", &jsonschema.Schema{Type: "string"})
+	return &jsonschema.Schema{
+		OneOf: []*jsonschema.Schema{
+			{Type: "string", Description: "Embedding model id or shortcut (e.g. \"minilm-l12\")."},
+			{Type: "object", Properties: props},
+		},
+	}
 }
 
 func (e *EmbeddingModel) UnmarshalJSON(b []byte) error {

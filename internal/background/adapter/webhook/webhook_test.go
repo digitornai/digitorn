@@ -112,3 +112,19 @@ func TestOutbound_SendAndSSRF(t *testing.T) {
 		t.Fatal("non-http scheme should be blocked")
 	}
 }
+
+func TestAuthFailClosedOnEmptyCredentials(t *testing.T) {
+	a := New([]Provider{
+		{Name: "k", Path: "/hook/k", Auth: "api_key", APIKey: ""},
+		{Name: "s", Path: "/hook/s", Auth: "signature", Secret: ""},
+	})
+	a.sink = func(context.Context, adapter.Event) error { return nil }
+	for _, path := range []string{"/hook/k", "/hook/s"} {
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{}`))
+		rec := httptest.NewRecorder()
+		a.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("%s with empty credential: status %d, want 401 (fail closed)", path, rec.Code)
+		}
+	}
+}

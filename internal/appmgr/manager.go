@@ -99,6 +99,8 @@ type Manager interface {
 	// daemon restart. Returns ErrAppNotFound if the row is missing.
 	SetBYOK(ctx context.Context, appID string, enabled bool) error
 
+	SetAppPieces(ctx context.Context, appID string, pieces []string) error
+
 	// SetDisplayName overrides the displayed label (trimmed; "" clears the
 	// override → falls back to the bundle's short name). Survives reload.
 	// Returns ErrAppNotFound if the row is missing.

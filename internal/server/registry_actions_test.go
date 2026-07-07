@@ -78,6 +78,7 @@ func (f *fakeAppMgr) Uninstall(context.Context, string, bool) error { return nil
 func (f *fakeAppMgr) Enable(context.Context, string) error          { return nil }
 func (f *fakeAppMgr) Disable(context.Context, string) error         { return nil }
 func (f *fakeAppMgr) SetBYOK(context.Context, string, bool) error   { return nil }
+func (f *fakeAppMgr) SetAppPieces(context.Context, string, []string) error { return nil }
 func (f *fakeAppMgr) SetDisplayName(context.Context, string, string) error { return nil }
 func (f *fakeAppMgr) Reload(context.Context, string) error          { return nil }
 func (f *fakeAppMgr) CheckUpdate(context.Context, string, string) (*appmgr.UpdateInfo, error) {

@@ -20,9 +20,7 @@ func keys(m map[string]struct{}) []string {
 	return out
 }
 
-// =====================================================================
-// DefaultModeID
-// =====================================================================
+
 
 func TestDefaultModeID(t *testing.T) {
 	cases := []struct {
@@ -45,9 +43,7 @@ func TestDefaultModeID(t *testing.T) {
 	}
 }
 
-// =====================================================================
-// Resolve
-// =====================================================================
+
 
 func TestResolve_NoModeIsInert(t *testing.T) {
 	def := mode.AppDefaults{MaxTurns: 50, Timeout: 300, BaseBehaviorProfile: "coding"}
@@ -128,9 +124,6 @@ func TestResolve_ZeroMaxTurnsFallsBack(t *testing.T) {
 	}
 }
 
-// =====================================================================
-// ComputeToolPartition
-// =====================================================================
 
 func TestPartition_NilGrantsAllAllowed(t *testing.T) {
 	allowed, blocked := mode.ComputeToolPartition(nil, []string{"filesystem.read", "shell.bash"})
@@ -168,8 +161,7 @@ func TestPartition_WholeModuleGrant(t *testing.T) {
 	}
 }
 
-// Hardening fix #1 : meta-tools / system modules are never blocked by a
-// mode, even when the grants don't mention context_builder.
+
 func TestPartition_MetaToolsAlwaysAllowed(t *testing.T) {
 	grants := []schema.CapabilityGrant{{Module: "filesystem", Tools: []string{"read"}}}
 	offered := []string{
@@ -188,8 +180,7 @@ func TestPartition_MetaToolsAlwaysAllowed(t *testing.T) {
 }
 
 func TestPartition_SanitizedNamesPartitionByCanonicalModule(t *testing.T) {
-	// The LLM sees underscored names ; partition must canonicalize to split
-	// module/action, but return the offered (underscored) form.
+
 	grants := []schema.CapabilityGrant{{Module: "filesystem", Tools: []string{"read"}}}
 	allowed, blocked := mode.ComputeToolPartition(grants, []string{"filesystem__read", "filesystem__delete"})
 	if _, ok := allowed["filesystem__read"]; !ok {
@@ -200,9 +191,7 @@ func TestPartition_SanitizedNamesPartitionByCanonicalModule(t *testing.T) {
 	}
 }
 
-// =====================================================================
-// BuildModeSwitchMessage
-// =====================================================================
+
 
 func TestSwitchMessage_AllAllowed(t *testing.T) {
 	eff := mode.EffectiveTurn{ActiveModeID: "auto", ModeLabel: "Auto"}

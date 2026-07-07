@@ -21,6 +21,11 @@ type LLMModel struct {
 	OwnedBy          string `json:"owned_by"`
 	Kind             string `json:"kind"`
 	MaxContextTokens int    `json:"max_context_tokens,omitempty"`
+	// Direct reports whether the runtime can route to this model with the
+	// credential as-is (api_key / base_url). False when the provider needs a
+	// broker-specific flow (e.g. Copilot's token exchange) that the direct
+	// BYOK path doesn't implement — such models must not be offered as BYOK.
+	Direct bool `json:"direct"`
 }
 
 // modelsRecipe describes how to list a provider's models from its API.
@@ -67,15 +72,36 @@ func newModelsCache() *modelsCache {
 // contributes nothing. Results are deduped + sorted, grouped by provider via
 // each model's OwnedBy = the credential's provider_name.
 func (s *Store) ListUserModels(ctx context.Context, userID string) []LLMModel {
+	models, _ := s.ListUserModelsWithOffline(ctx, userID)
+	return models
+}
+
+// ListUserModelsWithOffline additionally reports the providers whose credential
+// declares a base_url (local/custom endpoint, e.g. LM Studio) but served no
+// models — i.e. their server is unreachable right now. Lets the UI show those
+// greyed out instead of silently dropping them.
+func (s *Store) ListUserModelsWithOffline(ctx context.Context, userID string) ([]LLMModel, []string) {
 	rows, err := s.listRows(ctx, userID)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	out := []LLMModel{}
 	seen := map[string]bool{} // provider|id
+	live := map[string]bool{} // providers that served ≥1 model
+	offSeen := map[string]bool{}
+	var offline []string
 	for _, row := range rows {
 		models := s.modelsForCredential(ctx, row)
+		if len(models) == 0 && !offSeen[row.ProviderName] {
+			// Only a custom/local endpoint (credential carries a base_url) is
+			// meaningfully "offline"; a cloud key with no listing stays silent.
+			if fields, ferr := s.openFields(row.Sealed); ferr == nil && strings.TrimSpace(fields["base_url"]) != "" {
+				offSeen[row.ProviderName] = true
+				offline = append(offline, row.ProviderName)
+			}
+		}
 		for _, m := range models {
+			live[row.ProviderName] = true
 			key := row.ProviderName + "|" + m.ID
 			if seen[key] {
 				continue
@@ -84,13 +110,20 @@ func (s *Store) ListUserModels(ctx context.Context, userID string) []LLMModel {
 			out = append(out, m)
 		}
 	}
+	// A provider served by another credential isn't offline.
+	filtered := offline[:0]
+	for _, p := range offline {
+		if !live[p] {
+			filtered = append(filtered, p)
+		}
+	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].OwnedBy != out[j].OwnedBy {
 			return out[i].OwnedBy < out[j].OwnedBy
 		}
 		return out[i].ID < out[j].ID
 	})
-	return out
+	return out, filtered
 }
 
 func (s *Store) modelsForCredential(ctx context.Context, row models.UserCredential) []LLMModel {
@@ -113,6 +146,11 @@ func (s *Store) modelsForCredential(ctx context.Context, row models.UserCredenti
 		models = s.copilotModels(ctx, fields["api_key"])
 	default:
 		models = s.fetchProviderModels(ctx, row.ProviderName, fields)
+	}
+	// Every listed model is directly routable: plain endpoints as-is, Copilot
+	// via the resolver's token exchange + the LLM layer's protocol adapter.
+	for i := range models {
+		models[i].Direct = true
 	}
 
 	s.models.mu.Lock()
@@ -145,15 +183,30 @@ func (s *Store) copilotModels(ctx context.Context, ghToken string) []LLMModel {
 }
 
 func (s *Store) fetchProviderModels(ctx context.Context, provider string, fields map[string]string) []LLMModel {
-	rec, ok := modelsRecipes[provider]
-	if !ok {
-		// Custom OpenAI-compatible endpoint stored as base_url + api_key.
-		if bu := strings.TrimSpace(fields["base_url"]); bu != "" && fields["api_key"] != "" {
-			rec = modelsRecipe{endpoint: strings.TrimRight(bu, "/") + "/models", authTemplate: "Authorization: Bearer {api_key}", parser: "openai"}
-		} else {
-			return nil
-		}
+	if rec, ok := modelsRecipes[provider]; ok {
+		return s.fetchModelsRecipe(ctx, rec, fields, provider)
 	}
+	// Custom OpenAI-compatible endpoint stored as base_url (+ optional api_key).
+	// Local servers (LM Studio, Ollama, llama.cpp…) have no key, so only the
+	// base_url is required; auth is sent only when present.
+	base := strings.TrimRight(strings.TrimSpace(fields["base_url"]), "/")
+	if base == "" {
+		return nil
+	}
+	auth := ""
+	if fields["api_key"] != "" {
+		auth = "Authorization: Bearer {api_key}"
+	}
+	models := s.fetchModelsRecipe(ctx, modelsRecipe{endpoint: base + "/models", authTemplate: auth, parser: "openai"}, fields, provider)
+	// OpenAI-compatible servers serve under /v1. If the user's base_url omitted
+	// it, {base}/models 404s or returns an error body → retry once with /v1.
+	if len(models) == 0 && !strings.Contains(base, "/v1") {
+		models = s.fetchModelsRecipe(ctx, modelsRecipe{endpoint: base + "/v1/models", authTemplate: auth, parser: "openai"}, fields, provider)
+	}
+	return models
+}
+
+func (s *Store) fetchModelsRecipe(ctx context.Context, rec modelsRecipe, fields map[string]string, provider string) []LLMModel {
 	ctx, cancel := context.WithTimeout(ctx, 12*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, subst(rec.endpoint, fields), nil)

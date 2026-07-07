@@ -5,9 +5,7 @@ import (
 	"testing"
 )
 
-// TestAskUserSchemaDeclared locks the FULL ask_user contract : every interaction
-// param is declared (so the agent discovers it) and the form field object carries
-// its rich metadata. A regression here silently strips the agent's power.
+
 func TestAskUserSchemaDeclared(t *testing.T) {
 	var spec *struct {
 		params  map[string]string // name → type
@@ -61,8 +59,6 @@ func TestAskUserSchemaDeclared(t *testing.T) {
 	}
 }
 
-// TestAskUserPromptPushesToAsk locks the behaviour-shaping description : the
-// mandate to ask plus an example for every shape. Truncating it weakens the agent.
 func TestAskUserPromptPushesToAsk(t *testing.T) {
 	var desc string
 	for _, m := range systemModuleManifests() {
@@ -86,9 +82,7 @@ func TestAskUserPromptPushesToAsk(t *testing.T) {
 	}
 }
 
-// TestAskUserCarriesToolPrompt locks the SYSTEM-PROMPT mandate : ask_user ships a
-// ToolPrompt, which the index → ToolUsageSection injects into every turn for an
-// agent that has the tool (mechanism proven in prompt.TestToolUsageSection_*).
+
 func TestAskUserCarriesToolPrompt(t *testing.T) {
 	var tp string
 	for _, m := range systemModuleManifests() {

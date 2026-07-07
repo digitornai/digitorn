@@ -49,6 +49,8 @@ type App struct {
 	// across daemon restarts.
 	BYOK bool `gorm:"not null;default:false"`
 
+	PiecesAllow string `gorm:"type:text"`
+
 	InstalledAt time.Time
 	UpdatedAt   time.Time
 }
@@ -126,21 +128,43 @@ type UserAppSecret struct {
 
 func (UserAppSecret) TableName() string { return "user_app_secret" }
 
+// UserAppModelDefault is one user's per-app default model for one agent,
+// applied to NEW sessions at creation time (entry agent and sub-agents alike).
+// In-session model switching still overrides it for that session only. Keyed
+// (user_id, app_id, agent_id); set via PUT /api/apps/{id}/model-defaults.
+type UserAppModelDefault struct {
+	ID               uint   `gorm:"primaryKey"`
+	UserID           string `gorm:"size:128;not null;uniqueIndex:idx_uamd_user_app_agent,priority:1"`
+	AppID            string `gorm:"size:128;not null;uniqueIndex:idx_uamd_user_app_agent,priority:2"`
+	AgentID          string `gorm:"size:128;not null;uniqueIndex:idx_uamd_user_app_agent,priority:3"`
+	Model            string `gorm:"size:256;not null"`
+	MaxContextTokens int
+	MaxOutputTokens  int
+	UpdatedAt        time.Time
+}
+
+func (UserAppModelDefault) TableName() string { return "user_app_model_default" }
+
 // OAuthState is a pending MCP OAuth authorization, binding a CSRF state token to
 // the user who started the flow (the provider callback can't carry the JWT).
 // Single-use (deleted on read) and short-lived (ExpiresAt). The PKCE Verifier is
 // a secret, stored encrypted.
 type OAuthState struct {
-	State       string    `gorm:"size:128;primaryKey"`
-	UserID      string    `gorm:"size:128;not null;index"`
-	AppID       string    `gorm:"size:128;not null"`
-	Provider    string    `gorm:"size:128;not null"`
-	ServerID    string    `gorm:"size:128;not null"`
-	Verifier    []byte    `gorm:"type:text"`
-	Nonce       string    `gorm:"size:128"`
-	RedirectURI string    `gorm:"size:512"`
-	ExpiresAt   time.Time `gorm:"index"`
-	CreatedAt   time.Time
+	State       string `gorm:"size:128;primaryKey"`
+	UserID      string `gorm:"size:128;not null;index"`
+	AppID       string `gorm:"size:128;not null"`
+	Provider    string `gorm:"size:128;not null"`
+	ServerID    string `gorm:"size:128;not null"`
+	Verifier    []byte `gorm:"type:text"`
+	Nonce       string `gorm:"size:128"`
+	RedirectURI string `gorm:"size:512"`
+	// Connector (piece) flows carry the system OAuth app through the state so
+	// the callback exchanges the code with the same credentials it authorized
+	// with. ClientSecret is sealed at rest like Verifier.
+	ClientID     string    `gorm:"size:256"`
+	ClientSecret []byte    `gorm:"type:text"`
+	ExpiresAt    time.Time `gorm:"index"`
+	CreatedAt    time.Time
 }
 
 func (OAuthState) TableName() string { return "oauth_state" }
@@ -262,10 +286,11 @@ type InstalledPiece struct {
 	PieceName  string `gorm:"size:128;not null;uniqueIndex:idx_installed_piece_user_name,priority:2"`
 	Version    string `gorm:"size:64;not null;default:''"`
 	AuthType   string `gorm:"size:32;not null;default:'none'"` // secret_text|custom|oauth2|basic|none
-	SealedAuth []byte `gorm:"type:text"`
-	Enabled    bool   `gorm:"not null;default:true"`
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
+	SealedAuth     []byte `gorm:"type:text"`
+	Enabled        bool   `gorm:"not null;default:true"`
+	NeedsReconnect bool   `gorm:"not null;default:false"`
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 func (InstalledPiece) TableName() string { return "installed_pieces" }

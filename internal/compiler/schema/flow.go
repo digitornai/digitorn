@@ -28,7 +28,21 @@ type FlowNode struct {
 	Expr        string           `yaml:"expr,omitempty" json:"expr,omitempty"`
 	Routes      []FlowRoute      `yaml:"routes,omitempty" json:"routes,omitempty"`
 	OnError     []FlowErrorRoute `yaml:"on_error,omitempty" json:"on_error,omitempty"`
+	Retry       *FlowRetry       `yaml:"retry,omitempty" json:"retry,omitempty"`
 	MaxIters    int              `yaml:"max_iterations,omitempty" json:"max_iterations,omitempty"`
+}
+
+// FlowRetry re-runs a failing node before its error routes fire, for transient
+// faults (a rate-limited LLM, a flaky GLPI endpoint). Backoff grows
+// geometrically: delay = BackoffMs * Multiplier^(attempt-1), capped at
+// MaxBackoffMs. Match, when set, is a regexp the error must match to be retried
+// (empty = retry any error). on_error still handles the final failure.
+type FlowRetry struct {
+	MaxAttempts  int     `yaml:"max_attempts,omitempty" json:"max_attempts,omitempty"`
+	BackoffMs    int     `yaml:"backoff_ms,omitempty" json:"backoff_ms,omitempty"`
+	Multiplier   float64 `yaml:"multiplier,omitempty" json:"multiplier,omitempty"`
+	MaxBackoffMs int     `yaml:"max_backoff_ms,omitempty" json:"max_backoff_ms,omitempty"`
+	Match        string  `yaml:"match,omitempty" json:"match,omitempty"`
 }
 
 // FlowBranch accepts either a bare node ID or {to: node_id}.

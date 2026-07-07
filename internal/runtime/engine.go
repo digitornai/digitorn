@@ -634,11 +634,29 @@ func (e *Engine) Run(ctx context.Context, in TurnInput) (*TurnResult, error) {
 	}
 	preSnap := state.Snapshot()
 
+	// Drop the user's message attachments into <workdir>/attachments/ so the
+	// agent can open them with `read` (see biSession for the context hint).
+	e.materializeAttachments(ctx, preSnap)
+
 	agent = applyEntryAgent(app.Definition, agent, in.AgentID, preSnap.EntryAgent)
 
 	if ovr := e.modelOverrideFor(in.SessionID, agent.ID, preSnap.ModelOverrides); ovr != "" {
 		ag := *agent
 		ag.Brain.Model = ovr
+		// Cross-provider pin: the model belongs to a different provider than the
+		// brain (BYOK, e.g. a local LM Studio model). Switch the provider too so
+		// the BYOK resolution below looks up THAT credential (base_url + key) from
+		// the vault instead of the brain's original provider. The embedded auth is
+		// then overridden by the resolved credential.
+		if pov := e.providerOverrideFor(in.SessionID, agent.ID, preSnap.ProviderOverrides); pov != "" {
+			ag.Brain.Provider = pov
+		}
+		// Per-model max generation override (BYOK models whose limits the gateway
+		// doesn't know) → override the brain's max_tokens for this session.
+		if out := e.outputOverrideFor(in.SessionID, agent.ID, preSnap.OutputTokenOverrides); out > 0 {
+			v := out
+			ag.Brain.MaxTokens = &v
+		}
 		if ag.Brain.Context != nil {
 			cc := *ag.Brain.Context
 			cc.MaxTokens = 0
@@ -947,6 +965,12 @@ func (e *Engine) runPhases(
 		LoadBlob:   e.loadBlob,
 		Report:     &slogReporter{log: e.Logger},
 		ExtractDoc: docextract.CachedExtract,
+		// Attachments are ALWAYS hydrated inline: text inline, PDF/DOCX via
+		// ExtractDoc → text, images → vision. (An earlier "drop + read on demand"
+		// mode broke PDF reading — filesystem.read has no doc extraction — and
+		// left agents without a session-context block unaware of the file.) The
+		// files are also materialised to <workdir>/attachments/ for the Files
+		// panel, but the model sees their content directly here.
 	})
 	compactPol := resolveAutoCompact(app.Definition.Runtime, agent.Brain.Context)
 	guardKeep := compactPol.keep
@@ -1716,6 +1740,30 @@ func (e *Engine) modelOverrideFor(sessionID, agentID string, selfOverrides map[s
 			return st.Snapshot().ModelOverrides[agentID]
 		}
 		return ""
+	}
+	return selfOverrides[agentID]
+}
+
+// providerOverrideFor mirrors modelOverrideFor for the cross-provider pin: the
+// provider of a BYOK model that belongs to a different provider than the brain.
+func (e *Engine) providerOverrideFor(sessionID, agentID string, selfOverrides map[string]string) string {
+	if i := strings.Index(sessionID, "::agent::"); i >= 0 {
+		if st, err := e.Sessions.State(sessionID[:i]); err == nil && st != nil {
+			return st.Snapshot().ProviderOverrides[agentID]
+		}
+		return ""
+	}
+	return selfOverrides[agentID]
+}
+
+// outputOverrideFor mirrors modelOverrideFor for the per-model max generation
+// tokens the user pinned (BYOK models whose limits the gateway doesn't know).
+func (e *Engine) outputOverrideFor(sessionID, agentID string, selfOverrides map[string]int) int {
+	if i := strings.Index(sessionID, "::agent::"); i >= 0 {
+		if st, err := e.Sessions.State(sessionID[:i]); err == nil && st != nil {
+			return st.Snapshot().OutputTokenOverrides[agentID]
+		}
+		return 0
 	}
 	return selfOverrides[agentID]
 }

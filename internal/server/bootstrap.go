@@ -37,6 +37,7 @@ import (
 	"github.com/digitornai/digitorn/internal/modulesettings"
 	"github.com/digitornai/digitorn/internal/persistence/db"
 	"github.com/digitornai/digitorn/internal/ports"
+	"github.com/digitornai/digitorn/internal/provision"
 	"github.com/digitornai/digitorn/internal/runtime"
 	"github.com/digitornai/digitorn/internal/runtime/agent"
 	"github.com/digitornai/digitorn/internal/runtime/background"
@@ -77,8 +78,9 @@ type Daemon struct {
 	sessionPaths    sessionstore.Paths
 	envelopeBuilder *sessionstore.EnvelopeBuilder
 	bridge          *SocketIOBridge
-	workspaceLive   *workspaceLive   // debounced workspace-change notifier (also reused by the REST file save)
-	blobStore       *blobstore.Store // content-addressed attachment store (multimodal in + out)
+	workspaceLive   *workspaceLive    // debounced workspace-change notifier (also reused by the REST file save)
+	blobStore       *blobstore.Store  // content-addressed attachment store (multimodal in + out)
+	officeConverter *officeConverter  // bounded, off-path LibreOffice pptx/docx/xlsx → PDF preview
 
 	jwks          *JWKS
 	jwtVerifier   *JWTVerifier
@@ -100,6 +102,7 @@ type Daemon struct {
 
 	appCompiler    *compiler.Compiler
 	appMgr         appmgr.Manager
+	provisioner    *provision.Provisioner // downloads app `requirements:` binaries (consent-gated, async)
 	userSkills     *userskills.Store
 	userSnippets   *usersnippets.Store
 	mcpCatalog     *mcpCatalog           // materializes worker-hosted MCP tools as native actions
@@ -112,6 +115,7 @@ type Daemon struct {
 	mcpHub         *mcphub.Client        // read-only client for the Hub's curated MCP catalog (the install-config source)
 
 	engine           runtime.Runner
+	promptBuilder    *wiring.Builder
 	sessionRunner    *sessionRunner // serializes + coalesces agent turns per session (user + proactive wakes)
 	lifecycle        lifecycleFirer // fires session_end / pre_compact hooks outside the turn loop
 	approvalRegistry *approval.Registry
@@ -165,6 +169,19 @@ func Build(cfg *config.Config) (*Daemon, error) {
 		CORSOrigins:     cfg.Server.CORSOrigins,
 	}, logger)
 
+	// The embedded-preview iframe is served from the daemon's OWN origin and
+	// opens its socket back to it — so that origin must be allowed even though
+	// it isn't a configured client origin. Always allow-list the daemon's own
+	// host:port (both 127.0.0.1 and localhost forms) for the socket handshake.
+	socketOrigins := append([]string{}, cfg.Server.CORSOrigins...)
+	for _, h := range []string{cfg.Server.Host, "127.0.0.1", "localhost"} {
+		if h == "" {
+			continue
+		}
+		socketOrigins = append(socketOrigins,
+			fmt.Sprintf("http://%s:%d", h, cfg.Server.Port))
+	}
+
 	siosrv := socketio.New(socketio.Options{
 		Path:                     "/socket.io/",
 		Namespace:                "/events",
@@ -172,7 +189,7 @@ func Build(cfg *config.Config) (*Daemon, error) {
 		PingTimeout:              cfg.SocketIO.PingTimeout,
 		ConnectTimeout:           cfg.SocketIO.ConnectTimeout,
 		MaxHTTPBufferSize:        cfg.SocketIO.MaxHTTPBufferSize,
-		AllowedOrigins:           cfg.Server.CORSOrigins,
+		AllowedOrigins:           socketOrigins,
 		RedisURL:                 cfg.SocketIO.RedisURL,
 		MaxDisconnectionDuration: 2 * time.Minute,
 	}, logger)
@@ -267,6 +284,13 @@ func Build(cfg *config.Config) (*Daemon, error) {
 		pieces.Setup(gdb, sealer)
 	}
 
+	// The daemon key (for the hub's daemon-only system-config endpoint) is read
+	// via os.Getenv downstream; surface the config value into the env so it
+	// survives restarts without needing DIGITORN_DAEMON_KEY set every launch.
+	if cfg.Apps.Hub.DaemonKey != "" && os.Getenv("DIGITORN_DAEMON_KEY") == "" {
+		_ = os.Setenv("DIGITORN_DAEMON_KEY", cfg.Apps.Hub.DaemonKey)
+	}
+
 	d := &Daemon{
 		cfg:             cfg,
 		logger:          logger,
@@ -287,6 +311,7 @@ func Build(cfg *config.Config) (*Daemon, error) {
 		workerMgr:       wmgr,
 		appCompiler:     appCompiler,
 		appMgr:          am,
+		provisioner:     provision.New(filepath.Join(filepath.Dir(cfg.Apps.Root), "tools"), nil, logger),
 		userSkills:      userskills.NewStore(gdb),
 		userSnippets:    usersnippets.NewStore(gdb),
 		mcpOAuth:        mcpOAuth,
@@ -302,6 +327,16 @@ func Build(cfg *config.Config) (*Daemon, error) {
 	bridge.BrainFor = d.brainFor
 	bridge.SessionWindowBrain = d.sessionWindowBrain
 	bridge.PreWarmContext = d.preWarmContext
+	// Embedded-preview iframes authenticate their socket with the `?t=` preview
+	// token (no usable JWT), so they get live workspace_changes push instead of
+	// polling. Same HMAC check as the preview/files routes.
+	bridge.PreviewValidator = d.checkPreviewToken
+	// Put provisioned requirement binaries (~/.digitorn/tools/bin) on the daemon's
+	// PATH so every agent bash inherits them (buildEnv passes PATH through). Symlinks
+	// added later resolve immediately, so this one prepend covers all future installs.
+	if bd := d.provisioner.BinDir(); bd != "" {
+		os.Setenv("PATH", bd+string(os.PathListSeparator)+os.Getenv("PATH"))
+	}
 	d.MountAPI()
 	MountAuthProxy(httpSrv.Router(), cfg.Auth.ServiceURL)
 	return d, nil
@@ -475,6 +510,7 @@ func (d *Daemon) buildEngine() {
 		d.mcpOAuth.SetServerAuthLookup(d.mcpServerAuthLookup)
 		d.mcpOAuth.SetServerURLLookup(d.mcpServerURLLookup)
 		d.mcpOAuth.SetRedirectBase(d.previewBaseURL())
+		d.mcpOAuth.SetPieceRedirectURL(d.cfg.OAuth.PieceRedirectURL)
 	}
 	eng.PolicyEvaluator = &runtime.DefaultPolicyEvaluator{
 		Lookup: registryToolSpecs{Registry: d.modules, MCP: mcpCat, Pieces: piecesCat},
@@ -553,8 +589,9 @@ func (d *Daemon) buildEngine() {
 	// get_dynamic_tool_prompts). Authorization-gated by the wiring layer to
 	// the agent's authorized modules, so a module's prompt sections never
 	// leak to an unauthorized agent.
-	contextBuilder = contextBuilder.WithContributors(registryContributors{Registry: d.modules})
+	contextBuilder = contextBuilder.WithContributors(registryContributors{Registry: d.modules, Pieces: d.piecesCatalog})
 	eng.Context = contextBuilder
+	d.promptBuilder = contextBuilder
 
 	busAdapter := dispatch.NewBusAdapter(d.bus)
 	// Per-app module config delivery : resolve tools.modules.<id>.config for
@@ -563,6 +600,7 @@ func (d *Daemon) buildEngine() {
 	busAdapter.ModuleConfigs = appModuleConfigSource{apps: d.appMgr, deltas: d.moduleSettings, secrets: d.ensureSecretStore()}
 	// Wire the EventBus so modules that implement EventEmitter can publish events.
 	busAdapter.EventBus = d.eventBus
+	busAdapter.AppsRoot = d.cfg.Apps.Root
 	// In-proc embeddings/rerank : in-proc modules (filesystem code-grep) reach
 	// the embeddings client the same way worker modules reach the gateway. Lazy
 	// (reads d.embeddingsClient at call time — wired later in startWorkers).
@@ -590,6 +628,10 @@ func (d *Daemon) buildEngine() {
 	}
 	eng.Blobs = blobStore
 	d.blobStore = blobStore // expose for the inbound upload endpoint (any client)
+
+	// Off-path office→PDF preview converter (bounded; no-op when LibreOffice is
+	// absent — the web client then falls back to the pure-JS pptx viewer).
+	d.officeConverter = newOfficeConverter(filepath.Join(d.cfg.Sessions.Root, "pdfcache"), d.logger)
 
 	// Per-user BYOK key injection: in BYOK mode the engine prefers a key the
 	// user stored in their vault (O(1) cached lookup) over the bundle key.
@@ -746,6 +788,7 @@ func (d *Daemon) buildEngine() {
 	compactor := newContextCompactor(d.sessionStore, d.appMgr, d.llmClient, d.logger)
 	compactor.touch = d.touchContext
 	compactor.touchSync = d.touchContextSync
+	compactor.credResolver = d.credResolver
 	d.compactor = compactor
 	// Background summary maintainer: keeps a high-fidelity LLM summary prepared
 	// off the turn loop so compaction is zero-latency (instant apply, no blocking
@@ -816,6 +859,33 @@ func (d *Daemon) HTTPRouter() interface {
 
 // Start starts every registered module and then the HTTP/Socket.IO listener.
 // Blocks until ctx is canceled or the HTTP server returns an error.
+func (d *Daemon) startPiecesTokenRefresh(ctx context.Context) {
+	pm := d.piecesModule()
+	if pm == nil || pm.PiecesStore() == nil {
+		return
+	}
+	store := pm.PiecesStore()
+	go func() {
+		ticker := time.NewTicker(15 * time.Minute)
+		defer ticker.Stop()
+		refreshed, failed := store.RefreshExpiring(ctx, 30*time.Minute)
+		if refreshed > 0 || failed > 0 {
+			d.logger.Info("pieces: proactive token refresh", slog.Int("refreshed", refreshed), slog.Int("failed", failed))
+		}
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				refreshed, failed := store.RefreshExpiring(ctx, 30*time.Minute)
+				if refreshed > 0 || failed > 0 {
+					d.logger.Info("pieces: proactive token refresh", slog.Int("refreshed", refreshed), slog.Int("failed", failed))
+				}
+			}
+		}
+	}()
+}
+
 func (d *Daemon) Start(ctx context.Context) error {
 	d.logger.Info("daemon: starting",
 		slog.String("addr", d.httpSrv.HTTPServer().Addr),
@@ -861,6 +931,9 @@ func (d *Daemon) Start(ctx context.Context) error {
 	if err := d.bridge.Start(ctx); err != nil {
 		return fmt.Errorf("daemon: bridge: %w", err)
 	}
+	d.startPiecesTokenRefresh(ctx)
+	d.startBackgroundSupervisor(ctx)
+	d.startVoiceSupervisor(ctx)
 
 	// Start in-proc modules EXCEPT those served by a worker pool —
 	// their daemon-side instance stays dormant so we don't double-

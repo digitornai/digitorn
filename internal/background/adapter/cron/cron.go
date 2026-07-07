@@ -124,6 +124,11 @@ func (s *Schedule) matches(t time.Time) bool {
 type Provider struct {
 	Name     string
 	Schedule *Schedule
+	// CatchUpFrom, when set, makes the provider fire once for the most recent
+	// scheduled slot missed while the service was down (in (CatchUpFrom, now]).
+	// The per-minute DedupKey keeps it idempotent; only the single latest missed
+	// slot is replayed, so a long outage never causes a fire storm.
+	CatchUpFrom time.Time
 }
 
 // Adapter fires Events on schedules. It is inbound-only (Send is a no-op). It
@@ -132,16 +137,20 @@ type Provider struct {
 type Adapter struct {
 	mu        sync.Mutex
 	providers []Provider
-	armed     map[string]bool // provider names with a running goroutine
+	armed     map[string]context.CancelFunc // provider name → stop its firing goroutine
 	now       func() time.Time
 	ctx       context.Context // non-nil once Start is running
 	sink      adapter.Sink
 }
 
+// maxCatchUpScan bounds the backward scan for a missed slot so a very stale
+// CatchUpFrom (a long outage) can't spin — beyond it, catch-up is skipped.
+const maxCatchUpScan = 2000
+
 // New builds a cron adapter over the given providers (may be empty — schedules
 // can be added later via Arm).
 func New(providers []Provider) *Adapter {
-	return &Adapter{providers: providers, armed: map[string]bool{}, now: time.Now}
+	return &Adapter{providers: providers, armed: map[string]context.CancelFunc{}, now: time.Now}
 }
 
 func (a *Adapter) Name() string { return "cron" }
@@ -156,9 +165,10 @@ func (a *Adapter) Start(ctx context.Context, sink adapter.Sink) error {
 	a.mu.Lock()
 	a.ctx, a.sink = ctx, sink
 	for _, p := range a.providers {
-		if !a.armed[p.Name] {
-			a.armed[p.Name] = true
-			go a.run(ctx, p, sink)
+		if _, ok := a.armed[p.Name]; !ok {
+			pctx, cancel := context.WithCancel(ctx)
+			a.armed[p.Name] = cancel
+			go a.run(pctx, p, sink)
 		}
 	}
 	a.mu.Unlock()
@@ -184,15 +194,70 @@ func (a *Adapter) Arm(p Provider) bool {
 	if !replaced {
 		a.providers = append(a.providers, p)
 	}
-	if a.ctx == nil || a.armed[p.Name] {
-		return false // not started yet (will arm on Start), or already firing
+	if a.ctx == nil {
+		return false // not started yet (will arm on Start)
 	}
-	a.armed[p.Name] = true
-	go a.run(a.ctx, p, a.sink)
+	if _, ok := a.armed[p.Name]; ok {
+		return false // already firing
+	}
+	pctx, cancel := context.WithCancel(a.ctx)
+	a.armed[p.Name] = cancel
+	go a.run(pctx, p, a.sink)
 	return true
 }
 
+// Disarm stops a provider's firing goroutine and forgets it, so a runtime
+// disable (or an app being disabled) actually stops the schedule instead of
+// leaving it firing until the next restart. Returns true if it was armed.
+func (a *Adapter) Disarm(name string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	cancel, ok := a.armed[name]
+	if !ok {
+		return false
+	}
+	cancel()
+	delete(a.armed, name)
+	for i := range a.providers {
+		if a.providers[i].Name == name {
+			a.providers = append(a.providers[:i], a.providers[i+1:]...)
+			break
+		}
+	}
+	return true
+}
+
+// missedSlot returns the formatted minute of the most recent scheduled fire in
+// (CatchUpFrom, now], or "" when catch-up is off / nothing was missed / the gap
+// is too large to scan. Bounded by maxCatchUpScan so a long outage is skipped.
+func (a *Adapter) missedSlot(p Provider) string {
+	if p.CatchUpFrom.IsZero() {
+		return ""
+	}
+	now := a.now().UTC()
+	last := time.Time{}
+	t := p.CatchUpFrom.UTC()
+	for i := 0; i < maxCatchUpScan; i++ {
+		next := p.Schedule.Next(t)
+		if next.IsZero() || next.After(now) {
+			break
+		}
+		last = next
+		t = next
+	}
+	if last.IsZero() {
+		return ""
+	}
+	return last.UTC().Format("2006-01-02T15:04")
+}
+
 func (a *Adapter) run(ctx context.Context, p Provider, sink adapter.Sink) {
+	if slot := a.missedSlot(p); slot != "" {
+		_ = sink(ctx, adapter.Event{
+			Provider: p.Name, Adapter: "cron", DedupKey: p.Name + ":" + slot,
+			Source: "cron", Payload: map[string]any{"scheduled_for": slot, "catch_up": true},
+		})
+	}
 	for {
 		next := p.Schedule.Next(a.now())
 		if next.IsZero() {

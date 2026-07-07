@@ -1,0 +1,437 @@
+schema_version: 2
+
+app:
+  app_id: glpi-mail-desk
+  name: GLPI Mail Desk
+  short_name: Mail Desk
+  icon: "📬"
+  color: "#00897B"
+  version: "1.0.0"
+  description: >
+    Mailbox-driven IT desk. Watches an inbox, recognizes support requests,
+    opens the GLPI ticket itself, answers the user BY EMAIL from the company
+    knowledge base (RAG) after human approval, and keeps the whole email
+    thread as ONE conversation — a reply in the thread wakes the same session
+    with its full history. Escalates to a human team when needed.
+  author: "Digitorn"
+  category: "support"
+  tags: [glpi, email, support, itsm, rag, background]
+
+runtime:
+  mode: background
+  max_turns: 30
+  timeout: 180
+
+agents:
+  - id: triage
+    role: coordinator
+    brain:
+      provider: openai
+      backend: openai_compat
+      model: zen-mimo-v2.5-free
+      temperature: 0
+      max_tokens: 1024
+      config:
+        api_key: placeholder
+        base_url: https://api.openai.com/v1
+    system_prompt: |
+      You are an inbox CLASSIFIER for an IT support desk — not a solver.
+      Decide whether the email is an IT SUPPORT REQUEST and classify it:
+        - support "yes" + category "network"  : VPN, Wi-Fi, DNS, connectivity, printers on network
+        - support "yes" + category "software" : application install/config/crash, Office, mail client
+        - support "yes" + category "account"  : password, lockout, MFA, access requests
+        - support "yes" + category "human"    : support request but unclear, angry, or explicitly wants a person
+        - support "no"                        : newsletters, notifications, spam, anything not asking IT for help
+      OUTPUT CONTRACT (strict): your ENTIRE reply is exactly one line of JSON,
+      nothing before or after, no markdown, no code fence:
+      {"support": "yes", "category": "network"}
+
+  - id: network_expert
+    role: specialist
+    specialty: "Diagnoses network problems from the company knowledge base."
+    brain: &specialist_brain
+      provider: openai
+      backend: openai_compat
+      model: zen-mimo-v2.5-free
+      temperature: 0.2
+      max_tokens: 700
+      config:
+        api_key: placeholder
+        base_url: https://api.openai.com/v1
+    modules:
+      rag: [query]
+    system_prompt: &specialist_prompt |
+      You are an IT specialist drafting an EMAIL reply to an employee. FIRST
+      call rag.query on the "acme_it" knowledge base with the user's problem.
+      Then draft a concise, friendly email reply with clear numbered steps,
+      in the user's language, using ONLY the retrieved procedures. Never
+      invent infrastructure details. If the procedure marks an action as
+      privileged, say it will be escalated to the right team.
+
+      OUTPUT FORMAT — IMPORTANT: after querying, respond with ONLY a single
+      JSON string literal (a double-quoted, JSON-escaped string) containing
+      your email body. No object, no markdown, no code fences.
+
+  - id: software_expert
+    role: specialist
+    specialty: "Resolves software problems from the company knowledge base."
+    brain: *specialist_brain
+    modules:
+      rag: [query]
+    system_prompt: *specialist_prompt
+
+  - id: account_expert
+    role: specialist
+    specialty: "Handles account/access questions from the company knowledge base."
+    brain: *specialist_brain
+    modules:
+      rag: [query]
+    system_prompt: *specialist_prompt
+
+  - id: convo_expert
+    role: specialist
+    specialty: "Continues an ongoing support email thread with full context."
+    brain: *specialist_brain
+    modules:
+      rag: [query]
+    system_prompt: |
+      You continue an ONGOING support email thread. The subject line contains
+      the ticket reference as [Ticket #<number>]. FIRST call rag.query on the
+      "acme_it" knowledge base with the user's follow-up. Then draft the next
+      email reply (concise, friendly, user's language, ONLY retrieved
+      procedures).
+      OUTPUT CONTRACT (strict): your ENTIRE reply is exactly one line of JSON:
+      {"ticket_id": "123", "reply": "<your email body, JSON-escaped>"}
+      ticket_id is the number extracted from [Ticket #...] in the subject
+      ("0" if absent).
+
+  - id: mailer
+    role: specialist
+    specialty: "Sends the approved reply as an email in the same thread."
+    brain: *specialist_brain
+    modules:
+      pieces: ["*"]
+    system_prompt: |
+      You send ONE email reply using the gmail reply tool
+      (ap_gmail__reply_to_email or the closest available gmail reply/send
+      tool). Use the email id given in your task, keep the reply in the same
+      thread, and send EXACTLY the body text you were given — do not rewrite
+      it. If a ticket reference like [Ticket #123] is provided, make sure the
+      subject keeps it. After sending, reply with exactly: SENT
+
+flow:
+  id: mail-desk
+  entry: gate
+  max_iterations: 30
+  description: "New thread → triage → GLPI ticket → RAG draft → approval → email reply + GLPI followup. Thread reply → same session → contextual answer."
+  nodes:
+    # event.continued is stamped by the platform launcher: false when this
+    # activation OPENED the conversation, true when it woke an existing one.
+    - id: gate
+      type: decision
+      expr: "event.continued"
+      routes:
+        - { when: "true", to: convo_node }
+        - { default: true, to: triage_node }
+
+    - id: triage_node
+      type: agent
+      agent: triage
+      params:
+        task: |
+          Subject: {{event.payload.subject}}
+          From: {{event.payload.from}}
+
+          {{event.payload.body}}{{event.payload.snippet}}
+      retry: &llm_retry
+        max_attempts: 3
+        backoff_ms: 2000
+        multiplier: 3
+        match: "rate limit|circuit breaker|timeout|overloaded"
+      routes:
+        - { when: "support == 'no'", to: not_support }
+        - { default: true, to: create_ticket }
+      on_error:
+        - { default: true, to: degraded }
+
+    - id: create_ticket
+      type: tool
+      tool: http.post
+      params:
+        url: "{{secret.GLPI_URL}}/apirest.php/Ticket"
+        body: |
+          {"input":{"name":{{event.payload.subject | json}},"content":{{event.payload.body | json}},"origin":"email"}}
+      retry: &http_retry
+        max_attempts: 3
+        backoff_ms: 1000
+        multiplier: 3
+      routes:
+        - { when: "category == 'network'", to: network_node }
+        - { when: "category == 'software'", to: software_node }
+        - { when: "category == 'account'", to: account_node }
+        - { default: true, to: escalate }
+      on_error:
+        - { default: true, to: degraded }
+
+    - id: network_node
+      type: agent
+      agent: network_expert
+      params:
+        task: "{{event.payload.body}}{{event.payload.snippet}}"
+      retry: *llm_retry
+      routes:
+        - { to: approval_gate }
+      on_error: &to_escalate
+        - { default: true, to: escalate }
+
+    - id: software_node
+      type: agent
+      agent: software_expert
+      params:
+        task: "{{event.payload.body}}{{event.payload.snippet}}"
+      retry: *llm_retry
+      routes:
+        - { to: approval_gate }
+      on_error: *to_escalate
+
+    - id: account_node
+      type: agent
+      agent: account_expert
+      params:
+        task: "{{event.payload.body}}{{event.payload.snippet}}"
+      retry: *llm_retry
+      routes:
+        - { to: approval_gate }
+      on_error: *to_escalate
+
+    - id: approval_gate
+      type: approval
+      message: |
+        Email {{event.payload.from}} — ticket GLPI #{{create_ticket.result.json.id}} créé.
+        Envoyer cette réponse par mail ?
+
+        {{network_node.output}}{{software_node.output}}{{account_node.output}}
+      choices: [approve, reject]
+      routes:
+        - { when: "approvals.approval_gate == 'approve'", to: glpi_followup }
+        - { default: true, to: escalate }
+
+    # GLPI first, then the email: the ticket stays authoritative even if the
+    # mail send fails.
+    - id: glpi_followup
+      type: tool
+      tool: http.post
+      params:
+        url: "{{secret.GLPI_URL}}/apirest.php/Ticket/{{create_ticket.result.json.id}}/ITILFollowup"
+        body: |
+          {"input":{"items_id":{{create_ticket.result.json.id}},"itemtype":"Ticket","is_private":0,"content":{{network_node.output | json}}{{software_node.output | json}}{{account_node.output | json}}}}
+      retry: *http_retry
+      routes:
+        - { to: send_mail }
+      on_error:
+        - { default: true, to: writeback_failed }
+
+    - id: send_mail
+      type: agent
+      agent: mailer
+      params:
+        task: |
+          Reply to email id {{event.payload.id}} (thread {{event.payload.threadId}}).
+          Subject must include: [Ticket #{{create_ticket.result.json.id}}]
+          Body to send verbatim:
+
+          {{network_node.output}}{{software_node.output}}{{account_node.output}}
+      retry: *llm_retry
+      routes:
+        - { to: answered }
+      on_error:
+        - { default: true, to: mail_failed }
+
+    # ── Ongoing thread (event.continued == true) ─────────────────────────────
+    - id: convo_node
+      type: agent
+      agent: convo_expert
+      params:
+        task: |
+          Subject: {{event.payload.subject}}
+          From: {{event.payload.from}}
+
+          {{event.payload.body}}{{event.payload.snippet}}
+      retry: *llm_retry
+      routes:
+        - { to: convo_approval }
+      on_error:
+        - { default: true, to: degraded }
+
+    - id: convo_approval
+      type: approval
+      message: |
+        Suite du fil {{event.payload.subject}} (ticket #{{convo_node.output.ticket_id}}).
+        Envoyer cette réponse ?
+
+        {{convo_node.output.reply}}
+      choices: [approve, reject]
+      routes:
+        - { when: "approvals.convo_approval == 'approve'", to: convo_followup }
+        - { default: true, to: escalate_convo }
+
+    - id: convo_followup
+      type: tool
+      tool: http.post
+      params:
+        url: "{{secret.GLPI_URL}}/apirest.php/Ticket/{{convo_node.output.ticket_id}}/ITILFollowup"
+        body: |
+          {"input":{"items_id":{{convo_node.output.ticket_id | json}},"itemtype":"Ticket","is_private":0,"content":{{convo_node.output.reply | json}}}}
+      retry: *http_retry
+      routes:
+        - { to: convo_send }
+      on_error:
+        - { default: true, to: writeback_failed }
+
+    - id: convo_send
+      type: agent
+      agent: mailer
+      params:
+        task: |
+          Reply to email id {{event.payload.id}} (thread {{event.payload.threadId}}).
+          Subject must include: [Ticket #{{convo_node.output.ticket_id}}]
+          Body to send verbatim:
+
+          {{convo_node.output.reply}}
+      retry: *llm_retry
+      routes:
+        - { to: answered }
+      on_error:
+        - { default: true, to: mail_failed }
+
+    # ── Terminals ────────────────────────────────────────────────────────────
+    - id: not_support
+      type: terminal
+      params:
+        output: "Email ignoré (pas une demande de support)."
+
+    - id: answered
+      type: terminal
+      params:
+        output: "Réponse envoyée par email et consignée dans GLPI."
+
+    - id: escalate
+      type: terminal
+      params:
+        output: "Demande escaladée à l'équipe support (ticket #{{create_ticket.result.json.id}} laissé ouvert pour un humain)."
+
+    - id: escalate_convo
+      type: terminal
+      params:
+        output: "Suite du fil escaladée à un humain (ticket #{{convo_node.output.ticket_id}})."
+
+    - id: writeback_failed
+      type: terminal
+      params:
+        output: "Approuvé, mais l'écriture GLPI a échoué — suivi manuel requis. [{{error.message}}]"
+
+    - id: mail_failed
+      type: terminal
+      params:
+        output: "Le ticket GLPI est à jour mais l'envoi du mail a échoué. [{{error.message}}]"
+
+    - id: degraded
+      type: terminal
+      params:
+        output: "Demande reçue, un technicien la traite. [assistant indisponible: {{error.message}}]"
+
+tools:
+  capabilities:
+    default_policy: auto
+    grant:
+      - { module: http, actions: [post, put, get] }
+      - { module: rag, actions: [query] }
+      - { module: pieces, tools: ["*"] }
+
+  modules:
+    rag:
+      config:
+        embedding_model: minilm-l12
+        backend:
+          type: pgvector
+          dsn: "postgres://digitorn:digitorn@localhost:5433/digitorn_hub"
+        chunking:
+          strategy: recursive
+          size: 500
+          overlap: 60
+        pipeline:
+          final_top_k: 5
+        citations:
+          enabled: true
+          format: inline
+        default_knowledge_base: acme_it
+        sources:
+          - name: it_kb
+            type: file
+            path: kb
+            extensions: [".md"]
+            recursive: true
+            knowledge_base: acme_it
+            triggers:
+              - { type: on_start }
+        auto_index:
+          on_start: true
+
+    http:
+      config:
+        timeout: 30
+        allow_private_hosts: true
+        default_headers:
+          App-Token: "{{secret.GLPI_APP_TOKEN}}"
+          Session-Token: "{{secret.GLPI_SESSION_TOKEN}}"
+          Content-Type: "application/json"
+
+    pieces:
+      constraints:
+        allowed_pieces: [gmail]
+
+    channels:
+      config:
+        default_agent: triage
+        max_turns: 30
+        timeout: 180
+        providers:
+          # The mailbox watcher: the user's installed Gmail connector is reused
+          # (auth_from_installed) — configure Gmail once, every trigger benefits.
+          mailbox:
+            adapter: pieces
+            config:
+              piece: gmail
+              trigger: gmail_new_email_received
+              interval: 30
+              trigger_url: http://127.0.0.1:9234
+              auth_from_installed: gmail
+              props: {}
+            activation: &mail_activation
+              session: "mail-{{event.payload.threadId}}"
+              owner: "{{event.payload.user_id}}"
+              message: |
+                Email {{event.payload.id}} (thread {{event.payload.threadId}})
+                From: {{event.payload.from}}
+                Subject: {{event.payload.subject}}
+
+                {{event.payload.body}}{{event.payload.snippet}}
+              reply: none
+          # Simulation/integration inlet: POST the same payload shape here to
+          # exercise the exact flow without waiting for the mailbox poll.
+          mail-sim:
+            adapter: webhook
+            config:
+              inbound_path: /hook/mail-desk
+              auth: api_key
+              api_key: "{{secret.MAILDESK_WEBHOOK_KEY}}"
+            activation: *mail_activation
+
+context:
+  sections:
+    - builtin: datetime
+
+ui:
+  greeting: "GLPI Mail Desk — votre boîte support devient un desk : ticket GLPI créé, réponse RAG approuvée, envoyée dans le fil, conversation suivie."
+  workspace:
+    position: hidden

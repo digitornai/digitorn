@@ -16,7 +16,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
+	"time"
 
 	"io"
 	"net/http"
@@ -49,10 +51,12 @@ func Setup(db *gorm.DB, sealer *mcpoauth.Sealer) {
 // Module is the in-process Digitorn module for Activepieces connectors.
 type Module struct {
 	module.Base
-	bridge    *Bridge
-	store     *Store
-	piecesDir string
-	mu        sync.RWMutex
+	bridge      *Bridge
+	store       *Store
+	piecesDir   string
+	mu          sync.RWMutex
+	reloadMu    sync.Mutex
+	reloadTimer *time.Timer
 }
 
 func New() *Module {
@@ -130,7 +134,63 @@ func (m *Module) Invoke(ctx context.Context, toolName string, params []byte) (to
 		augmented = params
 	}
 
-	return m.bridge.CallTool(ctx, toolName, augmented)
+	res, callErr := m.bridge.CallTool(ctx, toolName, augmented)
+
+	// Reactive self-healing: if the connector rejected the call for an expired
+	// or invalid token, force a token refresh and retry once. This covers the
+	// cases the proactive refresh misses (missing/wrong stored expiry, clock
+	// skew) so the user never has to manually reconnect while the refresh token
+	// is still valid.
+	if isAuthFailure(res) && m.store != nil {
+		if id, ok := tool.IdentityFromContext(ctx); ok && id.UserID != "" {
+			if wire, refreshed := m.store.ForceRefresh(ctx, id.UserID, piece); refreshed {
+				retried := reinjectAuth(augmented, wire)
+				res, callErr = m.bridge.CallTool(ctx, toolName, retried)
+			}
+		}
+	}
+
+	return res, callErr
+}
+
+// isAuthFailure reports whether a bridge result looks like a provider auth
+// rejection (expired/invalid token) that a token refresh could fix.
+func isAuthFailure(res tool.Result) bool {
+	if res.Success {
+		return false
+	}
+	e := strings.ToLower(res.Error)
+	if e == "" {
+		return false
+	}
+	for _, s := range []string{
+		"\"status\":401", "status 401", " 401", "unauthorized", "unauthenticated",
+		"invalidauthenticationtoken", "invalid_grant", "invalid_token", "invalid token",
+		"token expired", "expired token", "access token", "token has expired",
+	} {
+		if strings.Contains(e, s) {
+			return true
+		}
+	}
+	return false
+}
+
+// reinjectAuth replaces the _ap_auth field of an already-augmented params blob
+// with a freshly refreshed auth wire, preserving all other fields.
+func reinjectAuth(augmented json.RawMessage, wire *APAuthWire) json.RawMessage {
+	var args map[string]any
+	if len(augmented) > 0 {
+		_ = json.Unmarshal(augmented, &args)
+	}
+	if args == nil {
+		args = map[string]any{}
+	}
+	args["_ap_auth"] = wire
+	raw, err := json.Marshal(args)
+	if err != nil {
+		return augmented
+	}
+	return raw
 }
 
 // injectAuth looks up the caller's credentials and merges _ap_auth + _ap_session
@@ -211,7 +271,15 @@ func appAuthFor(ctx context.Context, pieceName string) *APAuthWire {
 // ReloadBridge restarts the bridge subprocess (called after a piece is
 // installed/uninstalled to refresh the tool list).
 func (m *Module) ReloadBridge(ctx context.Context) error {
-	return m.bridge.Restart(ctx)
+	m.reloadMu.Lock()
+	defer m.reloadMu.Unlock()
+	if m.reloadTimer != nil {
+		m.reloadTimer.Stop()
+	}
+	m.reloadTimer = time.AfterFunc(2*time.Second, func() {
+		_ = m.bridge.Restart(context.Background())
+	})
+	return nil
 }
 
 // PiecesStore returns the installed pieces credential store (may be nil if the
