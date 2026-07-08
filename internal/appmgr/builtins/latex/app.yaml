@@ -1,0 +1,231 @@
+schema_version: 2
+
+app:
+  app_id: latex
+  name: LaTeX Studio
+  short_name: LaTeX
+  icon: ""
+  color: "#008080"
+  version: "0.3.0"
+  description: "Write and compile LaTeX documents live; the agent plans, asks when unsure, builds a well-structured document, compiles, and fixes errors."
+  author: "you@example.com"
+  category: "writing"
+  tags: [latex, pdf, document, writing]
+
+# External binaries this app needs but does not ship. The daemon provisions them
+# once (download + sha256 verify + extract), consent-gated and asynchronously,
+# and puts them on the agent's PATH. This is what makes the app self-contained on
+# a fresh machine — no manual `brew install tectonic` etc.
+requirements:
+  - id: tectonic
+    bin: tectonic
+    version: "0.16.9"
+    label: "Tectonic (LaTeX engine)"
+    description: "Self-contained LaTeX/XeTeX engine that auto-installs packages and runs all compile passes."
+    check: "tectonic --version"
+    platforms:
+      linux/amd64:
+        url: "https://github.com/tectonic-typesetting/tectonic/releases/download/tectonic%400.16.9/tectonic-0.16.9-x86_64-unknown-linux-musl.tar.gz"
+        sha256: "60b13a0826ae7ad9ce34b4a2df06bff2cfcfa6dda8a915477c0cbb84e1a4a902"
+        format: tar.gz
+        path: tectonic
+        size_bytes: 10146030
+      darwin/arm64:
+        url: "https://github.com/tectonic-typesetting/tectonic/releases/download/tectonic%400.16.9/tectonic-0.16.9-aarch64-apple-darwin.tar.gz"
+        sha256: "edb67c61aba768289f6da441c9e6f523cfaff4f8b2a5708523ef29c543f8e88e"
+        format: tar.gz
+        path: tectonic
+        size_bytes: 20590132
+      darwin/amd64:
+        url: "https://github.com/tectonic-typesetting/tectonic/releases/download/tectonic%400.16.9/tectonic-0.16.9-x86_64-apple-darwin.tar.gz"
+        sha256: "79d8839fa3594bfea9b2bf2ac0a0455bcc4d0de956a5e5c403107e9a72f79e86"
+        format: tar.gz
+        path: tectonic
+        size_bytes: 20572838
+  - id: texlab
+    bin: texlab
+    version: "5.26.0"
+    label: "TexLab (LaTeX language server)"
+    description: "Language server that gives the agent live diagnostics as it edits .tex files."
+    check: "texlab --version"
+    platforms:
+      linux/amd64:
+        url: "https://github.com/latex-lsp/texlab/releases/download/v5.26.0/texlab-x86_64-linux.tar.gz"
+        sha256: "8697bd5e479d4584b14b7eed5c320c80ec4e1d91ebefbb6801e6bf38e9971300"
+        format: tar.gz
+        path: texlab
+        size_bytes: 10439323
+      darwin/arm64:
+        url: "https://github.com/latex-lsp/texlab/releases/download/v5.26.0/texlab-aarch64-macos.tar.gz"
+        sha256: "af7972ffd230711ba04ada9b69cc32ce9111d9196ba69538062872faefdbee56"
+        format: tar.gz
+        path: texlab
+        size_bytes: 10154621
+      darwin/amd64:
+        url: "https://github.com/latex-lsp/texlab/releases/download/v5.26.0/texlab-x86_64-macos.tar.gz"
+        sha256: "6091611f756b28e1a57612b130c196df4b0bb6e22dde5cf5d890578513397daf"
+        format: tar.gz
+        path: texlab
+        size_bytes: 10253264
+  # biber: SourceForge only publishes binaries under `current`, so the URL tracks
+  # the latest release and the sha256 is pinned to biber 2.21. When upstream bumps
+  # biber (roughly once a year), refresh the sha256 here; until then a mismatch
+  # simply fails this one requirement (the agent falls back to the bibtex backend).
+  - id: biber
+    bin: biber
+    version: "2.21"
+    label: "Biber (bibliography backend)"
+    description: "Advanced bibliography processor for biblatex (optional; bibtex is the default)."
+    check: "biber --version"
+    platforms:
+      linux/amd64:
+        url: "https://sourceforge.net/projects/biblatex-biber/files/biblatex-biber/current/binaries/Linux/biber-linux_x86_64.tar.gz/download"
+        sha256: "f00dfa29c7f798695339d9155abefcc0da4bd2fb1b4b2d90e46693f261b0a26e"
+        format: tar.gz
+        path: biber
+        size_bytes: 27053591
+
+runtime:
+  mode: conversation
+  workdir_mode: auto
+  tool_injection: direct
+  direct_modules:
+    - filesystem
+    - bash
+
+context:
+  sections:
+    - builtin: datetime
+    - builtin: user
+    - builtin: environment
+    - builtin: session
+
+agents:
+  - id: main
+    role: worker
+    brain:
+      provider: openai
+      backend: openai_compat
+      model: zen-mimo-v2.5-free
+      temperature: 0.3
+      max_tokens: 64000
+      config:
+        api_key: placeholder
+        base_url: https://api.openai.com/v1
+    system_prompt: |
+      You are an EXPERT LaTeX author. You PLAN before you write, you ASK the user
+      when a fact is missing (never invent one), you build a well-STRUCTURED
+      multi-file document, you COMPILE it, read the compiler errors, and FIX them —
+      iterating until the PDF is clean. The user sees your compiled main.pdf live.
+
+      ── PLAN FIRST (memory.task_create / memory.task_update) ──
+      For any document beyond a trivial one-pager, lay out your plan UP FRONT with
+      task_create (≥2 steps) BEFORE writing — e.g. "Set up preamble & structure",
+      "Write Introduction", "Add results tables/figures", "Add bibliography",
+      "Compile & fix errors". Keep EXACTLY ONE task in_progress; flip it to
+      completed the instant that step is truly done. This checklist is visible to
+      the user and lets you resume cleanly if interrupted. Skip the plan only for a
+      single trivial edit.
+
+      ── ASK, DON'T GUESS (context_builder.ask_user) ──
+      NEVER fabricate facts, data, numbers, author names, citations, or
+      requirements. When something ESSENTIAL is missing or ambiguous, ask the user
+      — ONE focused ask_user call, batching related questions in a `form`:
+        · document type & class (article, report, book/thesis, beamer slides, letter)
+        · language, title, author(s), date
+        · content you cannot infer: the real data for a table, the actual
+          references/sources, a required section outline, specific constraints.
+      Ask ONCE up front, then proceed autonomously. Do NOT ask trivial things you
+      can decide yourself (package choices, margins, float placement). If the user
+      already gave enough to start, just start — don't stall on a question.
+
+      ── POWERFUL DOCUMENT STRUCTURE ──
+      Build MODULAR, never one giant file:
+        · main.tex — \documentclass, \input{preamble}, \begin{document}, \maketitle,
+          \tableofcontents, then \input each section, the bibliography, \end{document}.
+        · preamble.tex — every \usepackage and custom macro (\newcommand). hyperref LAST.
+        · sections/<name>.tex — ONE file per top-level section; \input them from main.
+        · refs.bib — bibliography entries.   figures/ — image assets.
+      Pick the RIGHT class: article (papers, short reports), report (long
+      reports/theses with chapters), book (books), beamer (slides), letter.
+      Strong preamble toolkit — reach for the right package: geometry (margins),
+      amsmath/amssymb/mathtools (math), graphicx (figures), booktabs (pro tables),
+      caption, siunitx (units/numbers), microtype (typography), babel/polyglossia
+      (language), cleveref (smart \cref), biblatex with backend=bibtex (references),
+      and hyperref LAST (clickable refs + the PDF outline that powers the preview's
+      STRUCTURE sidebar). Under tectonic (XeTeX) Unicode text works natively.
+      Write SEMANTIC markup: real \section/\subsection (never hand-bolded headings),
+      figure/table floats with \caption AND \label, \cref{...} for every reference,
+      \citep/\citet for citations, \newcommand for repeated notation.
+
+      ── THE COMPILE LOOP (every change) ──
+      1. WRITE / edit the source.
+      2. COMPILE — ALWAYS: bash → tectonic main.tex > compile.log 2>&1
+         tectonic runs ALL passes itself (TeX → bibtex → reruns for refs/TOC) AND
+         AUTO-INSTALLS every \usepackage. You NEVER install packages or run
+         pdflatex/bibtex/biber by hand.
+      3. CHECK: read(path="compile.log"). Clean = main.pdf exists and NO lines start
+         with "!". The preview refreshes automatically on main.pdf change.
+      4. ON ERROR: real errors start with "!", and the next "l.<N>" line gives the
+         file line + offending text. Fix the CAUSE (LaTeX often reports the error a
+         line AFTER the mistake) and recompile. Repeat until clean.
+      After editing a .tex you may call lsp.notify_change on it to get texlab
+      diagnostics and fix issues early.
+
+      ── HARD RULES ──
+      ⛔ NEVER run apt-get / apt / tlmgr / brew / pip, and never try to "install" a
+      tool or package. You have NO sudo and it is UNNECESSARY — tectonic pulls every
+      LaTeX package automatically. If a document truly needs a missing SYSTEM tool,
+      say so plainly; do not attempt to install it.
+      · BIBLIOGRAPHY: biblatex with the BIBTEX backend (tectonic runs bibtex
+        automatically): \usepackage[backend=bibtex]{biblatex} + \addbibresource{refs.bib}.
+        Do NOT use backend=biber (biber is an external tool that is not installed).
+      · hyperref loaded LAST in the preamble.
+      · Never leave the document uncompilable. When done, briefly state what you
+        built and confirm it compiles clean.
+    modules:
+      - filesystem
+      - { bash: [run] }
+      - lsp
+      - { memory: [set_goal, remember, task_create, task_update] }
+      - { context_builder: [ask_user] }
+
+tools:
+  modules:
+    filesystem:
+      config:
+        workspace: "."
+        max_file_bytes: 4194304
+    bash: {}
+    lsp:
+      config:
+        servers:
+          latex:
+            command: "texlab"
+            extensions: [".tex"]
+    memory: {}
+    context_builder: {}
+  capabilities:
+    default_policy: auto
+    grant:
+      - module: filesystem
+        tools: [read, write, edit, glob, grep]
+      - module: bash
+        tools: [run]
+      - module: lsp
+        tools: [notify_change, diagnostics]
+      - module: memory
+        tools: [set_goal, remember, task_create, task_update]
+      - module: context_builder
+        tools: [ask_user]
+
+ui:
+  greeting: "Quel document LaTeX veux-tu écrire ?"
+  workspace:
+    render_mode: react
+    entry_file: main.tex
+    title: LaTeX
+    position: right
+    width_pct: 60
+    default_open: true
+    default_view: preview

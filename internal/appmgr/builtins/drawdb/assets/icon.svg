@@ -1,0 +1,8 @@
+<svg viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+  <defs><linearGradient id="g_drawdb" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#92b3f4"/><stop offset="1" stop-color="#466dba"/></linearGradient></defs>
+  <g transform="translate(16,16) scale(4)" fill="none" stroke="url(#g_drawdb)" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <ellipse cx="12" cy="5" rx="9" ry="3" />
+    <path d="M3 5V19A9 3 0 0 0 21 19V5" />
+    <path d="M3 12A9 3 0 0 0 21 12" />
+  </g>
+</svg>

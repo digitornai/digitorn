@@ -91,6 +91,8 @@ type Voice struct {
 type Apps struct {
 	Root string  `koanf:"root"`
 	Hub  AppsHub `koanf:"hub"`
+	// Channel: "server" on the prod daemon seeds+re-installs server-channel builtins.
+	Channel string `koanf:"channel"`
 }
 
 // AppsHub configures the digitorn app marketplace HTTP client. The hub

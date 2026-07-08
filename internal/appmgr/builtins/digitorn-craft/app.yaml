@@ -4,7 +4,7 @@ app:
   short_name: Craft
   version: 0.1.0
   description: "Build React + Vite apps from a single prompt. Pick a starter template or describe what you want — the AI writes the code, installs deps, and ships a production build."
-  icon: "🧱"
+  icon: ""
   color: "#14B8A6"
   category: development
   tags: [ai, builder, react, no-code]

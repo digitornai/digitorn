@@ -1,0 +1,11 @@
+<svg viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+  <defs><linearGradient id="g_digitorn_deepresearch" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#79bbe7"/><stop offset="1" stop-color="#2876aa"/></linearGradient></defs>
+  <g transform="translate(16,16) scale(4)" fill="none" stroke="url(#g_digitorn_deepresearch)" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M6 18h8" />
+    <path d="M3 22h18" />
+    <path d="M14 22a7 7 0 1 0 0-14h-1" />
+    <path d="M9 14h2" />
+    <path d="M9 12a2 2 0 0 1-2-2V6h6v4a2 2 0 0 1-2 2Z" />
+    <path d="M12 6V3a1 1 0 0 0-1-1H9a1 1 0 0 0-1 1v3" />
+  </g>
+</svg>

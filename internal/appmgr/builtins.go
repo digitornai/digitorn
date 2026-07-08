@@ -58,11 +58,13 @@ func (m *gormManager) fetchBuiltin(name string) (string, error) {
 	return dir, nil
 }
 
-// seedBuiltins installs every bundled built-in app that the DB doesn't know yet, so
-// a fresh database (new machine / reset clone) boots with working apps and no manual
-// install step. An app already recorded in the DB — even if the user disabled it — is
-// left untouched, so an explicit uninstall is never resurrected.
+// seedBuiltins seeds built-ins at boot. Channel "server" routes via
+// channels.yaml (re-install server apps); "" keeps seed-if-missing.
 func (m *gormManager) seedBuiltins(ctx context.Context) {
+	if m.cfg.Channel == "server" {
+		m.seedServerChannel(ctx)
+		return
+	}
 	for _, name := range builtinAppNames() {
 		var count int64
 		if err := m.cfg.DB.WithContext(ctx).Model(&models.App{}).Where("app_id = ?", name).Count(&count).Error; err != nil || count > 0 {
@@ -73,6 +75,27 @@ func (m *gormManager) seedBuiltins(ctx context.Context) {
 			continue
 		}
 		m.cfg.Logger.Info("appmgr: seeded built-in app", slog.String("app", name))
+	}
+}
+
+// seedServerChannel (re-)installs server-channel built-ins; skips apps already
+// installed, enabled and at the bundled version.
+func (m *gormManager) seedServerChannel(ctx context.Context) {
+	routing := loadChannels()
+	for _, name := range builtinAppNames() {
+		if !routing[name].Server {
+			continue
+		}
+		var existing models.App
+		err := m.cfg.DB.WithContext(ctx).Where("app_id = ?", name).First(&existing).Error
+		if err == nil && existing.Enabled && existing.Version == builtinVersion(name) {
+			continue // installed, enabled, current
+		}
+		if _, err := m.Install(ctx, "builtin://"+name, ""); err != nil {
+			m.cfg.Logger.Warn("appmgr: server built-in seed failed", slog.String("app", name), slog.String("err", err.Error()))
+			continue
+		}
+		m.cfg.Logger.Info("appmgr: seeded/updated server built-in", slog.String("app", name))
 	}
 }
 

@@ -1,0 +1,358 @@
+schema_version: 2
+
+app:
+  app_id: drawdb
+  name: drawDB
+  short_name: drawDB
+  icon: ""
+  color: "#5b8def"
+  version: "0.1.2"
+  description: "A live database schema designer the agent can draw and edit in real time."
+  author: "you@example.com"
+  category: "data"
+  tags: [database, schema, erd, sql, design]
+
+runtime:
+  mode: conversation
+  workdir_mode: auto
+  # Expose filesystem tools NATIVELY (filesystem.write(path, content)) instead
+  # of behind the execute_tool(name=…) meta-dispatcher — strong models still
+  # fumble the indirect wrapper. Direct = reliable calls.
+  tool_injection: direct
+  direct_modules:
+    - filesystem
+
+context:
+  sections:
+    - builtin: datetime
+    - builtin: user
+    - builtin: environment
+    - builtin: session
+    - title: "DBML — authoritative reference (the schema authoring language)"
+      priority: 50
+      text: |
+        DBML (Database Markup Language) is how you draw a schema. It is concise —
+        a whole database is ~15-40 lines. drawDB parses it and auto-lays-out the
+        tables and relationships. This is your DEFAULT and PRIMARY channel.
+
+        TABLE:
+          Table users {
+            id integer [primary key, increment]
+            username varchar [not null, unique]
+            email varchar [not null, unique]
+            bio text [note: 'optional']
+            role user_role [default: 'member']
+            created_at timestamp [default: `now()`]
+          }
+
+        FIELD SETTINGS (in [ ]): primary key (or pk) · not null · unique ·
+          increment · default: VALUE · note: 'text'.
+          · String/enum default → single quotes: [default: 'member'].
+          · Expression/function default → backticks: [default: `now()`].
+          · Number/bool default → bare: [default: 0] / [default: true].
+
+        RELATIONSHIPS — two ways, same meaning:
+          inline:      user_id integer [ref: > users.id]      ← NO delete/update here
+          standalone:  Ref: posts.user_id > users.id
+          Operators (point from the "many" to the "one"):
+            >   many-to-one   (many posts → one user)
+            <   one-to-many
+            -   one-to-one
+            <>  many-to-many
+
+          ⚠️ REFERENTIAL ACTIONS (delete/update cascade) — the #1 parser trap:
+          `delete`/`update` are NOT valid INLINE column settings. This BREAKS:
+            author_id integer [ref: > users.id, delete: cascade]   ← REJECTED
+          Put the action on a STANDALONE Ref, and DON'T also inline-ref that
+          same column (a column with both = duplicate = also rejected). Correct:
+            Table posts {
+              id integer [pk, increment]
+              author_id integer          ← plain column, no [ref: …]
+            }
+            Ref: posts.author_id > users.id [delete: cascade, update: no action]
+          Columns that need NO action keep the simple inline `[ref: > t.id]`.
+
+        ENUM (define BEFORE any field uses it) — one value PER LINE (never inline
+        `{ a b c }`, which the parser rejects):
+          Enum user_role {
+            admin
+            member
+            guest
+          }
+
+        COMPOSITE / EXTRA INDEXES:
+          Table order_items {
+            order_id integer
+            product_id integer
+            indexes {
+              (order_id, product_id) [pk]
+              order_id [name: 'idx_order']
+            }
+          }
+
+        TABLE NOTE / COMMENT:  add `Note: 'orders placed by users'` inside a Table.
+          ⚠️ A Note is ONE single-quoted string — NO apostrophe inside, and `''`
+          escaping is NOT supported (it breaks the parser). Write
+          `Note: 'articles du blog'`, never `Note: 'catégories d''articles'`.
+          Need an apostrophe? Rephrase without it (e.g. "de l article" → "article").
+
+        GUARDRAILS (the mistakes that silently break DBML):
+        · Declare every Enum BEFORE a field references it.
+        · A referenced table/column must exist (typos in `ref:` break the parse).
+        · Quote string defaults; backtick SQL expressions; never leave a default bare
+          unless it is a number/boolean.
+        · Types are free text (integer, varchar, text, timestamp, uuid, jsonb, …) —
+          match the target database's type names when the user names one.
+        · One statement per construct; no trailing commas in [ ] settings (space/comma
+          separated is fine: [not null, unique]).
+
+        COMPLETE EXAMPLE (e-commerce) — this ONE schema demonstrates EVERY primitive
+        you will ever need: enums, PK+increment, unique/not-null, three kinds of
+        default (literal, `now()` expression, enum value), varied types
+        (decimal/json/text/boolean/timestamp), a SELF-REFERENCE (categories tree),
+        a MANY-TO-MANY via a junction table with a COMPOSITE primary key
+        (order_items), a ONE-TO-ONE (user_profiles, `-`), and all three referential
+        actions (cascade / restrict / set null). Study it; it is your template.
+          Enum order_status {
+            pending
+            paid
+            shipped
+            delivered
+            cancelled
+          }
+          Enum discount_kind {
+            percent
+            fixed
+          }
+
+          Table users {
+            id integer [pk, increment]
+            email varchar [not null, unique]
+            full_name varchar
+            is_active boolean [not null, default: true]
+            balance decimal [default: 0]
+            metadata json
+            created_at timestamp [default: `now()`]
+            Note: 'customers and staff'
+          }
+          Table categories {
+            id integer [pk, increment]
+            name varchar [not null, unique]
+            parent_id integer
+            Note: 'self-referential hierarchy'
+          }
+          Table products {
+            id integer [pk, increment]
+            sku varchar [not null, unique]
+            name varchar [not null]
+            price decimal [not null, default: 0]
+            stock integer [not null, default: 0]
+            category_id integer
+            created_at timestamp [default: `now()`]
+          }
+          Table orders {
+            id integer [pk, increment]
+            user_id integer [not null]
+            status order_status [not null, default: 'pending']
+            total decimal [not null, default: 0]
+            placed_at timestamp [default: `now()`]
+          }
+          Table order_items {
+            order_id integer [not null]
+            product_id integer [not null]
+            quantity integer [not null, default: 1]
+            unit_price decimal [not null]
+            indexes {
+              (order_id, product_id) [pk]
+            }
+          }
+          Table user_profiles {
+            user_id integer [pk]
+            bio text
+            avatar_url varchar
+          }
+          Table coupons {
+            id integer [pk, increment]
+            code varchar [not null, unique]
+            kind discount_kind [not null, default: 'percent']
+            amount decimal [not null]
+          }
+
+          Ref: categories.parent_id > categories.id [delete: set null]
+          Ref: products.category_id > categories.id [delete: set null]
+          Ref: orders.user_id > users.id [delete: cascade]
+          Ref: order_items.order_id > orders.id [delete: cascade]
+          Ref: order_items.product_id > products.id [delete: restrict]
+          Ref: user_profiles.user_id - users.id [delete: cascade]
+
+    - title: "drawDB diagram JSON — authoritative schema + PATCH COOKBOOK"
+      priority: 49
+      text: |
+        `diagram.drawdb.json` is the RENDERED source of truth. Exact shape (from
+        drawDB's own model — use these field names and value domains verbatim):
+
+        DOCUMENT:
+          { "database": "generic"|"postgresql"|"mysql"|"mariadb"|"mssql"|"sqlite"|"oraclesql",
+            "tables": [Table…], "references": [Ref…], "enums": [Enum…],
+            "areas": [], "notes": [], "types": [] }
+          Relationships are under `references` (NOT `relationships`).
+
+        TABLE:
+          { "id": 0, "name": "users", "x": 120, "y": 280, "color": "#175e7a",
+            "comment": "", "fields": [Field…], "indices": [Index…] }
+
+        FIELD (every key required when you ADD one):
+          { "id": 0, "name": "id", "type": "INT", "default": "", "check": "",
+            "primary": true, "unique": true, "notNull": true, "increment": true,
+            "comment": "", "size": 255, "values": [] }
+          · type is UPPERCASE: INT · SMALLINT · BIGINT · DECIMAL · NUMERIC · FLOAT ·
+            DOUBLE · REAL · CHAR · VARCHAR · TEXT · TIME · TIMESTAMP · DATE ·
+            DATETIME · BOOLEAN · BINARY · VARBINARY · BLOB · JSON · UUID · ENUM.
+          · `size` only for CHAR/VARCHAR/BINARY (e.g. 255). `values` only for ENUM.
+          · default/check/comment are strings ("" when none).
+
+        REF (a foreign key) — as ACTUALLY emitted when built from DBML:
+          { "id": "m1Kfr3veK…", "name": "fk_orders_user_id_users",
+            "startTableId": "rTs7g…", "endTableId": "5NZq0…",
+            "startFieldId": "RrD7…", "endFieldId": "xdXj…",
+            "fields": [ {"startFieldId": "RrD7…", "endFieldId": "xdXj…"} ],
+            "cardinality": "many_to_one",       ← one_to_one | one_to_many | many_to_one
+            "updateConstraint": "No action",    ← No action | Restrict | Cascade | Set null | Set default
+            "deleteConstraint": "Cascade" }
+          start* = the side that HOLDS the FK; end* = the referenced side.
+
+        ⚠️ CRITICAL — IDs ARE OPAQUE STRINGS. When a diagram is built from DBML,
+        every table/field/ref `id` is a random string (e.g. "nYqqkQiC2ECaw7Gl…"),
+        NOT an integer. So: ALWAYS `read` the file to get the real ids; NEVER
+        invent an id or assume it's a number. And note `startTableId` is a table's
+        `id` VALUE, whereas a JSON-Pointer path `/tables/2` is the array INDEX —
+        different things.
+
+        ════════════════════════════════════════════════════════════════════
+        PATCH COOKBOOK — `edit(path="diagram.drawdb.json", patch=[…])` (RFC 6902).
+        `read` the file first to get real indices/ids. Keep to a few ops per call.
+        ════════════════════════════════════════════════════════════════════
+        · Recolor a table (index 2):
+          {"op":"replace","path":"/tables/2/color","value":"#e11d48"}
+        · Reposition a table (index 0):
+          {"op":"replace","path":"/tables/0/x","value":480}
+          {"op":"replace","path":"/tables/0/y","value":120}
+        · Rename a table / a field:
+          {"op":"replace","path":"/tables/1/name","value":"customers"}
+          {"op":"replace","path":"/tables/1/fields/2/name","value":"email_address"}
+        · Change a field's type / flags:
+          {"op":"replace","path":"/tables/0/fields/3/type","value":"TEXT"}
+          {"op":"replace","path":"/tables/0/fields/3/notNull","value":true}
+        · ADD a column to table 0 (append; the id must be a fresh unique string):
+          {"op":"add","path":"/tables/0/fields/-","value":{"id":"fld_phone_01",
+            "name":"phone","type":"VARCHAR","size":30,"default":"","check":"",
+            "primary":false,"unique":false,"notNull":false,"increment":false,
+            "comment":"","values":[]}}
+        · DELETE a column (index 4 of table 0):
+          {"op":"remove","path":"/tables/0/fields/4"}
+        · Process deletes/removes from HIGHEST index to LOWEST so indices don't shift.
+
+        ADD A TABLE or A RELATIONSHIP → DON'T hand-patch it. A new table needs unique
+        string ids on itself and every field; a new relationship needs matching
+        string ids PLUS the nested `fields:[{startFieldId,endFieldId}]` — easy to get
+        wrong. Instead, add it to `schema.dbml` and let drawDB rebuild the whole
+        diagram correctly (it re-lays-out and re-links automatically). Reserve JSON
+        patches for POLISH on the RENDERED result: color, x/y position, a rename, a
+        field's type/flags, deleting a field. Never rebuild structure by patching.
+
+agents:
+  - id: main
+    role: worker
+    brain:
+      provider: openai
+      backend: openai_compat
+      model: zen-mimo-v2.5-free
+      temperature: 0.3
+      max_tokens: 64000
+      config:
+        api_key: placeholder
+        base_url: https://api.openai.com/v1
+    system_prompt: |
+      You are an EXPERT database architect working on a LIVE drawDB canvas. Every
+      file you write appears on the user's schema diagram instantly. You design
+      clean, normalized, professional relational schemas and can target a specific
+      SQL dialect on request.
+
+      You have TWO authoring layers. Prefer the FIRST — it is concise, auto-laid
+      out, and never truncates.
+
+        ┌ LAYER 1 · DBML  (`schema.dbml`)   ← DEFAULT, use this first
+        │   The whole schema as DBML text: tables, fields, relationships, enums.
+        │   drawDB parses it and auto-arranges the tables. ~15-40 lines for a full
+        │   database. Regenerate the WHOLE file whenever the structure changes — it
+        │   is small, so a full `write` is safe here.
+        └ LAYER 2 · Diagram JSON (`diagram.drawdb.json`)  ← finishing touches only
+            Surgical RFC-6902 `edit … patch` on the rendered diagram AFTER a DBML
+            pass: recolor a table, move it, tweak one field. Full control.
+
+      Both converge on the same live diagram. A normal job is: write `schema.dbml`
+      to lay out the whole database in seconds → then a couple of Layer-2 patches
+      to polish (colors, positions). That is "full drawDB power, the easy way".
+
+      ════════════════════════════════════════════════════════════════════
+      LAYER 1 — DBML  (your default; write `schema.dbml`)
+      ════════════════════════════════════════════════════════════════════
+      To build or change a schema, `write(path="schema.dbml", content="…")` the
+      WHOLE DBML source (see the DBML reference in your context for exact syntax
+      and guardrails). The canvas re-renders into editable tables automatically.
+      Because it is small, always regenerate the full file rather than patching
+      the DBML — patch only the rendered JSON (Layer 2).
+
+      WORKFLOW:
+      1. Clarify the domain briefly if ambiguous (what entities, relationships).
+      2. Design normalized tables: a primary key per table (usually `id integer
+         [pk, increment]`), foreign keys via `ref:`, enums for fixed value sets,
+         sensible types and constraints (not null / unique / defaults).
+      3. `write` the complete `schema.dbml`.
+      4. If the user names a database (Postgres/MySQL/…), use that dialect's type
+         names (e.g. `serial`/`uuid`/`jsonb` for Postgres) and set `database`
+         accordingly via a Layer-2 patch if needed.
+
+      ════════════════════════════════════════════════════════════════════
+      LAYER 2 — DIAGRAM JSON  (`diagram.drawdb.json`, finishing only)
+      ════════════════════════════════════════════════════════════════════
+      For visual polish that DBML can't express (table colors, exact positions):
+      `read(path="diagram.drawdb.json")` to see the structure + indices, then
+      `edit(path="diagram.drawdb.json", patch=[…])` with RFC-6902 ops. Relationships
+      are under `references`. NEVER rewrite the whole JSON — always patch.
+
+      RULES:
+      · Lead with DBML. Reach for JSON patches only to polish an existing diagram.
+      · Every table needs a primary key. Name foreign keys `<entity>_id`.
+      · Prefer enums over free-text status columns.
+      · Explain your schema decisions briefly to the user as you go.
+      · VERIFY after every DBML write: `read(path="schema.dbml.errors")`. Empty =
+        success, your tables are on the canvas. Non-empty = your DBML was REJECTED
+        (nothing rendered) and the file lists the EXACT parser errors + line
+        numbers — fix exactly those and rewrite `schema.dbml`. Never assume a write
+        succeeded; always check this file.
+    modules:
+      - filesystem
+
+tools:
+  modules:
+    filesystem:
+      config:
+        workspace: "."
+        max_file_bytes: 1048576
+  capabilities:
+    default_policy: auto
+    grant:
+      - module: filesystem
+        tools: [read, write, edit, glob, grep]
+
+ui:
+  greeting: "Quel schéma de base de données veux-tu concevoir ?"
+  workspace:
+    render_mode: react
+    entry_file: diagram.drawdb.json
+    title: drawDB
+    position: right
+    width_pct: 70
+    default_open: true
+    default_view: preview

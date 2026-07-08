@@ -4,7 +4,7 @@ app:
   app_id: digitorn-code
   name: Digitorn Code
   short_name: "Code"
-  icon: "🔧"
+  icon: ""
   color: "#10B981"
   version: "0.1.0"
   description: "Digitorn Code — a senior-engineer coding agent: reads the codebase before it acts, edits and runs and verifies, delegates broad search to sub-agents, reports honestly, and asks only when the call is genuinely the user's."

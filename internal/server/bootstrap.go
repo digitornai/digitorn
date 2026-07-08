@@ -252,6 +252,7 @@ func Build(cfg *config.Config) (*Daemon, error) {
 		Root:     appRoot,
 		Compiler: appCompiler,
 		Logger:   logger,
+		Channel:  cfg.Apps.Channel,
 		Hub: appmgr.HubConfig{
 			URL:             cfg.Apps.Hub.URL,
 			Timeout:         cfg.Apps.Hub.Timeout,

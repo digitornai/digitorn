@@ -144,6 +144,7 @@ type Config struct {
 	Hub      HubConfig          // hub client settings
 	Compiler *compiler.Compiler // compiler instance (must be configured with manifest sources)
 	Logger   *slog.Logger
+	Channel  string // "server" → route builtins via channels.yaml; "" → seed-if-missing
 }
 
 // HubConfig is what Manager needs from config.Apps.Hub.

@@ -1,0 +1,25 @@
+# server = auto-installé sur le daemon prod (apps.channel: server) ; hub = marketplace clients.
+# Non listé = server:false. Sources dans builtins/<app_id>/.
+
+apps:
+  # — fondations —
+  chat:                  { server: true,  hub: true  }
+  digitorn-code:         { server: true,  hub: true  }
+  digitorn-craft:        { server: true,  hub: true  }
+  support-desk:          { server: true,  hub: false }   # Digitorn Support Desk (B2B)
+
+  # — retirée du seed (ex-builtin) —
+  ops-alert:             { server: false, hub: false }
+
+  # — produits (Phase 2 : sources à rapatrier du serveur) —
+  digitorn-deepresearch: { server: true,  hub: true  }
+  notes-lm:              { server: true,  hub: true  }
+  digitorn-scribe:       { server: true,  hub: true  }
+  # digitorn-lovable:      { server: true,  hub: true  }
+
+  # — outils (rapatriés du local) —
+  latex:                 { server: true,  hub: true  }
+  drawdb:                { server: true,  hub: true  }
+  excalidraw:            { server: true,  hub: true  }
+  univer:                { server: true,  hub: true  }
+  # glpi-desk:             { server: true,  hub: true  }  # source à rapatrier
