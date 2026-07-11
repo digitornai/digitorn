@@ -78,9 +78,9 @@ type Daemon struct {
 	sessionPaths    sessionstore.Paths
 	envelopeBuilder *sessionstore.EnvelopeBuilder
 	bridge          *SocketIOBridge
-	workspaceLive   *workspaceLive    // debounced workspace-change notifier (also reused by the REST file save)
-	blobStore       *blobstore.Store  // content-addressed attachment store (multimodal in + out)
-	officeConverter *officeConverter  // bounded, off-path LibreOffice pptx/docx/xlsx → PDF preview
+	workspaceLive   *workspaceLive   // debounced workspace-change notifier (also reused by the REST file save)
+	blobStore       *blobstore.Store // content-addressed attachment store (multimodal in + out)
+	officeConverter *officeConverter // bounded, off-path LibreOffice pptx/docx/xlsx → PDF preview
 
 	jwks          *JWKS
 	jwtVerifier   *JWTVerifier
@@ -124,6 +124,10 @@ type Daemon struct {
 
 	secretsOnce sync.Once
 	secrets     *secretStore
+
+	// modelDefaults stores per-user per-app per-agent default models, applied
+	// to new sessions at creation (in-session switching still overrides).
+	modelDefaults *modelDefaultsStore
 
 	previewSecret     []byte // process-wide HMAC key for iframe-loadable preview tokens
 	previewSecretOnce sync.Once
@@ -321,6 +325,7 @@ func Build(cfg *config.Config) (*Daemon, error) {
 		credResolver:    credResolver,
 		moduleSettings:  moduleSettings,
 		secrets:         appSecrets,
+		modelDefaults:   newModelDefaultsStore(gdb),
 		mcpHub:          mcphub.NewClient(cfg.Apps.Hub.URL, cfg.Apps.Hub.Timeout, cfg.Apps.Hub.VerifySSL),
 	}
 	// Let the bridge resolve a session's window so a joining client gets the last
@@ -935,6 +940,11 @@ func (d *Daemon) Start(ctx context.Context) error {
 	d.startPiecesTokenRefresh(ctx)
 	d.startBackgroundSupervisor(ctx)
 	d.startVoiceSupervisor(ctx)
+	// Provision server-channel apps hosted on the hub (heavy web apps kept out
+	// of the binary) asynchronously — boot never waits on hub/network.
+	if d.appMgr != nil {
+		go d.appMgr.ReconcileHubApps(ctx)
+	}
 
 	// Start in-proc modules EXCEPT those served by a worker pool —
 	// their daemon-side instance stays dormant so we don't double-

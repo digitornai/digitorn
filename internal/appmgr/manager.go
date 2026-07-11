@@ -139,6 +139,11 @@ type Manager interface {
 	// bundle failed to load at boot (corrupt/incompatible app.dgc). Boot
 	// never blocks to recompile them — an admin recompiles via Reload.
 	BrokenApps() []BrokenApp
+
+	// ReconcileHubApps installs/updates the server-channel apps whose source is
+	// the hub (provision: hub). Meant to run in a background goroutine after
+	// boot — never blocks startup. Per-app failures are logged and skipped.
+	ReconcileHubApps(ctx context.Context)
 }
 
 // BrokenApp is an enabled app the daemon could not load at boot: its DB row

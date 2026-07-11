@@ -86,6 +86,11 @@ func (m *gormManager) seedServerChannel(ctx context.Context) {
 		if !routing[name].Server {
 			continue
 		}
+		// Hub-provisioned apps (heavy, web bundles kept out of the binary) are
+		// installed asynchronously from the hub after boot — never from embed.
+		if routing[name].Provision == "hub" {
+			continue
+		}
 		var existing models.App
 		err := m.cfg.DB.WithContext(ctx).Where("app_id = ?", name).First(&existing).Error
 		if err == nil && existing.Enabled && existing.Version == builtinVersion(name) {

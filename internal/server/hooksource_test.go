@@ -50,8 +50,9 @@ func (s *stubApps) GetApp(context.Context, string) (*appmgr.App, error) { panic(
 func (s *stubApps) GetManifest(context.Context, string) (*schema.AppDefinition, error) {
 	panic("not used")
 }
-func (s *stubApps) Bootstrap(context.Context) error { return nil }
-func (s *stubApps) BrokenApps() []appmgr.BrokenApp  { return nil }
+func (s *stubApps) Bootstrap(context.Context) error  { return nil }
+func (s *stubApps) BrokenApps() []appmgr.BrokenApp   { return nil }
+func (s *stubApps) ReconcileHubApps(context.Context) {}
 
 // =====================================================================
 // Helpers

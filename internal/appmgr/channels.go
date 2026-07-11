@@ -3,9 +3,26 @@ package appmgr
 import "gopkg.in/yaml.v3"
 
 // channelCfg routes a built-in to server (prod auto-install) and/or hub (marketplace).
+// Provision selects HOW a server-channel app is installed on a prod deployment:
+//   - "" | "builtin" : from the daemon's embedded source (light foundational apps)
+//   - "hub"          : fetched from the hub after boot (heavy apps with web bundles
+//     kept out of the binary). Provisioned asynchronously so boot never blocks.
 type channelCfg struct {
-	Server bool `yaml:"server"`
-	Hub    bool `yaml:"hub"`
+	Server    bool   `yaml:"server"`
+	Hub       bool   `yaml:"hub"`
+	Provision string `yaml:"provision"`
+}
+
+// hubProvisionedApps returns the server-channel app ids whose install source is
+// the hub (provision: hub) — the ones an async provisioner fetches post-boot.
+func hubProvisionedApps() []string {
+	var out []string
+	for name, c := range loadChannels() {
+		if c.Server && c.Provision == "hub" {
+			out = append(out, name)
+		}
+	}
+	return out
 }
 
 // loadChannels parses embedded builtins/channels.yaml; missing/invalid → empty map.

@@ -86,6 +86,7 @@ func (f *fakeAppMgr) CheckUpdate(context.Context, string, string) (*appmgr.Updat
 }
 func (f *fakeAppMgr) List(context.Context, bool) ([]appmgr.App, error)   { return nil, nil }
 func (f *fakeAppMgr) BrokenApps() []appmgr.BrokenApp                     { return nil }
+func (f *fakeAppMgr) ReconcileHubApps(context.Context)                   {}
 func (f *fakeAppMgr) ListDisabled(context.Context) ([]appmgr.App, error) { return nil, nil }
 func (f *fakeAppMgr) GetApp(context.Context, string) (*appmgr.App, error) {
 	return nil, nil
