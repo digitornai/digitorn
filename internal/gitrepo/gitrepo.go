@@ -26,12 +26,14 @@ import (
 
 	"github.com/go-git/go-billy/v5/osfs"
 	git "github.com/go-git/go-git/v5"
+	gitconfig "github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/cache"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/format/gitignore"
 	"github.com/go-git/go-git/v5/plumbing/format/index"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 	"github.com/go-git/go-git/v5/storage"
 	"github.com/go-git/go-git/v5/storage/filesystem"
 	udiff "github.com/go-git/go-git/v5/utils/diff"
@@ -915,4 +917,36 @@ func (r *Repo) hasStagedLocked() (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+// PushToRemote pushes HEAD to a GitHub repo over HTTPS with the user's OAuth
+// token (never persisted in git config).
+func (r *Repo) PushToRemote(remoteURL, token, branch string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if branch == "" {
+		branch = "main"
+	}
+	_ = r.repo.DeleteRemote("github")
+	if _, err := r.repo.CreateRemote(&gitconfig.RemoteConfig{
+		Name: "github",
+		URLs: []string{remoteURL},
+	}); err != nil {
+		return err
+	}
+	head, err := r.repo.Head()
+	if err != nil {
+		return err
+	}
+	spec := gitconfig.RefSpec(fmt.Sprintf("%s:refs/heads/%s", head.Name(), branch))
+	err = r.repo.Push(&git.PushOptions{
+		RemoteName: "github",
+		RefSpecs:   []gitconfig.RefSpec{spec},
+		Auth:       &githttp.BasicAuth{Username: "x-access-token", Password: token},
+		Force:      false,
+	})
+	if errors.Is(err, git.NoErrAlreadyUpToDate) {
+		return nil
+	}
+	return err
 }

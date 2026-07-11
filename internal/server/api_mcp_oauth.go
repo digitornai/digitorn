@@ -236,6 +236,30 @@ func (d *Daemon) mcpOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		writeOAuthHTML(w, http.StatusOK, "Authorization complete. You can close this window.")
 		return
 	}
+	// Workspace direct-provider OAuth (the GitHub button): started via
+	// AuthorizeForPiece with a sentinel app and its own client creds. There's no
+	// app MCP-server config for it, so exchange with the state's creds and store
+	// the token under the provider — githubToken/GetToken(user, provider) read it.
+	if p.AppID == githubWorkspaceAppID {
+		cfg := &schema.MCPAuthConfig{
+			Type:         "oauth2",
+			Provider:     p.Provider,
+			ClientID:     p.ClientID,
+			ClientSecret: p.ClientSecret,
+		}
+		tok, xerr := d.mcpOAuth.ExchangeForPiece(r.Context(), cfg, p, code)
+		if xerr != nil {
+			writeOAuthHTML(w, http.StatusBadGateway, "The provider rejected the authorization. Please try again.")
+			return
+		}
+		if serr := d.mcpOAuth.SetManual(r.Context(), p.UserID, p.Provider, tok); serr != nil {
+			writeOAuthHTML(w, http.StatusInternalServerError, "Could not store the connection. Please try again.")
+			return
+		}
+		recentOAuthCompletions.mark(state)
+		writeOAuthHTML(w, http.StatusOK, "Authorization complete. You can close this window.")
+		return
+	}
 	cfg, ok := d.mcpServerAuth(p.AppID, p.ServerID)
 	if !ok {
 		writeOAuthHTML(w, http.StatusBadRequest, "The server is no longer configured for OAuth.")

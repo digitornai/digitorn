@@ -141,6 +141,11 @@ func (d *Daemon) MountAPI() {
 				// snapshot + an explicit cancel control.
 				r.Get("/tasks", d.listBackgroundTasks)
 				r.Post("/tasks/{task_id}/cancel", d.cancelBackgroundTask)
+
+				// GitHub export : link the session workdir to a repo + push.
+				r.Get("/github/status", d.githubStatus)
+				r.Post("/github/link", d.githubLink)
+				r.Post("/github/push", d.githubPush)
 				r.Post("/resume", func(w http.ResponseWriter, r *http.Request) { notImplemented(w, "session.resume") })
 				r.Post("/undo", func(w http.ResponseWriter, r *http.Request) { notImplemented(w, "session.undo") })
 				r.Post("/fork", d.forkSession)
@@ -209,6 +214,9 @@ func (d *Daemon) MountAPI() {
 			r.Post("/{piece_name}/test", d.piecesTestAuth)
 			r.Post("/{piece_name}/oauth/start", d.piecesOAuthStart)
 		})
+
+		// GitHub account connection (workspace export).
+		r.Post("/api/github/oauth/start", d.githubOAuthStart)
 
 		// ----- MCP server management : discovery (Phase 1, daemon-level) -----
 		// Browse the static catalog + the official MCP registry and inspect what a
