@@ -36,16 +36,21 @@ func keepaliveTicker(ctx context.Context, stop <-chan struct{}) {
 
 // isLongRunningTool reports whether a tool legitimately runs long or blocks on
 // a human, and so must be EXEMPT from the per-call timeout (it has its own
-// bound). Matches on the action segment so it works for bare meta names
-// ("ask_user") and dotted FQNs ("context_builder.ask_user") alike, plus the
-// agent_spawn delegation module (which runs a whole sub-agent turn).
+// bound). Matches BOTH the canonical dotted FQN ("context_builder.ask_user",
+// "agent_spawn.agent") AND the sanitized wire form the LLM actually emits
+// ("context_builder__ask_user", "agent_spawn__agent" — sanitizeToolName maps
+// "." → "__"). Dotted-only matching left every exemption dead at dispatch:
+// Agent waits and ask_user prompts were killed by the per-tool timeout.
 func isLongRunningTool(name string) bool {
-	if strings.HasPrefix(name, "agent_spawn.") {
+	if strings.HasPrefix(name, "agent_spawn.") || strings.HasPrefix(name, "agent_spawn__") {
 		return true
 	}
 	action := name
 	if i := strings.LastIndexByte(action, '.'); i >= 0 {
 		action = action[i+1:]
+	}
+	if i := strings.LastIndex(action, "__"); i >= 0 {
+		action = action[i+2:]
 	}
 	switch action {
 	case "ask_user", "run_parallel", "use_skill", "call_app":

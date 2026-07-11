@@ -349,7 +349,7 @@ type Runtime struct {
 	// progress (an LLM round or tool batch completes), so a long-but-productive
 	// turn runs as long as it needs and only a genuinely STALLED turn (no
 	// progress for this whole window) is killed. Must exceed ToolTimeout so a
-	// single slow tool is never mistaken for a stall. Default 5m.
+	// single slow tool is never mistaken for a stall. Default 75m.
 	TurnIdleTimeout time.Duration `koanf:"turn_idle_timeout"`
 
 	// TurnPool 3-tier caps (RT-1). Defaults sized for a 32-core
@@ -497,8 +497,8 @@ func Defaults() Config {
 		Runtime: Runtime{
 			MaxTurns:                  200,
 			MaxConsecutiveFailures:    8,
-			ToolTimeout:               4 * time.Minute,
-			TurnIdleTimeout:           5 * time.Minute,
+			ToolTimeout:               60 * time.Minute,
+			TurnIdleTimeout:           75 * time.Minute,
 			ContextPressureThreshold:  0.75,
 			MaxConcurrentTurnsGlobal:  4096,
 			MaxConcurrentTurnsPerApp:  256,
