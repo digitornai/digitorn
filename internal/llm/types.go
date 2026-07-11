@@ -192,6 +192,9 @@ type ChatToolCallDelta struct {
 	ID        string `json:"id,omitempty"`
 	Name      string `json:"name,omitempty"`
 	ArgsChars int    `json:"args_chars,omitempty"`
+	// Args is THIS fragment's raw argument slice. The engine keeps a bounded
+	// prefix to surface the first useful param (file_path, command…) live.
+	Args string `json:"args,omitempty"`
 }
 
 // ArgsArrayKey is the sentinel key under which a tool's arguments are preserved

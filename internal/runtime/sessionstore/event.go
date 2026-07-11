@@ -431,6 +431,10 @@ type ToolPayload struct {
 	// while it streams (status="streaming"). Lets the client grow a counter so
 	// the user sees a long write progressing instead of a frozen UI.
 	LiveTokens int `json:"live_tokens,omitempty"`
+	// Detail is the first useful argument value (file_path, command, pattern…)
+	// extracted best-effort from the streaming args prefix, so the client can
+	// show "Write · src/App.tsx" while the arguments are still streaming.
+	Detail string `json:"detail,omitempty"`
 	// Output is the legacy text-only result. New code should fill Parts
 	// instead — it supports multi-format (text + image for screenshots,
 	// audio for TTS tools, etc.).

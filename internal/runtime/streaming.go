@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 	"time"
 
@@ -237,8 +238,46 @@ type liveToolCall struct {
 	id           string
 	name         string
 	argChars     int
-	emitted      bool // a streaming event was already sent for this call
-	emittedChars int  // argChars at the last emitted event (throttle baseline)
+	argsPrefix   string // first bytes of the args JSON (bounded) for detail extraction
+	detail       string // first useful param value, once extracted
+	detailSent   bool   // detail already carried by an emitted event
+	emitted      bool   // a streaming event was already sent for this call
+	emittedChars int    // argChars at the last emitted event (throttle baseline)
+}
+
+// streamDetailPrefixCap bounds the accumulated args prefix : the useful first
+// param (file_path, command…) sits in the opening bytes of the JSON.
+const streamDetailPrefixCap = 600
+
+// streamDetailKeys, in priority order, are the arg names worth surfacing live.
+var streamDetailKeys = []string{
+	"file_path", "path", "command", "pattern", "url", "query", "name",
+}
+
+var streamDetailRe = func() map[string]*regexp.Regexp {
+	m := make(map[string]*regexp.Regexp, len(streamDetailKeys))
+	for _, k := range streamDetailKeys {
+		m[k] = regexp.MustCompile(`"` + k + `"\s*:\s*"((?:[^"\\]|\\.)*)"`)
+	}
+	return m
+}()
+
+// extractStreamDetail pulls the first COMPLETE known-key string value out of a
+// partial JSON args prefix. Best-effort : returns "" until the value's closing
+// quote has streamed in.
+func extractStreamDetail(prefix string) string {
+	for _, k := range streamDetailKeys {
+		if m := streamDetailRe[k].FindStringSubmatch(prefix); m != nil && m[1] != "" {
+			s := m[1]
+			s = strings.ReplaceAll(s, `\\`, `\`)
+			s = strings.ReplaceAll(s, `\"`, `"`)
+			if len(s) > 200 {
+				s = s[:200]
+			}
+			return s
+		}
+	}
+	return ""
 }
 
 // streamToolEmitChars throttles the streaming tool events : after the first
@@ -277,6 +316,15 @@ func (e *Engine) emitToolCallStreamDeltas(
 			lt.name = d.Name
 		}
 		lt.argChars += d.ArgsChars
+		if lt.detail == "" && d.Args != "" && len(lt.argsPrefix) < streamDetailPrefixCap {
+			room := streamDetailPrefixCap - len(lt.argsPrefix)
+			if len(d.Args) > room {
+				lt.argsPrefix += d.Args[:room]
+			} else {
+				lt.argsPrefix += d.Args
+			}
+			lt.detail = extractStreamDetail(lt.argsPrefix)
+		}
 		if lt.id == "" || lt.name == "" {
 			// Wait for BOTH the stable id AND the tool name before the first
 			// frame : some providers send the id a fragment or two before the
@@ -285,13 +333,17 @@ func (e *Engine) emitToolCallStreamDeltas(
 			continue
 		}
 		// Throttle : emit on the FIRST frame (show the name now), then only once
-		// the args grew by streamToolEmitChars. Keeps the live counter moving
-		// without flooding the bus.
-		if lt.emitted && lt.argChars-lt.emittedChars < streamToolEmitChars {
+		// the args grew by streamToolEmitChars. A freshly-extracted detail
+		// bypasses the throttle so "Write · src/App.tsx" appears immediately.
+		freshDetail := lt.detail != "" && !lt.detailSent
+		if lt.emitted && !freshDetail && lt.argChars-lt.emittedChars < streamToolEmitChars {
 			continue
 		}
 		lt.emitted = true
 		lt.emittedChars = lt.argChars
+		if lt.detail != "" {
+			lt.detailSent = true
+		}
 		ev := sessionstore.Event{
 			Type:          sessionstore.EventToolCall,
 			SessionID:     in.SessionID,
@@ -307,6 +359,7 @@ func (e *Engine) emitToolCallStreamDeltas(
 				Name:       lt.name,
 				Status:     "streaming",
 				LiveTokens: (lt.argChars + 3) / 4,
+				Detail:     lt.detail,
 			},
 		}
 		if _, err := e.Sessions.AppendDurable(ctx, ev); err != nil && e.Logger != nil {

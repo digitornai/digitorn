@@ -255,6 +255,7 @@ func toolCallDeltaInfos(c *schemas.BifrostStreamChunk) []llm.ChatToolCallDelta {
 		info := llm.ChatToolCallDelta{
 			Index:     int(d.Index),
 			ArgsChars: len(d.Function.Arguments),
+			Args:      d.Function.Arguments,
 		}
 		if d.ID != nil {
 			info.ID = *d.ID
