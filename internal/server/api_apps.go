@@ -3,6 +3,8 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
+	"hash/fnv"
 	"mime"
 	"net/http"
 	"os"
@@ -10,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/go-chi/chi/v5"
 
@@ -327,6 +330,20 @@ func (d *Daemon) listApps(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"success": true, "data": apps, "apps": apps, "count": len(apps)})
 }
 
+// appsHealth handles GET /api/apps/health : the broken apps an admin must
+// recompile. Enabled DB row + unloadable bundle (corrupt/incompatible app.dgc)
+// — the daemon never blocks boot to fix these, it flags them here. Each entry
+// is repaired by POST /api/apps/{id}/reload (recompile from on-disk source).
+func (d *Daemon) appsHealth(w http.ResponseWriter, r *http.Request) {
+	broken := d.appMgr.BrokenApps()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"success": true,
+		"broken":  broken,
+		"count":   len(broken),
+		"healthy": len(broken) == 0,
+	})
+}
+
 // listDisabledApps handles GET /api/apps/disabled.
 func (d *Daemon) listDisabledApps(w http.ResponseWriter, r *http.Request) {
 	apps, err := d.appMgr.ListDisabled(r.Context())
@@ -363,13 +380,8 @@ func (d *Daemon) getManifest(w http.ResponseWriter, r *http.Request) {
 
 // ---------- Serving ----------
 
-// serveIcon handles GET /api/apps/{app_id}/icon. Three resolution
-// modes, in order :
-//  1. App.Icon ends with .png/.svg/.jpg/.jpeg/.gif/.webp/.ico → serve
-//     {bundle}/assets/{Icon} as a file
-//  2. App.Icon empty → serve {bundle}/assets/icon.* if present
-//  3. App.Icon is text/emoji → render an inline SVG with the text
-//     centered on a rounded square coloured by App.Color
+// serveIcon: App.Icon file ref → assets/{Icon} ; else assets/icon.* ; else the
+// generated brand tile. Always a real image — never an emoji, never a 404.
 func (d *Daemon) serveIcon(w http.ResponseWriter, r *http.Request) {
 	appID := chi.URLParam(r, "app_id")
 	app, err := d.appMgr.GetApp(r.Context(), appID)
@@ -379,30 +391,32 @@ func (d *Daemon) serveIcon(w http.ResponseWriter, r *http.Request) {
 	}
 	bundle := filepath.Join(d.cfg.Apps.Root, appID)
 
+	// no-cache + validators (304) : jamais d'icône périmée après un reload.
+	w.Header().Set("Cache-Control", "no-cache")
+
 	// Mode 1 : file reference with image extension.
 	if app.Icon != "" && isImageRef(app.Icon) {
 		serveBundleFile(w, r, bundle, filepath.Join(bundle, "assets", app.Icon))
 		return
 	}
-	// Mode 3 : text / emoji → render SVG.
-	if app.Icon != "" {
-		svg := renderTextIconSVG(app.Icon, app.Color)
-		w.Header().Set("Content-Type", "image/svg+xml; charset=utf-8")
-		w.Header().Set("Cache-Control", "public, max-age=3600")
-		_, _ = w.Write([]byte(svg))
-		return
-	}
-	// Mode 2 : empty Icon → fallback to assets/icon.*.
+	// Mode 2 : a shipped icon file wins over any declared emoji/text.
 	matches, _ := filepath.Glob(filepath.Join(bundle, "assets", "icon.*"))
 	if len(matches) > 0 {
 		serveBundleFile(w, r, bundle, matches[0])
 		return
 	}
-	// No image file shipped with the app. This 404 is the contract, not a
-	// failure : the client (which already holds the app's icon/colour metadata)
-	// falls back to the declared emoji or the name's initial. The daemon does
-	// not synthesise an image — presentation is the client's call.
-	writeError(w, http.StatusNotFound, "icon_not_found", "no icon file")
+	// Mode 3 : branded tile — never the raw emoji, never a 404.
+	svg := renderBrandTileSVG(appID, app.Name, app.Color)
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(svg))
+	etag := fmt.Sprintf("%q", strconv.FormatUint(h.Sum64(), 16))
+	if r.Header.Get("If-None-Match") == etag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	w.Header().Set("ETag", etag)
+	w.Header().Set("Content-Type", "image/svg+xml; charset=utf-8")
+	_, _ = w.Write([]byte(svg))
 }
 
 // isImageRef returns true if s has a file extension we recognize as
@@ -417,20 +431,98 @@ func isImageRef(s string) bool {
 	return false
 }
 
-// renderTextIconSVG produces a 64×64 SVG with `text` centered on a
-// rounded square coloured by `hexColor` (defaults to indigo when
-// empty). Used for emoji or short-text app icons. The SVG is built
-// by hand because the input length is tiny and we want to avoid
-// pulling in a templating engine for one string.
-func renderTextIconSVG(text, hexColor string) string {
-	fg := strings.TrimSpace(hexColor)
-	if fg == "" {
-		fg = "#6366F1"
+// Base colors picked deterministically by app id when the app declares none.
+var brandPalette = []string{
+	"#6366F1", "#8B5CF6", "#3B82F6", "#0EA5E9", "#10B981",
+	"#0FB5A6", "#F59E0B", "#EF4444", "#EC4899", "#5B8DEF",
+}
+
+// shadeHex shifts #RRGGBB toward white (f>0) or black (f<0).
+func shadeHex(hex string, f float64) string {
+	h := strings.TrimPrefix(strings.TrimSpace(hex), "#")
+	if len(h) != 6 {
+		return hex
 	}
-	return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">` +
-		`<text x="32" y="32" text-anchor="middle" dominant-baseline="central" ` +
-		`font-size="40" font-family="system-ui, -apple-system, &quot;Segoe UI&quot;, sans-serif" ` +
-		`fill="` + fg + `">` + escapeXMLContent(text) + `</text></svg>`
+	v, err := strconv.ParseUint(h, 16, 32)
+	if err != nil {
+		return hex
+	}
+	r, g, b := float64(v>>16&0xff), float64(v>>8&0xff), float64(v&0xff)
+	if f >= 0 {
+		r += (255 - r) * f
+		g += (255 - g) * f
+		b += (255 - b) * f
+	} else {
+		r *= 1 + f
+		g *= 1 + f
+		b *= 1 + f
+	}
+	cl := func(x float64) uint64 {
+		if x < 0 {
+			return 0
+		}
+		if x > 255 {
+			return 255
+		}
+		return uint64(x)
+	}
+	return fmt.Sprintf("#%02x%02x%02x", cl(r), cl(g), cl(b))
+}
+
+// brandMonogram: initials of the first two words ("Digitorn Code" → "DC").
+func brandMonogram(name string) string {
+	var out []rune
+	for _, w := range strings.Fields(name) {
+		for _, r := range w {
+			if unicode.IsLetter(r) || unicode.IsDigit(r) {
+				out = append(out, unicode.ToUpper(r))
+				break
+			}
+		}
+		if len(out) == 2 {
+			break
+		}
+	}
+	if len(out) == 0 {
+		return "?"
+	}
+	return string(out)
+}
+
+// renderBrandTileSVG: gradient tile + white monogram — the fallback icon when
+// an app ships no icon file. Emojis are never rendered.
+func renderBrandTileSVG(appID, name, hexColor string) string {
+	base := strings.TrimSpace(hexColor)
+	if len(strings.TrimPrefix(base, "#")) != 6 {
+		h := fnv.New32a()
+		_, _ = h.Write([]byte(appID))
+		base = brandPalette[h.Sum32()%uint32(len(brandPalette))]
+	}
+	mono := brandMonogram(name)
+	fontSize := "56"
+	if len([]rune(mono)) > 1 {
+		fontSize = "44"
+	}
+	uid := strings.NewReplacer("-", "", ".", "", "_", "").Replace(appID)
+	return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">` +
+		`<defs>` +
+		`<linearGradient id="bg` + uid + `" x1="0" y1="0" x2="0.5" y2="1">` +
+		`<stop offset="0" stop-color="` + shadeHex(base, 0.20) + `"/>` +
+		`<stop offset="1" stop-color="` + shadeHex(base, -0.34) + `"/>` +
+		`</linearGradient>` +
+		`<linearGradient id="gl` + uid + `" x1="0" y1="0" x2="0" y2="1">` +
+		`<stop offset="0" stop-color="#fff" stop-opacity="0.28"/>` +
+		`<stop offset="0.55" stop-color="#fff" stop-opacity="0"/>` +
+		`</linearGradient>` +
+		`</defs>` +
+		`<rect width="128" height="128" rx="30" fill="url(#bg` + uid + `)"/>` +
+		`<rect width="128" height="128" rx="30" fill="url(#gl` + uid + `)"/>` +
+		`<rect x="1" y="1" width="126" height="126" rx="29" fill="none" stroke="#fff" stroke-opacity="0.20" stroke-width="1.2"/>` +
+		`<text x="64" y="66" text-anchor="middle" dominant-baseline="central" ` +
+		`font-size="` + fontSize + `" font-weight="700" ` +
+		`font-family="system-ui, -apple-system, &quot;Segoe UI&quot;, sans-serif" ` +
+		`fill="#ffffff" fill-opacity="0.96">` + escapeXMLContent(mono) + `</text>` +
+		`</svg>`
 }
 
 // escapeXMLContent escapes the 5 characters that need escaping in XML
@@ -569,6 +661,8 @@ func appMgrErrStatus(err error) int {
 		return http.StatusNotFound
 	case errors.Is(err, appmgr.ErrAppDisabled):
 		return http.StatusForbidden
+	case errors.Is(err, appmgr.ErrIncompatible):
+		return http.StatusConflict
 	case errors.Is(err, appmgr.ErrSourceMissingYAML),
 		errors.Is(err, appmgr.ErrAppIDMismatch),
 		errors.Is(err, appmgr.ErrBadSource),

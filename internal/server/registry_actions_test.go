@@ -74,17 +74,18 @@ func (f *fakeAppMgr) Install(context.Context, string, string) (*appmgr.App, erro
 func (f *fakeAppMgr) Upgrade(context.Context, string, string, string) (*appmgr.App, error) {
 	return nil, nil
 }
-func (f *fakeAppMgr) Uninstall(context.Context, string, bool) error { return nil }
-func (f *fakeAppMgr) Enable(context.Context, string) error          { return nil }
-func (f *fakeAppMgr) Disable(context.Context, string) error         { return nil }
-func (f *fakeAppMgr) SetBYOK(context.Context, string, bool) error   { return nil }
+func (f *fakeAppMgr) Uninstall(context.Context, string, bool) error        { return nil }
+func (f *fakeAppMgr) Enable(context.Context, string) error                 { return nil }
+func (f *fakeAppMgr) Disable(context.Context, string) error                { return nil }
+func (f *fakeAppMgr) SetBYOK(context.Context, string, bool) error          { return nil }
 func (f *fakeAppMgr) SetAppPieces(context.Context, string, []string) error { return nil }
 func (f *fakeAppMgr) SetDisplayName(context.Context, string, string) error { return nil }
-func (f *fakeAppMgr) Reload(context.Context, string) error          { return nil }
+func (f *fakeAppMgr) Reload(context.Context, string) error                 { return nil }
 func (f *fakeAppMgr) CheckUpdate(context.Context, string, string) (*appmgr.UpdateInfo, error) {
 	return nil, nil
 }
 func (f *fakeAppMgr) List(context.Context, bool) ([]appmgr.App, error)   { return nil, nil }
+func (f *fakeAppMgr) BrokenApps() []appmgr.BrokenApp                     { return nil }
 func (f *fakeAppMgr) ListDisabled(context.Context) ([]appmgr.App, error) { return nil, nil }
 func (f *fakeAppMgr) GetApp(context.Context, string) (*appmgr.App, error) {
 	return nil, nil

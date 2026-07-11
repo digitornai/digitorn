@@ -673,3 +673,78 @@ func buildTarGz(t *testing.T, dir string) []byte {
 type writerAt struct{ b *strings.Builder }
 
 func (w *writerAt) Write(p []byte) (int, error) { return w.b.Write(p) }
+
+// TestBrokenApp_FlaggedNotBlocking : an enabled app whose app.dgc is corrupt is
+// NOT loaded (boot never blocks to recompile) but IS surfaced via BrokenApps so
+// an admin can Reload it. A successful Reload clears the broken flag.
+func TestBrokenApp_FlaggedNotBlocking(t *testing.T) {
+	m, root, gdb := newTestManager(t)
+	src := filepath.Join(t.TempDir(), "gamma")
+	writeMinimalApp(t, src, "gamma", nil)
+	if _, err := m.Install(context.Background(), src, ""); err != nil {
+		t.Fatal(err)
+	}
+	// Corrupt the compiled bundle on disk (truncate/garble → decode fails).
+	dgc := filepath.Join(root, "gamma", "app.dgc")
+	if err := os.WriteFile(dgc, []byte("DGTC-corrupt-\x00\x00"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Fresh manager over the same root+DB : boot must succeed and flag gamma.
+	c := compiler.New().WithSources(catalog.DirSource{Dir: repoManifestsDir(t)})
+	m2, err := appmgr.New(appmgr.Config{
+		DB: gdb, Root: root, Compiler: c, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Hub: appmgr.HubConfig{URL: "http://invalid", Timeout: 5 * time.Second, MaxArchiveBytes: 1 << 20},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m2.Bootstrap(context.Background()); err != nil {
+		t.Fatalf("Bootstrap must not fail on a broken app: %v", err)
+	}
+
+	broken := m2.BrokenApps()
+	if len(broken) != 1 || broken[0].AppID != "gamma" {
+		t.Fatalf("BrokenApps = %+v, want [gamma]", broken)
+	}
+	if broken[0].Reason == "" {
+		t.Error("broken app must carry a reason")
+	}
+	if _, err := m2.Get(context.Background(), "gamma"); err == nil {
+		t.Error("Get on a broken app should fail, not serve a corrupt bundle")
+	}
+
+	// Admin recompiles from the on-disk source → healthy, flag cleared.
+	if err := m2.Reload(context.Background(), "gamma"); err != nil {
+		t.Fatalf("Reload should recompile from source: %v", err)
+	}
+	if n := len(m2.BrokenApps()); n != 0 {
+		t.Errorf("after Reload, BrokenApps = %d, want 0", n)
+	}
+	if _, err := m2.Get(context.Background(), "gamma"); err != nil {
+		t.Errorf("gamma should be healthy after Reload: %v", err)
+	}
+}
+
+// TestInstall_IncompatibleApp : an app referencing a module this daemon doesn't
+// have compiles-fails as ErrIncompatible (needs newer daemon), not a generic
+// compile error — so the operator updates the daemon, not the app.
+func TestInstall_IncompatibleApp(t *testing.T) {
+	m, _, _ := newTestManager(t)
+	src := filepath.Join(t.TempDir(), "future-app")
+	writeMinimalApp(t, src, "future-app", nil)
+	// Reference a module that does not exist in this daemon's catalog.
+	ay := filepath.Join(src, "app.yaml")
+	b, _ := os.ReadFile(ay)
+	patched := string(b) + "\ntools:\n  modules:\n    time_machine: {}\n"
+	if err := os.WriteFile(ay, []byte(patched), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := m.Install(context.Background(), src, "")
+	if err == nil {
+		t.Fatal("install of an app with an unknown module should fail")
+	}
+	if !errors.Is(err, appmgr.ErrIncompatible) {
+		t.Errorf("want ErrIncompatible (needs newer daemon), got: %v", err)
+	}
+}

@@ -170,6 +170,10 @@ func (d *Daemon) MountAPI() {
 		r.Put("/api/apps/{app_id}/secrets/{key}", d.setSecret)
 		r.Delete("/api/apps/{app_id}/secrets/{key}", d.deleteSecret)
 
+		// ----- Per-user default models for new sessions -----
+		r.Get("/api/apps/{app_id}/model-defaults", d.getModelDefaults)
+		r.Put("/api/apps/{app_id}/model-defaults", d.putModelDefaults)
+
 		// ----- App module settings (schema + values) -----
 		r.Get("/api/apps/{app_id}/module-settings", d.appModuleSettings)
 		r.Put("/api/apps/{app_id}/modules/{module_id}/config", d.setAppModuleConfig)
@@ -282,6 +286,7 @@ func (d *Daemon) mountAppRoutes(r chi.Router) {
 	// Read.
 	r.Get("/api/apps", d.listApps)
 	r.Get("/api/apps/disabled", d.listDisabledApps)
+	r.Get("/api/apps/health", d.appsHealth)
 	r.Get("/api/apps/{app_id}", d.getApp)
 	r.Get("/api/apps/{app_id}/manifest", d.getManifest)
 

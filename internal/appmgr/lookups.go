@@ -89,8 +89,11 @@ func (m *gormManager) Get(ctx context.Context, appID string) (*RuntimeApp, error
 	}
 	ra, err := m.loadFromDisk(&row)
 	if err != nil {
+		// Enabled row, unloadable bundle → flag it so an admin can recompile.
+		m.markBroken(appID, row.Version, err.Error())
 		return nil, err
 	}
+	m.clearBroken(appID)
 	m.swapSnapshot(appID, ra)
 	return ra, nil
 }
@@ -129,8 +132,10 @@ func (m *gormManager) Bootstrap(ctx context.Context) error {
 				slog.String("app_id", row.AppID),
 				slog.String("err", err.Error()),
 			)
+			m.markBroken(row.AppID, row.Version, err.Error())
 			continue
 		}
+		m.clearBroken(row.AppID)
 		next.apps[row.AppID] = ra
 		loaded++
 	}

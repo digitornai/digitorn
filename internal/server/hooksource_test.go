@@ -34,13 +34,13 @@ func (s *stubApps) Install(context.Context, string, string) (*appmgr.App, error)
 func (s *stubApps) Upgrade(context.Context, string, string, string) (*appmgr.App, error) {
 	panic("stubApps.Upgrade not used")
 }
-func (s *stubApps) Uninstall(context.Context, string, bool) error { panic("not used") }
-func (s *stubApps) Enable(context.Context, string) error          { panic("not used") }
-func (s *stubApps) Disable(context.Context, string) error         { panic("not used") }
-func (s *stubApps) SetBYOK(context.Context, string, bool) error   { panic("not used") }
+func (s *stubApps) Uninstall(context.Context, string, bool) error        { panic("not used") }
+func (s *stubApps) Enable(context.Context, string) error                 { panic("not used") }
+func (s *stubApps) Disable(context.Context, string) error                { panic("not used") }
+func (s *stubApps) SetBYOK(context.Context, string, bool) error          { panic("not used") }
 func (s *stubApps) SetAppPieces(context.Context, string, []string) error { panic("not used") }
 func (s *stubApps) SetDisplayName(context.Context, string, string) error { panic("not used") }
-func (s *stubApps) Reload(context.Context, string) error          { panic("not used") }
+func (s *stubApps) Reload(context.Context, string) error                 { panic("not used") }
 func (s *stubApps) CheckUpdate(context.Context, string, string) (*appmgr.UpdateInfo, error) {
 	panic("not used")
 }
@@ -51,6 +51,7 @@ func (s *stubApps) GetManifest(context.Context, string) (*schema.AppDefinition, 
 	panic("not used")
 }
 func (s *stubApps) Bootstrap(context.Context) error { return nil }
+func (s *stubApps) BrokenApps() []appmgr.BrokenApp  { return nil }
 
 // =====================================================================
 // Helpers

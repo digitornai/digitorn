@@ -13,8 +13,25 @@ import (
 	"gorm.io/gorm/clause"
 
 	"github.com/digitornai/digitorn/internal/compiler/codegen"
+	"github.com/digitornai/digitorn/internal/compiler/diagnostic"
 	"github.com/digitornai/digitorn/internal/persistence/models"
 )
+
+// incompatibleFeatures scans compile diagnostics for references to modules or
+// tools this daemon doesn't provide (DGT-E0301 unknown module, DGT-E0302 unknown
+// tool). Their presence means the app was authored for a newer daemon, not that
+// it's malformed. Returns the unsupported feature descriptions (empty if the
+// failure is an ordinary authoring error).
+func incompatibleFeatures(errs []diagnostic.Diagnostic) []string {
+	var out []string
+	for _, d := range errs {
+		switch d.Code {
+		case diagnostic.CodeUnknownModule, diagnostic.CodeUnknownTool:
+			out = append(out, d.Message)
+		}
+	}
+	return out
+}
 
 // Install resolves the source, compiles it, persists it, and publishes
 // the new RuntimeApp into the snapshot. See Manager.Install for the
@@ -45,6 +62,13 @@ func (m *gormManager) Install(ctx context.Context, source, userJWT string) (*App
 			messages = append(messages, fmt.Sprintf("[%s] %s", d.Code, d.Message))
 		}
 		preview := strings.Join(messages, "; ")
+		// An app that references modules/tools/namespaces/roles this daemon
+		// doesn't know was built for a newer daemon — report it as such so the
+		// operator updates the daemon instead of hunting a non-existent app bug.
+		if unsupported := incompatibleFeatures(errs); len(unsupported) > 0 {
+			return nil, fmt.Errorf("%w (update the daemon): unsupported %s",
+				ErrIncompatible, strings.Join(unsupported, ", "))
+		}
 		return nil, fmt.Errorf("%w: %d diagnostic(s): %s", ErrCompileFailed, len(errs), preview)
 	}
 	appID := result.Definition.App.AppID

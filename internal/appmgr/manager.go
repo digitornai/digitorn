@@ -134,6 +134,22 @@ type Manager interface {
 	// decoding their app.dgc and populating the snapshot. Apps whose
 	// bundle is missing/corrupt are logged and skipped, never fatal.
 	Bootstrap(ctx context.Context) error
+
+	// BrokenApps lists apps whose DB row is enabled but whose on-disk
+	// bundle failed to load at boot (corrupt/incompatible app.dgc). Boot
+	// never blocks to recompile them — an admin recompiles via Reload.
+	BrokenApps() []BrokenApp
+}
+
+// BrokenApp is an enabled app the daemon could not load at boot: its DB row
+// exists but its compiled bundle (app.dgc) is missing/corrupt/incompatible.
+// Surfaced to admins so they trigger a manual Reload (recompile from source)
+// instead of the daemon blocking startup on a synchronous recompile.
+type BrokenApp struct {
+	AppID      string    `json:"app_id"`
+	Version    string    `json:"version,omitempty"`
+	Reason     string    `json:"reason"`
+	DetectedAt time.Time `json:"detected_at"`
 }
 
 // Config configures a Manager. The compiler is shared — the manager
@@ -166,6 +182,43 @@ type gormManager struct {
 	// Lock-free read snapshot of currently-enabled apps. Swapped
 	// atomically on install / enable / disable / reload / uninstall.
 	snap atomic.Pointer[snapshot]
+
+	// broken tracks enabled apps whose bundle failed to load at boot. Written
+	// at Bootstrap and on a Get() load-miss; cleared on a successful
+	// Install/Reload. Read by the admin health endpoint. Small N, mutex-guarded.
+	brokenMu sync.Mutex
+	broken   map[string]BrokenApp
+}
+
+// markBroken records an app the daemon could not load. Never blocks boot.
+func (m *gormManager) markBroken(appID, version, reason string) {
+	m.brokenMu.Lock()
+	defer m.brokenMu.Unlock()
+	if m.broken == nil {
+		m.broken = map[string]BrokenApp{}
+	}
+	if _, seen := m.broken[appID]; !seen {
+		m.broken[appID] = BrokenApp{AppID: appID, Version: version, Reason: reason, DetectedAt: time.Now().UTC()}
+	}
+}
+
+// clearBroken drops an app from the broken set — a successful recompile
+// (Install/Reload) produced a loadable bundle.
+func (m *gormManager) clearBroken(appID string) {
+	m.brokenMu.Lock()
+	defer m.brokenMu.Unlock()
+	delete(m.broken, appID)
+}
+
+// BrokenApps returns the currently-broken apps (a copy, safe to serialize).
+func (m *gormManager) BrokenApps() []BrokenApp {
+	m.brokenMu.Lock()
+	defer m.brokenMu.Unlock()
+	out := make([]BrokenApp, 0, len(m.broken))
+	for _, b := range m.broken {
+		out = append(out, b)
+	}
+	return out
 }
 
 // snapshot is an immutable map of app_id → RuntimeApp. Reads are
@@ -209,6 +262,10 @@ func (m *gormManager) readSnapshot() *snapshot {
 // nil) and atomically publishes the new snapshot. The previous map is
 // never mutated — readers in flight see a consistent view.
 func (m *gormManager) swapSnapshot(appID string, ra *RuntimeApp) {
+	// A successful swap (install/reload/enable → ra!=nil) or a removal
+	// (disable/uninstall → ra==nil) both clear any broken flag: the app is
+	// either healthy again or gone.
+	m.clearBroken(appID)
 	for {
 		old := m.snap.Load()
 		next := &snapshot{apps: make(map[string]*RuntimeApp, len(old.apps)+1)}

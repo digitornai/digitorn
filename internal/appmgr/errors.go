@@ -32,6 +32,12 @@ var ErrAppIDMismatch = errors.New("appmgr: source dir basename must equal app_id
 // the source. The wrapped error contains the diagnostic codes.
 var ErrCompileFailed = errors.New("appmgr: compile failed")
 
+// ErrIncompatible is returned when a source fails to compile because it uses
+// modules / tools / namespaces / roles this daemon does not know — i.e. it was
+// authored for a NEWER daemon. Distinct from a genuine authoring bug so callers
+// can tell the user "update the daemon" rather than "fix the app".
+var ErrIncompatible = errors.New("appmgr: app requires a newer daemon")
+
 // ErrHubFetch wraps any hub-side fetch failure.
 var ErrHubFetch = errors.New("appmgr: hub fetch failed")
 

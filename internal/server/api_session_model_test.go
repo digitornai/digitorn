@@ -16,6 +16,7 @@ type modelAppMgr struct {
 }
 
 func (m *modelAppMgr) GetApp(context.Context, string) (*appmgr.App, error) { return m.app, nil }
+func (m *modelAppMgr) BrokenApps() []appmgr.BrokenApp                      { return nil }
 
 func twoAgentModelApp(appID string) *appmgr.RuntimeApp {
 	return &appmgr.RuntimeApp{
