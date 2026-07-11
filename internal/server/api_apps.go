@@ -109,10 +109,12 @@ func (d *Daemon) upgradeApp(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// uninstallApp handles POST /api/apps/{app_id}/uninstall and the
-// legacy DELETE /api/apps/{app_id} alias. Query param ?purge=true|false
-// signals whether the caller wants associated sessions wiped too — for
-// V1 we just record the intent ; sessionstore purge ties into A3 later.
+// uninstallApp handles POST /api/apps/{app_id}/uninstall and the legacy
+// DELETE /api/apps/{app_id} alias. It removes the app row, its install dir and
+// all app-scoped DB rows (config/secrets/model-defaults/skills/snippets, via
+// appMgr.Uninstall), then purges the background service's triggers/jobs/runs for
+// the app. Query param ?purge=true|false additionally requests the user's
+// sessions be wiped (sessionstore purge — reserved).
 func (d *Daemon) uninstallApp(w http.ResponseWriter, r *http.Request) {
 	appID := chi.URLParam(r, "app_id")
 	purge := r.URL.Query().Get("purge") == "true"
@@ -120,6 +122,11 @@ func (d *Daemon) uninstallApp(w http.ResponseWriter, r *http.Request) {
 		writeError(w, appMgrErrStatus(err), "uninstall_failed", err.Error())
 		return
 	}
+	// appMgr.Uninstall already removed the app row, its install dir and every
+	// app-scoped DB table (config, secrets, model defaults, skills, snippets).
+	// The background service is a separate process, so disarm + purge its
+	// triggers/jobs/runs here — best-effort, never fails the uninstall.
+	d.purgeTriggersFromBackground(r.Context(), appID)
 	if d.promptBuilder != nil {
 		d.promptBuilder.Invalidate(appID, "", "")
 	}

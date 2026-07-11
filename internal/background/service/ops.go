@@ -67,6 +67,7 @@ func opsRoutes(st *store.Store, cfg OpsConfig) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /triggers", h.listTriggers)
 	mux.HandleFunc("POST /triggers", h.createTrigger)
+	mux.HandleFunc("DELETE /triggers", h.purgeApp)
 	mux.HandleFunc("GET /triggers/{id}", h.getTrigger)
 	mux.HandleFunc("POST /triggers/{id}/enable", h.enableTrigger(true))
 	mux.HandleFunc("POST /triggers/{id}/disable", h.enableTrigger(false))
@@ -152,6 +153,42 @@ func (a *opsAPI) createTrigger(w http.ResponseWriter, r *http.Request) {
 	v["armed"] = true
 	v["note"] = "live for this process; add to the app YAML to persist across restarts"
 	writeOps(w, http.StatusCreated, v)
+}
+
+// purgeApp handles DELETE /triggers?app=<id> : called when an app is uninstalled.
+// It disarms every live adapter for the app (so nothing keeps polling/listening
+// in-process) and then deletes the app's triggers, jobs and runs from the store.
+// Idempotent — an app with nothing armed returns 200 with zero counts.
+func (a *opsAPI) purgeApp(w http.ResponseWriter, r *http.Request) {
+	app := r.URL.Query().Get("app")
+	if app == "" {
+		app = r.URL.Query().Get("app_id")
+	}
+	if app == "" {
+		writeOps(w, 400, map[string]any{"error": "app (or app_id) query param is required"})
+		return
+	}
+	// Disarm live adapters first — the store purge only removes durable rows; the
+	// running poller/listener goroutines are held by the runtime, not the store.
+	disarmed := 0
+	if a.disarm != nil {
+		if trigs, err := a.st.AllTriggers(r.Context(), app, false); err == nil {
+			for _, t := range trigs {
+				if a.disarm(r.Context(), t) == nil {
+					disarmed++
+				}
+			}
+		}
+	}
+	triggers, jobs, runs, err := a.st.PurgeApp(r.Context(), app)
+	if err != nil {
+		writeOps(w, 500, map[string]any{"error": err.Error()})
+		return
+	}
+	writeOps(w, 200, map[string]any{
+		"app_id": app, "purged": true,
+		"disarmed": disarmed, "triggers": triggers, "jobs": jobs, "runs": runs,
+	})
 }
 
 // createSchedule programs a session wake-up: at the cron time, the bound session

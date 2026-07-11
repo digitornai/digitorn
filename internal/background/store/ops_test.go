@@ -50,6 +50,48 @@ func TestRecordAndListRuns(t *testing.T) {
 	}
 }
 
+func TestPurgeApp(t *testing.T) {
+	s := newStore(t)
+	ctx := context.Background()
+	// Arm triggers + record jobs/runs for two apps.
+	for _, app := range []string{"gone", "keep"} {
+		if err := s.UpsertTrigger(ctx, &Trigger{ID: "trig-" + app, AppID: app, Provider: "discord", Adapter: "webhook", Enabled: true}); err != nil {
+			t.Fatalf("trigger %s: %v", app, err)
+		}
+		if _, _, err := s.Enqueue(ctx, NewJob{AppID: app, TriggerID: "trig-" + app, DedupKey: "d-" + app}); err != nil {
+			t.Fatalf("enqueue %s: %v", app, err)
+		}
+		if err := s.RecordRun(ctx, Run{ID: "run-" + app, JobID: "j-" + app, AppID: app, TriggerID: "trig-" + app, Outcome: "ok"}); err != nil {
+			t.Fatalf("run %s: %v", app, err)
+		}
+	}
+
+	trigs, jobs, runs, err := s.PurgeApp(ctx, "gone")
+	if err != nil {
+		t.Fatalf("purge: %v", err)
+	}
+	if trigs != 1 || jobs != 1 || runs != 1 {
+		t.Fatalf("purge counts: triggers=%d jobs=%d runs=%d", trigs, jobs, runs)
+	}
+	// The purged app has nothing left.
+	if gt, _ := s.AllTriggers(ctx, "gone", false); len(gt) != 0 {
+		t.Errorf("gone triggers survived: %d", len(gt))
+	}
+	if gr, _ := s.ListRuns(ctx, RunFilter{AppID: "gone"}); len(gr) != 0 {
+		t.Errorf("gone runs survived: %d", len(gr))
+	}
+	if gj, _ := s.ListJobs(ctx, JobFilter{AppID: "gone"}); len(gj) != 0 {
+		t.Errorf("gone jobs survived: %d", len(gj))
+	}
+	// The other app is untouched.
+	if kt, _ := s.AllTriggers(ctx, "keep", false); len(kt) != 1 {
+		t.Errorf("keep triggers: %d", len(kt))
+	}
+	if kr, _ := s.ListRuns(ctx, RunFilter{AppID: "keep"}); len(kr) != 1 {
+		t.Errorf("keep runs: %d", len(kr))
+	}
+}
+
 func TestTriggerStats(t *testing.T) {
 	s := newStore(t)
 	ctx := context.Background()

@@ -293,16 +293,46 @@ func (m *gormManager) Reload(ctx context.Context, appID string) error {
 	return nil
 }
 
-// Uninstall removes the row and the install dir. `purge` is for the
-// caller : the App Manager itself doesn't reach into the session
-// store. The REST handler will use it to decide whether to also clean
-// sessionstore paths for this app_id.
+// appScopedTables are every persistence model keyed by app_id whose rows are
+// dead the instant the app is gone : per-user module config, stored secrets
+// (OAuth tokens / API keys), model defaults, in-flight OAuth state, module
+// state, and the skills/snippets derived from the app's YAML on each install.
+// Uninstall deletes them all so nothing orphaned lingers (a reinstall re-derives
+// skills/snippets and re-prompts for secrets). Sessions are NOT here — they are
+// the user's work, gated separately by the caller's `purge`.
+var appScopedTables = []any{
+	&models.UserModuleConfig{},
+	&models.UserAppSecret{},
+	&models.UserAppModelDefault{},
+	&models.OAuthState{},
+	&models.ModuleState{},
+	&models.UserSkill{},
+	&models.UserSnippet{},
+}
+
+// Uninstall removes the app row, every app-scoped table row (config, secrets,
+// model defaults, skills, snippets — see appScopedTables), and the install dir,
+// in one transaction so a partial failure rolls back. `purge` is for the caller :
+// the App Manager itself doesn't reach into the session store or the background
+// service ; the REST handler uses it to also wipe sessionstore paths and to purge
+// this app's background triggers.
 func (m *gormManager) Uninstall(ctx context.Context, appID string, purge bool) error {
 	lock := m.lockFor(appID)
 	lock.Lock()
 	defer lock.Unlock()
 
-	if err := m.cfg.DB.WithContext(ctx).Delete(&models.App{}, "app_id = ?", appID).Error; err != nil {
+	err := m.cfg.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Delete(&models.App{}, "app_id = ?", appID).Error; err != nil {
+			return err
+		}
+		for _, tbl := range appScopedTables {
+			if err := tx.Where("app_id = ?", appID).Delete(tbl).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
 		return err
 	}
 	dir := m.bundleDir(appID)

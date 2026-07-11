@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 // ── Run recording (execution report) ─────────────────────────────────────────
@@ -107,6 +108,36 @@ func (s *Store) AllTriggers(ctx context.Context, appID string, enabledOnly bool)
 	}
 	var out []Trigger
 	return out, q.Order("created_at desc").Find(&out).Error
+}
+
+// PurgeApp deletes every trigger, job and run belonging to an app — called when
+// the app is uninstalled so no armed listener keeps firing and no run history
+// lingers orphaned. Live adapters must be disarmed by the caller BEFORE this
+// (the store is pure persistence and holds no adapter handles). Runs in one
+// transaction; returns how many triggers, jobs and runs were removed.
+func (s *Store) PurgeApp(ctx context.Context, appID string) (triggers, jobs, runs int64, err error) {
+	if appID == "" {
+		return 0, 0, 0, nil
+	}
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		res := tx.Where("app_id = ?", appID).Delete(&Run{})
+		if res.Error != nil {
+			return res.Error
+		}
+		runs = res.RowsAffected
+		res = tx.Where("app_id = ?", appID).Delete(&Job{})
+		if res.Error != nil {
+			return res.Error
+		}
+		jobs = res.RowsAffected
+		res = tx.Where("app_id = ?", appID).Delete(&Trigger{})
+		if res.Error != nil {
+			return res.Error
+		}
+		triggers = res.RowsAffected
+		return nil
+	})
+	return triggers, jobs, runs, err
 }
 
 // ListSchedules returns the user-programmed session wake-ups (Kind="schedule"),

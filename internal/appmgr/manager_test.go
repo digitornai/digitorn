@@ -24,6 +24,7 @@ import (
 	"github.com/digitornai/digitorn/internal/compiler"
 	"github.com/digitornai/digitorn/internal/compiler/catalog"
 	"github.com/digitornai/digitorn/internal/persistence/db"
+	"github.com/digitornai/digitorn/internal/persistence/models"
 )
 
 // ----- harness -----
@@ -376,6 +377,62 @@ func TestUninstall_RemovesRowAndDir(t *testing.T) {
 	}
 	if _, err := m.GetApp(context.Background(), "chat"); !errors.Is(err, appmgr.ErrAppNotFound) {
 		t.Errorf("expected ErrAppNotFound, got %v", err)
+	}
+}
+
+// TestUninstall_CleansAppScopedRows : uninstall must delete every app-scoped
+// table row (secrets, module config, model defaults, skills, snippets) so
+// nothing orphaned lingers — and must leave OTHER apps' rows untouched.
+func TestUninstall_CleansAppScopedRows(t *testing.T) {
+	m, _, gdb := newTestManager(t)
+	for _, id := range []string{"chat", "keepme"} {
+		src := filepath.Join(t.TempDir(), id)
+		writeMinimalApp(t, src, id, nil)
+		if _, err := m.Install(context.Background(), src, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Seed one row per app-scoped table for both apps.
+	seed := func(appID string) {
+		rows := []any{
+			&models.UserAppSecret{UserID: "u1", AppID: appID, Key: "token", Sealed: "secret"},
+			&models.UserModuleConfig{ID: "umc-" + appID, UserID: "u1", AppID: appID, ModuleID: "channels", Sealed: "{}"},
+			&models.UserAppModelDefault{UserID: "u1", AppID: appID, AgentID: "main", Model: "zen"},
+			&models.OAuthState{State: "st-" + appID, UserID: "u1", AppID: appID, Provider: "p", ServerID: "s"},
+			&models.ModuleState{ModuleID: "channels", AppID: appID, State: "active"},
+			&models.UserSkill{ID: "sk-" + appID, UserID: "u1", AppID: appID, Name: "s1", Instructions: "do x"},
+			&models.UserSnippet{ID: "sn-" + appID, UserID: "u1", AppID: appID, Title: "n1", Body: "b"},
+		}
+		for _, r := range rows {
+			if err := gdb.Create(r).Error; err != nil {
+				t.Fatalf("seed %s: %v", appID, err)
+			}
+		}
+	}
+	seed("chat")
+	seed("keepme")
+
+	if err := m.Uninstall(context.Background(), "chat", false); err != nil {
+		t.Fatalf("Uninstall: %v", err)
+	}
+
+	count := func(model any, appID string) int64 {
+		var n int64
+		if err := gdb.Model(model).Where("app_id = ?", appID).Count(&n).Error; err != nil {
+			t.Fatalf("count: %v", err)
+		}
+		return n
+	}
+	for _, model := range []any{
+		&models.UserAppSecret{}, &models.UserModuleConfig{}, &models.UserAppModelDefault{},
+		&models.OAuthState{}, &models.ModuleState{}, &models.UserSkill{}, &models.UserSnippet{},
+	} {
+		if got := count(model, "chat"); got != 0 {
+			t.Errorf("%T: chat rows should be purged, got %d", model, got)
+		}
+		if got := count(model, "keepme"); got != 1 {
+			t.Errorf("%T: keepme rows must survive, got %d", model, got)
+		}
 	}
 }
 

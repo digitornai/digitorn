@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	neturl "net/url"
 	"time"
 
 	"github.com/digitornai/digitorn/internal/appmgr"
@@ -15,6 +16,33 @@ import (
 
 func (d *Daemon) pushTriggersToBackground(ctx context.Context, app *appmgr.App) {
 	d.pushTriggersAs(ctx, app, "", "")
+}
+
+// purgeTriggersFromBackground tells the background service to disarm and delete
+// every trigger/job/run for an uninstalled app (DELETE /ops/triggers?app=<id>).
+// Best-effort : a background service that's down or slow must never fail the
+// uninstall — the durable rows are harmless once the app row is gone, and a
+// later restart's config discovery won't re-arm an app that no longer exists.
+func (d *Daemon) purgeTriggersFromBackground(ctx context.Context, appID string) {
+	if d.cfg.Background.OpsURL == "" || appID == "" {
+		return
+	}
+	url := d.cfg.Background.OpsURL + "/ops/triggers?app=" + neturl.QueryEscape(appID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
+	if err != nil {
+		return
+	}
+	if d.cfg.Background.OpsToken != "" {
+		req.Header.Set("Authorization", "Bearer "+d.cfg.Background.OpsToken)
+	}
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		d.logger.Warn("background: purge triggers failed", slog.String("app", appID), slog.String("err", err.Error()))
+		return
+	}
+	resp.Body.Close()
+	d.logger.Info("background: triggers purged", slog.String("app", appID), slog.Int("status", resp.StatusCode))
 }
 
 // pushTriggersAs pushes an app's channel triggers, attaching the owner + their
