@@ -16,7 +16,12 @@ import (
 // fakeApps — minimal app manager with a configurable definition.
 // =====================================================================
 
-type fakeApps struct{ apps map[string]*appmgr.RuntimeApp }
+// fakeApps embeds the Manager interface so newly-added methods never break the
+// test build again (calling an unstubbed one panics, which is what we want).
+type fakeApps struct {
+	appmgr.Manager
+	apps map[string]*appmgr.RuntimeApp
+}
 
 func (f *fakeApps) Install(context.Context, string, string) (*appmgr.App, error) { return nil, nil }
 func (f *fakeApps) Upgrade(context.Context, string, string, string) (*appmgr.App, error) {
@@ -26,6 +31,7 @@ func (f *fakeApps) Uninstall(context.Context, string, bool) error { return nil }
 func (f *fakeApps) Enable(context.Context, string) error          { return nil }
 func (f *fakeApps) Disable(context.Context, string) error         { return nil }
 func (f *fakeApps) SetBYOK(context.Context, string, bool) error   { return nil }
+func (f *fakeApps) SetAppPieces(context.Context, string, []string) error { return nil }
 func (f *fakeApps) Reload(context.Context, string) error          { return nil }
 func (f *fakeApps) CheckUpdate(context.Context, string, string) (*appmgr.UpdateInfo, error) {
 	return nil, nil
