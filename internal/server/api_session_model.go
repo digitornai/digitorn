@@ -275,16 +275,7 @@ func (d *Daemon) putSessionModel(w http.ResponseWriter, r *http.Request) {
 			// user's own BYOK models (vault / local providers). For the latter we
 			// pin the model's provider so the turn uses that credential.
 			if model != brain.Model && !slices.Contains(brain.Models, model) {
-				if d.creds != nil {
-					for _, m := range d.creds.ListUserModels(r.Context(), userID) {
-						// Only models the runtime can actually route with the stored
-						// credential (Direct) are valid cross-provider pins.
-						if m.ID == model && m.Direct {
-							providerOverride = m.OwnedBy
-							break
-						}
-					}
-				}
+				providerOverride = d.directVaultProvider(r.Context(), userID, model)
 				if providerOverride == "" {
 					writeError(w, http.StatusBadRequest, "model_not_declared",
 						"direct mode: the model must be one declared in the agent brain or one of your own credentials")

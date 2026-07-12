@@ -990,17 +990,22 @@ func (e *Engine) runPhases(
 		msgs := e.buildLLMMessages(ctx, conv, snap, systemPrompt, in.SessionID, agent.Brain)
 
 		req := &llm.ChatRequest{
-			BYOK:      app.Meta != nil && app.Meta.BYOK,
-			Provider:  agent.Brain.Provider,
-			Model:     agent.Brain.Model,
-			APIKey:    apiKey,
-			BaseURL:   baseURL,
-			UserJWT:   in.UserJWT,
-			Messages:  msgs,
-			Tools:     tools,
-			SessionID: in.SessionID,
-			UserID:    in.UserID,
-			AgentID:   agentRunID(in.AgentRunID, agent.ID),
+			BYOK:     app.Meta != nil && app.Meta.BYOK,
+			Provider: agent.Brain.Provider,
+			Model:    agent.Brain.Model,
+			APIKey:   apiKey,
+			BaseURL:  baseURL,
+			UserJWT:  in.UserJWT,
+			Messages: msgs,
+			Tools:    tools,
+			// Full gateway attribution : app + session + user + agent
+			// instance (sub-agents carry their RunID) + the per-step id
+			// as run correlation — billing/audit needs all of them.
+			AppID:         in.AppID,
+			SessionID:     in.SessionID,
+			UserID:        in.UserID,
+			AgentID:       agentRunID(in.AgentRunID, agent.ID),
+			CorrelationID: tr.StepID,
 		}
 		e.recordContextParts(in.SessionID, systemPrompt, tools)
 		if agent.Brain.Temperature != nil {
@@ -2134,6 +2139,13 @@ func (e *Engine) runBehaviorClassifier(
 				{Role: "system", Content: system},
 				{Role: "user", Content: user},
 			},
+			// Gateway attribution — system call, still billed to the
+			// app/session/user that triggered it.
+			AppID:         in.AppID,
+			SessionID:     in.SessionID,
+			UserID:        in.UserID,
+			AgentID:       agentRunID(in.AgentRunID, agent.ID),
+			CorrelationID: "classify:" + tr.ID,
 		})
 		if err != nil || resp == nil {
 			return "", err
@@ -2363,6 +2375,11 @@ func (e *Engine) enforceGate(
 	toolName, callID string, args map[string]any,
 	tr *turn.Turn, in *TurnInput,
 ) *ToolOutcome {
+	agentID := ""
+	if agent != nil {
+		agentID = agent.ID
+	}
+	toolName = e.resolveToolName(appID, agentID, toolName)
 	if hm, ha := splitToolName(toolName); args != nil {
 		if spec := e.toolSpec(hm, ha); spec != nil {
 			if healToolArgs(spec, toolName, args) && e.Logger != nil {
@@ -2426,6 +2443,18 @@ func (e *Engine) enforceGate(
 		}
 	}
 	return nil
+}
+
+// resolveToolName qualifies a bare tool name to its FQN via the dispatcher's
+// resolver, so the gate evaluates the real tool instead of denying a bare
+// action with an empty module. Unknown/ambiguous names are returned unchanged.
+func (e *Engine) resolveToolName(appID, agentID, name string) string {
+	if r, ok := e.dispatcher().(interface {
+		ResolveToolName(appID, agentID, name string) string
+	}); ok {
+		return r.ResolveToolName(appID, agentID, name)
+	}
+	return name
 }
 
 func (e *Engine) pathParamNames(module, action string) []string {

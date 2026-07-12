@@ -29,6 +29,7 @@ func AutoMigrate(gdb *gorm.DB) error {
 		&models.UserCredential{},
 		&models.UserModuleConfig{},
 		&models.UserAppSecret{},
+		&models.UserAppModelDefault{},
 		&models.OAuthState{},
 		&models.OAuthClient{},
 		&models.AuditLog{},

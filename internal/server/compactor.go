@@ -122,7 +122,7 @@ func (c *contextCompactor) CompactSession(ctx context.Context, sessionID, strate
 			}
 		}
 		if !applied {
-			s := &llmSummarizer{client: c.llm, brain: brain, sessionID: sessionID, byok: byok, userJWT: llm.UserJWTFromContext(ctx), logger: c.logger, resolver: c.credResolver, userID: snap.UserID}
+			s := &llmSummarizer{client: c.llm, brain: brain, appID: snap.AppID, sessionID: sessionID, byok: byok, userJWT: llm.UserJWTFromContext(ctx), logger: c.logger, resolver: c.credResolver, userID: snap.UserID}
 			prior := ""
 			if snap.ContextCompaction != nil {
 				prior = snap.ContextCompaction.Summary
@@ -371,6 +371,7 @@ Preserve concrete specifics: names, paths, identifiers, numbers, exact user requ
 type llmSummarizer struct {
 	client    chatLLM
 	brain     schema.Brain
+	appID     string
 	sessionID string
 	byok bool
 	userJWT string
@@ -435,6 +436,11 @@ func (s *llmSummarizer) Summarize(ctx context.Context, dropped []sessionstore.Me
 			{Role: "system", Content: buildSummarizerPrompt(mt)},
 			{Role: "user", Content: "Compact the earlier conversation below into the handoff. If it begins with a prior recap, MERGE it with the newer messages into one up-to-date handoff — do not append.\n\n" + transcript},
 		},
+		// Gateway attribution — compaction is an LLM call billed to the
+		// same app/session/user as the turn that triggered it.
+		AppID:         s.appID,
+		SessionID:     s.sessionID,
+		UserID:        s.userID,
 		CorrelationID: "compact:" + s.sessionID,
 	}
 	resp, err := s.client.Chat(ctx, req)

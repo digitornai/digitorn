@@ -12,6 +12,9 @@ app:
   category: "coding"
 
 ui:
+  workspace:
+    # Enable GitHub source control (connect, open/clone a repo, commit, push/pull).
+    source_control: github
   activity:
     enabled: true
     title: "Agents"

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	nethttp "net/http"
+	neturl "net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -674,6 +675,42 @@ func (d *Daemon) buildEngine() {
 	// client sees tasks appear / finish / fail in real time (the Socket.IO
 	// bridge forwards every session-scoped event to the session room).
 	bgMgr.AttachSink(d.sessionStore)
+	bgMgr.WorkspaceTouched = func(sessionID string) {
+		if d.workspaceLive == nil || d.sessionStore == nil {
+			return
+		}
+		st, err := d.sessionStore.State(sessionID)
+		if err != nil || st == nil {
+			return
+		}
+		st.RLock()
+		wd := st.Workdir
+		st.RUnlock()
+		if wd != "" {
+			d.workspaceLive.FileChanged(sessionID, wd)
+		}
+	}
+	// Desktop / local only: when the agent starts a dev server (npm run dev …),
+	// point the preview straight at its localhost URL. Reachable only when the
+	// daemon shares the client's machine, so the prod cloud daemon (channel
+	// "server") leaves detection off (nil callback = no watcher goroutines).
+	if d.cfg.Apps.Channel != "server" {
+		bgMgr.DevServerDetected = func(sessionID, rawURL string) {
+			if d.rt == nil {
+				return
+			}
+			// Never mistake the daemon's own address for the app's dev server.
+			if u, err := neturl.Parse(rawURL); err == nil && u.Port() == strconv.Itoa(d.cfg.Server.Port) {
+				return
+			}
+			_ = d.rt.Emit(context.Background(), bridgeNamespace, "session:"+sessionID, "web_preview:attached", map[string]any{
+				"session_id": sessionID,
+				"name":       "default",
+				"url":        rawURL,
+				"type":       "devserver",
+			})
+		}
+	}
 	d.background = bgMgr
 
 	// Single entry point for starting a turn from any source (user message

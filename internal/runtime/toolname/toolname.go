@@ -100,6 +100,18 @@ var internalAliases = map[string]string{
 	"TaskUpdate":  "memory.task_update",
 }
 
+// internalFQNByFlat recovers a model-mangled form of a runtime-internal FQN
+// (single/double underscore instead of the dot, e.g. "memory_set_goal") back to
+// its canonical FQN. These tools are NOT in the per-agent index, so ResolveMangled
+// can't recover them there — this fixed reverse map does it.
+var internalFQNByFlat = func() map[string]string {
+	m := make(map[string]string, len(internalAliases))
+	for _, fqn := range internalAliases {
+		m[flattenKey(fqn)] = fqn
+	}
+	return m
+}()
+
 // ResolveAlias maps a documented short alias for a runtime-internal tool to its
 // canonical FQN. Apply AFTER Canonicalize. Unknown names (every domain tool,
 // every already-qualified FQN, the context_builder meta-tools) pass through
@@ -107,6 +119,11 @@ var internalAliases = map[string]string{
 func ResolveAlias(name string) string {
 	if fqn, ok := internalAliases[name]; ok {
 		return fqn
+	}
+	if !strings.Contains(name, ".") {
+		if fqn, ok := internalFQNByFlat[flattenKey(name)]; ok {
+			return fqn
+		}
 	}
 	return name
 }

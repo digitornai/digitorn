@@ -69,12 +69,14 @@ type ChatRequest struct {
 	// CorrelationID propagates a daemon-side request ID for tracing.
 	CorrelationID string `json:"correlation_id,omitempty"`
 
-	// SessionID, UserID, AgentID attribute the request to a session, a
-	// user, and a specific agent instance (the entry agent's id, or a
-	// distinct sub-agent RunID like "coding#a1b2c3"). The worker forwards
-	// them to the gateway/provider as trace attributes + X-Digitorn-*
-	// headers so every LLM call is attributable end to end. Empty =
-	// anonymous / system call.
+	// AppID, SessionID, UserID, AgentID attribute the request to an app,
+	// a session, a user, and a specific agent instance (the entry agent's
+	// id, or a distinct sub-agent RunID like "coding#a1b2c3"). On GATEWAY
+	// routing (BYOK=false) the worker emits them as X-Digitorn-* headers
+	// (+ CorrelationID as X-Digitorn-Run-Id) so the gateway can account,
+	// bill and audit every LLM call per app/session/agent. Never sent to
+	// direct providers (BYOK=true). Empty = anonymous / system call.
+	AppID     string `json:"app_id,omitempty"`
 	SessionID string `json:"session_id,omitempty"`
 	UserID    string `json:"user_id,omitempty"`
 	AgentID   string `json:"agent_id,omitempty"`

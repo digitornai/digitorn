@@ -308,7 +308,7 @@ func (s *Service) Speak(ctx context.Context, req *llm.SpeechRequest, sink llm.Au
 	bctx, cancel, route := s.buildAudioContext(ctx, audioRoute{
 		BYOK: req.BYOK, APIKey: req.APIKey, UserJWT: req.UserJWT, BaseURL: req.BaseURL,
 		Timeout: req.Timeout, CorrelationID: req.CorrelationID,
-		SessionID: req.SessionID, UserID: req.UserID, AgentID: req.AgentID,
+		AppID: req.AppID, SessionID: req.SessionID, UserID: req.UserID, AgentID: req.AgentID,
 	})
 	defer cancel()
 	defer releaseRouteInfo(route)
@@ -368,7 +368,7 @@ func (s *Service) Transcribe(ctx context.Context, req *llm.TranscribeRequest, si
 	bctx, cancel, route := s.buildAudioContext(ctx, audioRoute{
 		BYOK: req.BYOK, APIKey: req.APIKey, UserJWT: req.UserJWT, BaseURL: req.BaseURL,
 		Timeout: req.Timeout, CorrelationID: req.CorrelationID,
-		SessionID: req.SessionID, UserID: req.UserID, AgentID: req.AgentID,
+		AppID: req.AppID, SessionID: req.SessionID, UserID: req.UserID, AgentID: req.AgentID,
 	})
 	defer cancel()
 	defer releaseRouteInfo(route)
@@ -430,6 +430,7 @@ type audioRoute struct {
 	Timeout time.Duration
 
 	CorrelationID string
+	AppID         string
 	SessionID     string
 	UserID        string
 	AgentID       string
@@ -459,6 +460,10 @@ func (s *Service) buildAudioContext(parent context.Context, r audioRoute) (*sche
 	}
 	if r.AgentID != "" {
 		bc.SetTraceAttribute("agent_id", r.AgentID)
+	}
+	// Same gateway attribution as buildContext — audio calls are billed too.
+	if !r.BYOK {
+		setAttributionHeaders(bc, r.AppID, r.SessionID, r.AgentID, r.CorrelationID)
 	}
 	return bc, cancel, route
 }
@@ -501,7 +506,39 @@ func (s *Service) buildContext(parent context.Context, req *llm.ChatRequest) (*s
 	if req.AgentID != "" {
 		bc.SetTraceAttribute("agent_id", req.AgentID)
 	}
+	// GATEWAY attribution : the gateway reads X-Digitorn-* headers
+	// (chatAttribution) to stamp app_id / external_sid / agent_id / run_id
+	// on every gateway_usage_events row — the basis for per-app billing,
+	// quotas and audit. Gateway-only: never leak identity headers to
+	// direct providers (BYOK). Disjoint from applyProviderProtocol's
+	// Copilot headers (BYOK-only), so the single ExtraHeaders slot is safe.
+	if !req.BYOK {
+		setAttributionHeaders(bc, req.AppID, req.SessionID, req.AgentID, req.CorrelationID)
+	}
 	return bc, cancel, route
+}
+
+// setAttributionHeaders installs the X-Digitorn-* identity headers Bifrost
+// forwards verbatim on the outgoing HTTP request (BifrostContextKeyExtraHeaders).
+// Only non-empty dimensions are sent.
+func setAttributionHeaders(bc *schemas.BifrostContext, appID, sessionID, agentID, runID string) {
+	hdrs := make(map[string][]string, 4)
+	if appID != "" {
+		hdrs["X-Digitorn-App-Id"] = []string{appID}
+	}
+	if sessionID != "" {
+		hdrs["X-Digitorn-Session-Id"] = []string{sessionID}
+	}
+	if agentID != "" {
+		hdrs["X-Digitorn-Agent-Id"] = []string{agentID}
+	}
+	if runID != "" {
+		hdrs["X-Digitorn-Run-Id"] = []string{runID}
+	}
+	if len(hdrs) == 0 {
+		return
+	}
+	bc.SetValue(schemas.BifrostContextKeyExtraHeaders, hdrs)
 }
 
 // missingReasoningPlaceholder is sent as reasoning_content for an assistant

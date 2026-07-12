@@ -32,7 +32,7 @@ import (
 type compactionScenario struct {
 	name          string
 	window        int
-	strategy      string  // truncate | summarize
+	strategy      string // truncate | summarize
 	keepRecent    int
 	threshold     float64 // 0 = use the daemon default (0.95, window-aware)
 	turns         int

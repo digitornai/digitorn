@@ -29,6 +29,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -83,6 +84,15 @@ type Manager struct {
 	// waker proactively schedules an agent turn when a task finishes.
 	// nil = no proactive wake (notification waits for the next turn).
 	waker Waker
+
+	// WorkspaceTouched fires at every task terminal state. nil = no signal.
+	WorkspaceTouched func(sessionID string)
+
+	// DevServerDetected fires ONCE per task the first time a local dev-server URL
+	// (http://localhost:PORT …) appears in its live output — so the client can
+	// point the preview straight at it. nil = detection off (e.g. cloud daemon,
+	// where the client can't reach the daemon's localhost).
+	DevServerDetected func(sessionID, url string)
 
 	// MaxTasksPerSession caps the per-session table size. 0 = use
 	// DefaultMaxTasks. Production wires this from config.
@@ -207,6 +217,58 @@ func (m *Manager) firePatternNotification(t *task) {
 	})
 }
 
+// localServerRe matches a dev-server URL a bash task prints on startup, e.g.
+// "Local: http://localhost:5173/" (Vite) or "http://127.0.0.1:3000" (Next).
+var localServerRe = regexp.MustCompile(`https?://(localhost|127\.0\.0\.1|0\.0\.0\.0):(\d{2,5})(/[^\s"'` + "`" + `\x1b]*)?`)
+
+// detectLocalServerURL returns the first loopback dev-server URL found in s, with
+// 0.0.0.0 rewritten to localhost (browsers can't fetch 0.0.0.0), or "" if none.
+func detectLocalServerURL(s string) string {
+	m := localServerRe.FindStringSubmatch(s)
+	if m == nil {
+		return ""
+	}
+	host := m[1]
+	if host == "0.0.0.0" {
+		host = "localhost"
+	}
+	path := m[3]
+	if path == "" {
+		path = "/"
+	}
+	return "http://" + host + ":" + m[2] + path
+}
+
+// watchDevServer polls a task's live output for a loopback dev-server URL and
+// fires DevServerDetected exactly once. Bounded: stops on task end or after two
+// minutes (a dev server prints its URL within seconds of starting).
+func (m *Manager) watchDevServer(t *task) {
+	ticker := time.NewTicker(400 * time.Millisecond)
+	defer ticker.Stop()
+	deadline := time.After(2 * time.Minute)
+	fire := func() bool {
+		url := detectLocalServerURL(t.live.tail())
+		if url == "" {
+			return false
+		}
+		t.devServerOnce.Do(func() { m.DevServerDetected(t.sessionID, url) })
+		return true
+	}
+	for {
+		select {
+		case <-t.done:
+			fire()
+			return
+		case <-ticker.C:
+			if fire() {
+				return
+			}
+		case <-deadline:
+			return
+		}
+	}
+}
+
 // Defaults applied when fields are zero.
 const (
 	DefaultMaxTasks = 100
@@ -281,6 +343,8 @@ type task struct {
 	// exactly once (via notifyOnce) when the pattern appears in live output.
 	notifyWhen string
 	notifyOnce sync.Once
+	// devServerOnce guards the one-shot DevServerDetected callback per task.
+	devServerOnce sync.Once
 }
 
 func (t *task) snapshot() meta.BackgroundStatus {
@@ -374,6 +438,11 @@ func (m *Manager) runTask(ctx context.Context, t *task) {
 	if t.notifyWhen != "" {
 		go m.watchPattern(t)
 	}
+	// Detect a dev server the task starts (npm run dev …) so the client can point
+	// the preview at it. Off unless wired (cloud daemon leaves it nil).
+	if m.DevServerDetected != nil {
+		go m.watchDevServer(t)
+	}
 	// Last-resort panic guard. The dispatcher chokepoint already recovers, but
 	// a panic anywhere in this goroutine (a nil dispatcher, a future refactor)
 	// must NOT crash the daemon, and must not leave the task pinned "running"
@@ -464,6 +533,10 @@ func (m *Manager) runTask(ctx context.Context, t *task) {
 	// Push the terminal lifecycle event so the live client view updates
 	// instantly (running → completed/errored/cancelled).
 	m.emit(t, state, elapsedMs)
+
+	if m.WorkspaceTouched != nil && t.sessionID != "" {
+		m.WorkspaceTouched(t.sessionID)
+	}
 
 	// Doc-conform : enqueue a completion notification for the
 	// session's next turn. The runtime drains these on turn_start.

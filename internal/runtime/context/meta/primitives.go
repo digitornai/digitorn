@@ -334,7 +334,12 @@ func (m *MetaDispatcher) handleRunParallel(ctx context.Context, call runtime.Too
 			filled[i] = true
 			continue
 		}
-		params := coerceParamMap(parallelArgs(obj))
+		params, perr := coerceParams(parallelArgs(obj))
+		if perr != nil {
+			outcomes[i] = errored(fmt.Sprintf("run_parallel: item %d `args` is not valid JSON — %s", i, perr.Error()))
+			filled[i] = true
+			continue
+		}
 		launched++
 		go func(i int, name string, params map[string]any) {
 			// Panic isolation : a sub-tool that panics must surface as one
@@ -777,7 +782,10 @@ func (m *MetaDispatcher) handleBackgroundRun(ctx context.Context, call runtime.T
 	// caller then collects with agent(wait=true, run_id=...) ; handleAgent applies
 	// the coordinator-role gate, so this stays as restricted as a direct call.
 	if name, _ := call.Args["name"].(string); name != "" && IsAgentSpawnTool(ResolveAlias(Canonicalize(name))) {
-		params := coerceParamMap(call.Args["params"])
+		params, perr := coerceParams(call.Args["params"])
+		if perr != nil {
+			return errored(fmt.Sprintf("background_run: `params` for %q is not valid JSON — %s. Resend `params` as a JSON object.", name, perr.Error()))
+		}
 		spawn := call
 		spawn.Name = ResolveAlias(Canonicalize(name))
 		spawn.Args = withoutWait(params) // force async : hand back a run_id, never block
@@ -1014,7 +1022,10 @@ func (m *MetaDispatcher) handleBackgroundRun(ctx context.Context, call runtime.T
 	if name == "" {
 		return errored("background_run launch: 'name' is required")
 	}
-	params := coerceParamMap(call.Args["params"])
+	params, perr := coerceParams(call.Args["params"])
+	if perr != nil {
+		return errored(fmt.Sprintf("background_run: `params` for %q is not valid JSON — %s. Resend `params` as a JSON object.", name, perr.Error()))
+	}
 	// SG-4 chokepoint : gate the launch target with the caller's real
 	// identity BEFORE scheduling, so a denied / approve tool can't be
 	// smuggled in as a background task (the manager dispatches later

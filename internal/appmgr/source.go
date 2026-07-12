@@ -78,4 +78,3 @@ func (m *gormManager) fetchSource(ctx context.Context, source, userJWT string) (
 		return source, info, nil
 	}
 }
-

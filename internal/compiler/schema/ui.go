@@ -38,6 +38,11 @@ type WorkspaceBlock struct {
 	PreviewChrome       *PreviewChromeBlock `yaml:"preview_chrome,omitempty" json:"preview_chrome,omitempty"`
 	DefaultView         WorkspaceView       `yaml:"default_view,omitempty" json:"default_view,omitempty"`
 	HiddenViews         []WorkspaceView     `yaml:"hidden_views,omitempty" json:"hidden_views,omitempty"`
+	// SourceControl opts this app's workspace into VCS integration (connect,
+	// open/clone a repo, commit, push/pull). Empty → hidden. Currently only
+	// "github". A dedicated opt-in, NOT inferred from having a workspace, so a
+	// code view can exist without exposing GitHub.
+	SourceControl string `yaml:"source_control,omitempty" json:"source_control,omitempty"`
 }
 
 type PreviewChromeBlock struct {

@@ -75,6 +75,35 @@ const originFile = "digitorn-origin.json"
 
 func gitDirOf(workdir string) string { return filepath.Join(workdir, metaDir, gitSubdir) }
 
+// workdirHasContent reports whether workdir holds any entry other than the
+// daemon's own .digitorn metadata or a user's .git — i.e. whether there is
+// anything for the shadow repo to track.
+func workdirHasContent(workdir string) bool {
+	entries, err := os.ReadDir(workdir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if n := e.Name(); n != metaDir && n != ".git" {
+			return true
+		}
+	}
+	return false
+}
+
+// OpenIfNeeded opens the shadow repo ONLY when there is something to track: the
+// shadow already exists, or the workdir has real (non-meta) content. On an
+// otherwise-empty workdir it returns (nil, nil) WITHOUT creating .digitorn, so a
+// scaffolder that requires an empty directory (npm create, git clone, …) can run
+// there first — the shadow is then created by the first read once files appear.
+// Read-only workspace ops use this; writes use Open (which always creates).
+func OpenIfNeeded(workdir string) (*Repo, error) {
+	if !headExists(gitDirOf(workdir)) && !workdirHasContent(workdir) {
+		return nil, nil
+	}
+	return Open(workdir)
+}
+
 // Open opens — initialising on first use — the shadow repo for workdir.
 func Open(workdir string) (*Repo, error) {
 	gd := gitDirOf(workdir)
@@ -740,6 +769,21 @@ func (r *Repo) Log() ([]Commit, error) {
 		return nil, err
 	}
 	return out, nil
+}
+
+// HeadSHA returns the current HEAD commit sha, or "" before the first commit.
+// Used to record what has been pushed to a remote and to count unpushed commits.
+func (r *Repo) HeadSHA() (string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	ref, err := r.repo.Head()
+	if errors.Is(err, plumbing.ErrReferenceNotFound) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return ref.Hash().String(), nil
 }
 
 // commitFiles lists the non-meta paths a commit changed vs its first parent (the

@@ -54,6 +54,10 @@ func (d *Daemon) MountAPI() {
 		"/api/apps/{app_id}/web-static/*",
 		d.serveAppWeb,
 	)
+	// Template previews : static, non-secret bundle content loaded by direct
+	// iframe/img navigation (no JWT possible) — same class as web-static.
+	r.With(d.panicRecoverer).Get("/api/apps/{app_id}/templates/{template_id}/preview", d.serveTemplatePreview)
+	r.With(d.panicRecoverer).Get("/api/apps/{app_id}/templates/{template_id}/preview/*", d.serveTemplatePreview)
 	// Preview file R/W for the embedded-preview SDK — `?t=`-authed (the iframe
 	// can't carry the JWT). The read/write half of useSharedDoc; confined to the
 	// session workdir. The authenticated /workspace/files routes stay untouched.
@@ -221,6 +225,8 @@ func (d *Daemon) MountAPI() {
 
 		// GitHub account connection (workspace export).
 		r.Post("/api/github/oauth/start", d.githubOAuthStart)
+		// The connected user's repos, for the "open a repo" picker (user-scoped).
+		r.Get("/api/github/repos", d.githubRepos)
 
 		// ----- MCP server management : discovery (Phase 1, daemon-level) -----
 		// Browse the static catalog + the official MCP registry and inspect what a
@@ -317,6 +323,7 @@ func (d *Daemon) mountStubs(r chi.Router) {
 	r.Get("/api/apps/{app_id}/sessions/{session_id}/workspace/diff", d.getWorkspaceDiff)
 	r.Get("/api/apps/{app_id}/sessions/{session_id}/workspace/tree", d.getWorkspaceTree)
 	r.Get("/api/apps/{app_id}/sessions/{session_id}/workspace/search", d.getWorkspaceSearch)
+	r.Post("/api/apps/{app_id}/sessions/{session_id}/workspace/fileop", d.workspaceFileOp)
 	r.Get("/api/apps/{app_id}/sessions/{session_id}/workspace/code-snapshot", stub("workspace.code_snapshot"))
 	r.Get("/api/apps/{app_id}/sessions/{session_id}/workspace/preview-snapshot", stub("workspace.preview_snapshot"))
 	r.Get("/api/apps/{app_id}/sessions/{session_id}/workspace/export", stub("workspace.export"))
@@ -382,8 +389,6 @@ func (d *Daemon) mountStubs(r chi.Router) {
 
 	// Skills / Snippets / Templates / Triggers / Watchers / Preview / LSP / OAuth-MCP.
 	r.Get("/api/apps/{app_id}/templates", d.listTemplates)
-	r.Get("/api/apps/{app_id}/templates/{template_id}/preview", d.serveTemplatePreview)
-	r.Get("/api/apps/{app_id}/templates/{template_id}/preview/*", d.serveTemplatePreview)
 	r.Get("/api/apps/{app_id}/skills", d.listSkills)
 	r.Post("/api/apps/{app_id}/skills", d.createSkill)
 	r.Patch("/api/apps/{app_id}/skills/{skill_id}", d.updateSkill)

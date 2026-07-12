@@ -34,25 +34,47 @@ func TestModule_BaselineChangesDiffCommit(t *testing.T) {
 	m := New()
 	ctx := context.Background()
 
+	// An EMPTY workdir must NOT get a baseline (no .digitorn) — otherwise a
+	// scaffolder that needs an empty dir (npm create, git clone…) fails.
 	res, err := m.baseline(ctx, mj(map[string]any{"workdir": dir}))
 	if err != nil || !res.Success {
-		t.Fatalf("baseline: err=%v res=%+v", err, res)
+		t.Fatalf("baseline(empty): err=%v res=%+v", err, res)
 	}
-	if created, _ := res.Data.(map[string]any)["created"].(bool); !created {
-		t.Fatalf("baseline should create on first call: %+v", res.Data)
+	if created, _ := res.Data.(map[string]any)["created"].(bool); created {
+		t.Fatalf("baseline must NOT create on an empty workdir: %+v", res.Data)
+	}
+	if _, serr := os.Stat(filepath.Join(dir, ".digitorn")); !os.IsNotExist(serr) {
+		t.Fatal(".digitorn was created on an empty workdir")
 	}
 
+	// The agent scaffolds the project — these files are the STARTING state, so
+	// they must NOT surface as pending "added" changes.
 	if err := os.WriteFile(filepath.Join(dir, "app.js"), []byte("const a = 1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	res, err = m.baseline(ctx, mj(map[string]any{"workdir": dir}))
+	if err != nil || !res.Success {
+		t.Fatalf("baseline(populated): err=%v res=%+v", err, res)
+	}
+	if created, _ := res.Data.(map[string]any)["created"].(bool); !created {
+		t.Fatalf("baseline should create once the workdir has content: %+v", res.Data)
+	}
+	res, _ = m.changes(ctx, mj(map[string]any{"workdir": dir}))
+	if files := filesOf(t, res.Data); len(files) != 0 {
+		t.Fatalf("scaffolded files must be the baseline, not changes: %+v", files)
+	}
 
+	// The agent then EDITS a scaffolded file — THAT is a real change.
+	if err := os.WriteFile(filepath.Join(dir, "app.js"), []byte("const a = 2\nconst b = 3\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	res, err = m.changes(ctx, mj(map[string]any{"workdir": dir}))
 	if err != nil || !res.Success {
 		t.Fatalf("changes: err=%v res=%+v", err, res)
 	}
 	files := filesOf(t, res.Data)
-	if len(files) != 1 || files[0].Path != "app.js" || files[0].Status != "added" {
-		t.Fatalf("changes wrong: %+v", files)
+	if len(files) != 1 || files[0].Path != "app.js" || files[0].Status != "modified" {
+		t.Fatalf("the edit should show as a modified change: %+v", files)
 	}
 
 	res, err = m.diff(ctx, mj(map[string]any{"workdir": dir, "path": "app.js"}))
@@ -60,15 +82,11 @@ func TestModule_BaselineChangesDiffCommit(t *testing.T) {
 		t.Fatalf("diff: err=%v res=%+v", err, res)
 	}
 	d := res.Data.(map[string]any)
-	if d["insertions"].(int) != 1 {
-		t.Fatalf("diff insertions = %v, want 1", d["insertions"])
-	}
-	if !strings.Contains(d["unified"].(string), "+const a = 1") {
-		t.Fatalf("diff unified missing change:\n%s", d["unified"])
+	if !strings.Contains(d["unified"].(string), "+const a = 2") {
+		t.Fatalf("diff unified missing the edit:\n%s", d["unified"])
 	}
 
-	// Approve COMMITS the file as one revision (approval = a committed revision).
-	// The message becomes the revision label.
+	// Approve COMMITS the change as one revision (approval = a committed revision).
 	res, err = m.approve(ctx, mj(map[string]any{"workdir": dir, "paths": []string{"app.js"}, "message": "ship"}))
 	if err != nil || !res.Success {
 		t.Fatalf("approve: err=%v res=%+v", err, res)
@@ -83,14 +101,14 @@ func TestModule_BaselineChangesDiffCommit(t *testing.T) {
 		t.Fatalf("should be clean after approve, got %+v", files)
 	}
 
-	// The approval is now a revision in the file's history, labelled by its message.
+	// The approval is a revision in the file's history, labelled by its message.
 	res, err = m.history(ctx, mj(map[string]any{"workdir": dir, "path": "app.js"}))
 	if err != nil || !res.Success {
 		t.Fatalf("history: err=%v res=%+v", err, res)
 	}
 	revs, _ := res.Data.(map[string]any)["revisions"].([]gitrepo.Revision)
-	if len(revs) != 1 || revs[0].Message != "ship" {
-		t.Fatalf("history must list the approval revision labelled 'ship': %+v", res.Data)
+	if len(revs) == 0 || revs[len(revs)-1].Message != "ship" {
+		t.Fatalf("history must include the approval revision labelled 'ship': %+v", res.Data)
 	}
 }
 

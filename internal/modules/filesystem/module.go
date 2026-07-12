@@ -5,6 +5,7 @@ package filesystem
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -203,10 +204,11 @@ func New() *Module {
 			"• Right: path=\"scene.excalidraw\" (root file) · path=\"src/pages/index.tsx\" (nested).\n" +
 			"• Wrong: path=\"\" (empty — the call is rejected) · path=\"src/\" or path=\".\" (a directory, not a file).\n" +
 			"\n" +
-			"LARGE CONTENT: if what you are about to write is big (many elements/lines) and you also reasoned at length to plan it, the call can be cut off mid-generation, arriving with an EMPTY path/content and failing immediately. When the target is large, write a MINIMAL version first (skeleton / first few items), confirm it succeeded, then grow it with `edit`/`patch` in several smaller calls instead of one giant `write`.",
+			"LARGE CONTENT: for a big or JSON-heavy body, pass `content_b64` (base64 of the file bytes) instead of `content` — base64 has no quotes/backslashes/newlines, so it can never break argument escaping (the #1 cause of a giant write arriving empty). Otherwise, write a MINIMAL version first (skeleton), confirm it succeeded, then grow it with `edit`/`patch` in smaller calls.",
 		Params: []tool.ParamSpec{
 			{Name: "path", Type: "string", Description: "File path relative to the workspace root, filename included — e.g. \"scene.excalidraw\", \"src/app.tsx\". Never empty, never just a directory.", Required: true, Path: true},
-			{Name: "content", Type: "string", Description: "Full content to write.", Required: true},
+			{Name: "content", Type: "string", Description: "Full content to write (plain string)."},
+			{Name: "content_b64", Type: "string", Description: "Alternative to content: base64 of the full file bytes. Use for LARGE or JSON-heavy content — base64 has no quotes/backslashes/newlines so it can't break escaping. When set, content is ignored."},
 		},
 		RiskLevel:    tool.RiskMedium,
 		Irreversible: true,
@@ -240,6 +242,7 @@ func New() *Module {
 		Params: []tool.ParamSpec{
 			{Name: "path", Type: "string", Description: "File path relative to the workspace root, filename included — e.g. \"scene.excalidraw\", \"src/app.tsx\". Never empty, never just a directory.", Required: true, Path: true},
 			{Name: "new_string", Type: "string", Description: "Content to insert or to replace the located region with. Empty string deletes the targeted lines."},
+			{Name: "new_string_b64", Type: "string", Description: "Alternative to new_string: base64 of the replacement bytes. Use for large/JSON-heavy replacements — can't break escaping. When set, new_string is ignored."},
 			{Name: "old_string", Type: "string", Description: "TEXT locator: substring to find (exact, with whitespace/indentation fuzzy fallback)."},
 			{Name: "replace_all", Type: "boolean", Description: "With old_string: replace every occurrence.", Default: false},
 			{Name: "occurrence", Type: "integer", Description: "With old_string: replace ONLY the Nth match (1-based)."},
@@ -577,10 +580,11 @@ const maxVisionBytes = 5 << 20
 // (offset/limit), an outline (when p.Outline), or a descriptor for a non-text
 // file. Pure per-file logic, shared by single- and multi-file read.
 func (m *Module) readBody(ctx context.Context, rel string, p readParams) (string, *tool.OutputPart, error) {
-	abs, err := m.resolveCtx(ctx, rel)
+	abs, actual, err := m.resolveReadable(ctx, rel)
 	if err != nil {
 		return "", nil, err
 	}
+	rel = actual
 	fi, err := os.Stat(abs)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -734,11 +738,12 @@ func readCapped(abs string, cap int64) (data []byte, overCap bool, err error) {
 }
 
 type writeParams struct {
-	Path     string      `json:"path"`
-	FilePath string      `json:"file_path"`
-	Filename string      `json:"filename"`
-	File     string      `json:"file"`
-	Content  flexjson.Content `json:"content"`
+	Path       string           `json:"path"`
+	FilePath   string           `json:"file_path"`
+	Filename   string           `json:"filename"`
+	File       string           `json:"file"`
+	Content    flexjson.Content `json:"content"`
+	ContentB64 string           `json:"content_b64"`
 }
 
 var reLineNumber = regexp.MustCompile(`^\s*\d+\t`)
@@ -780,7 +785,16 @@ func (m *Module) write(ctx context.Context, raw json.RawMessage) (tool.Result, e
 		return errResult(err), err
 	}
 
-	p.Content = flexjson.Content(stripLineNumbers(string(p.Content)))
+	if s := strings.TrimSpace(p.ContentB64); s != "" {
+		dec, derr := base64.StdEncoding.DecodeString(s)
+		if derr != nil {
+			err := fmt.Errorf("content_b64 is not valid base64: %w", derr)
+			return errResult(err), err
+		}
+		p.Content = flexjson.Content(dec)
+	} else {
+		p.Content = flexjson.Content(stripLineNumbers(string(p.Content)))
+	}
 
 	p.Path = effectivePath(p.Path, p.FilePath, p.Filename, p.File)
 	abs, err := m.resolveCtx(ctx, p.Path)
@@ -837,9 +851,10 @@ type editParams struct {
 	FilePath   string   `json:"file_path"`
 	Filename   string   `json:"filename"`
 	File       string   `json:"file"`
-	OldString  string   `json:"old_string"`
-	NewString  string   `json:"new_string"`
-	ReplaceAll flexjson.Bool `json:"replace_all"`
+	OldString    string        `json:"old_string"`
+	NewString    string        `json:"new_string"`
+	NewStringB64 string        `json:"new_string_b64"`
+	ReplaceAll   flexjson.Bool `json:"replace_all"`
 	// Surgical locators (alternatives to old_string — provide exactly one).
 	Occurrence   flexjson.Int  `json:"occurrence"`
 	StartLine    flexjson.Int  `json:"start_line"`
@@ -970,10 +985,19 @@ func (m *Module) edit(ctx context.Context, raw json.RawMessage) (tool.Result, er
 		return errResult(err), err
 	}
 	p.Path = effectivePath(p.Path, p.FilePath, p.Filename, p.File)
-	abs, err := m.resolveCtx(ctx, p.Path)
+	if s := strings.TrimSpace(p.NewStringB64); s != "" {
+		dec, derr := base64.StdEncoding.DecodeString(s)
+		if derr != nil {
+			err := fmt.Errorf("new_string_b64 is not valid base64: %w", derr)
+			return errResult(err), err
+		}
+		p.NewString = string(dec)
+	}
+	abs, actual, err := m.resolveReadable(ctx, p.Path)
 	if err != nil {
 		return errResult(err), err
 	}
+	p.Path = actual
 	src, err := os.ReadFile(abs)
 	if err != nil {
 		return errResult(err), err
@@ -1071,7 +1095,35 @@ type multiEditParams struct {
 // match, NOTHING is written — the file is left untouched and the failing edit's
 // index (plus closest-match hints) is reported. This is the agent-grade
 // "rewrite a function across N spots" primitive, crash-safe end to end.
+// unwrapStringifiedArray rewrites {"field":"[...]"} → {"field":[...]} when a
+// model double-encodes an array field as a JSON string. Returns raw unchanged
+// on any mismatch.
+func unwrapStringifiedArray(raw json.RawMessage, field string) json.RawMessage {
+	var mp map[string]json.RawMessage
+	if json.Unmarshal(raw, &mp) != nil {
+		return raw
+	}
+	v, ok := mp[field]
+	if !ok || len(v) == 0 || v[0] != '"' {
+		return raw
+	}
+	var s string
+	if json.Unmarshal(v, &s) != nil {
+		return raw
+	}
+	if s = strings.TrimSpace(s); !strings.HasPrefix(s, "[") {
+		return raw
+	}
+	mp[field] = json.RawMessage(s)
+	out, err := json.Marshal(mp)
+	if err != nil {
+		return raw
+	}
+	return out
+}
+
 func (m *Module) multiEdit(ctx context.Context, raw json.RawMessage) (tool.Result, error) {
+	raw = unwrapStringifiedArray(raw, "edits")
 	var p multiEditParams
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return errResult(err), err
@@ -1081,10 +1133,11 @@ func (m *Module) multiEdit(ctx context.Context, raw json.RawMessage) (tool.Resul
 		err := errors.New("edits must not be empty")
 		return errResult(err), err
 	}
-	abs, err := m.resolveCtx(ctx, p.Path)
+	abs, actual, err := m.resolveReadable(ctx, p.Path)
 	if err != nil {
 		return errResult(err), err
 	}
+	p.Path = actual
 	src, err := os.ReadFile(abs)
 	if err != nil {
 		return errResult(err), err

@@ -529,8 +529,9 @@ agents:
 }
 
 // TestAppsAPI_IconEmojiRendersAsSVG : when app.yaml declares an emoji
-// (or any text) as icon and Color is set, the /icon route returns an
-// inline SVG with the emoji centered on a coloured rounded square.
+// as icon and ships no icon file, the /icon route returns the generated
+// branded tile (gradient from App.Color + name monogram) — the emoji
+// itself is never rendered: installed apps never present as emoji.
 func TestAppsAPI_IconEmojiRendersAsSVG(t *testing.T) {
 	h := newAppMgrHarness(t)
 
@@ -578,11 +579,17 @@ agents:
 	if !strings.Contains(body, "<svg") || !strings.Contains(body, "</svg>") {
 		t.Errorf("body not an SVG : %s", body)
 	}
-	if !strings.Contains(body, "#14B8A6") {
-		t.Errorf("body missing color : %s", body)
+	// Gradient stops derive from the declared color (#14B8A6 lightened /
+	// darkened) — the lightened stop is deterministic.
+	if !strings.Contains(body, shadeHex("#14B8A6", 0.20)) {
+		t.Errorf("body missing colour-derived gradient stop : %s", body)
 	}
-	if !strings.Contains(body, "🧱") {
-		t.Errorf("body missing emoji : %s", body)
+	// Monogram of the app name, never the emoji.
+	if !strings.Contains(body, ">EA<") {
+		t.Errorf("body missing name monogram : %s", body)
+	}
+	if strings.Contains(body, "🧱") {
+		t.Errorf("emoji must never be rendered in the icon : %s", body)
 	}
 }
 

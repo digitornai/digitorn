@@ -181,6 +181,24 @@ func (m *Module) repo(workdir string) (*gitrepo.Repo, error) {
 	return r, nil
 }
 
+// repoRead returns the shadow repo for READ operations WITHOUT creating it on an
+// empty workdir. A nil repo (nil error) means "nothing to track yet" — the read
+// handler returns an empty result, leaving the workdir untouched so a scaffolder
+// (npm create, git clone, …) can run in a still-empty directory.
+func (m *Module) repoRead(workdir string) (*gitrepo.Repo, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if r, ok := m.repos[workdir]; ok {
+		return r, nil
+	}
+	r, err := gitrepo.OpenIfNeeded(workdir)
+	if err != nil || r == nil {
+		return nil, err
+	}
+	m.repos[workdir] = r
+	return r, nil
+}
+
 type wdParams struct {
 	Workdir string `json:"workdir"`
 }
@@ -217,9 +235,14 @@ func (m *Module) baseline(_ context.Context, raw json.RawMessage) (tool.Result, 
 	if err := json.Unmarshal(raw, &p); err != nil || p.Workdir == "" {
 		return errResult("baseline: 'workdir' is required"), nil
 	}
-	r, err := m.repo(p.Workdir)
+	r, err := m.repoRead(p.Workdir)
 	if err != nil {
 		return errResult(err.Error()), nil
+	}
+	if r == nil {
+		// Empty workdir → nothing to baseline; do NOT create .digitorn so a
+		// scaffolder can still run in the empty directory.
+		return tool.Result{Success: true, Data: map[string]any{"created": false}}, nil
 	}
 	created, err := r.EnsureBaseline()
 	if err != nil {
@@ -233,9 +256,16 @@ func (m *Module) changes(_ context.Context, raw json.RawMessage) (tool.Result, e
 	if err := json.Unmarshal(raw, &p); err != nil || p.Workdir == "" {
 		return errResult("changes: 'workdir' is required"), nil
 	}
-	r, err := m.repo(p.Workdir)
+	r, err := m.repoRead(p.Workdir)
 	if err != nil {
 		return errResult(err.Error()), nil
+	}
+	if r == nil {
+		// Empty workdir, shadow not created yet → no changes.
+		return tool.Result{Success: true, Data: map[string]any{
+			"files": []any{}, "count": 0,
+			"total_insertions_pending": 0, "total_deletions_pending": 0,
+		}}, nil
 	}
 	// Ensure the baseline exists before listing changes: without it every file
 	// reads as untracked (the whole repo shows as "added"). The baseline is built
@@ -295,9 +325,12 @@ func (m *Module) history(_ context.Context, raw json.RawMessage) (tool.Result, e
 	if err := json.Unmarshal(raw, &p); err != nil || p.Workdir == "" || p.Path == "" {
 		return errResult("history: 'workdir' and 'path' are required"), nil
 	}
-	r, err := m.repo(p.Workdir)
+	r, err := m.repoRead(p.Workdir)
 	if err != nil {
 		return errResult(err.Error()), nil
+	}
+	if r == nil {
+		return tool.Result{Success: true, Data: map[string]any{"revisions": []any{}}}, nil
 	}
 	revs, err := r.History(p.Path)
 	if err != nil {
@@ -311,9 +344,14 @@ func (m *Module) diff(_ context.Context, raw json.RawMessage) (tool.Result, erro
 	if err := json.Unmarshal(raw, &p); err != nil || p.Workdir == "" || p.Path == "" {
 		return errResult("diff: 'workdir' and 'path' are required"), nil
 	}
-	r, err := m.repo(p.Workdir)
+	r, err := m.repoRead(p.Workdir)
 	if err != nil {
 		return errResult(err.Error()), nil
+	}
+	if r == nil {
+		return tool.Result{Success: true, Data: map[string]any{
+			"path": p.Path, "unified": "", "insertions": 0, "deletions": 0,
+		}}, nil
 	}
 	unified, ins, del, err := r.FileDiff(p.Path)
 	if err != nil {
@@ -421,9 +459,12 @@ func (m *Module) log(_ context.Context, raw json.RawMessage) (tool.Result, error
 	if err := json.Unmarshal(raw, &p); err != nil || p.Workdir == "" {
 		return errResult("log: 'workdir' is required"), nil
 	}
-	r, err := m.repo(p.Workdir)
+	r, err := m.repoRead(p.Workdir)
 	if err != nil {
 		return errResult(err.Error()), nil
+	}
+	if r == nil {
+		return tool.Result{Success: true, Data: map[string]any{"commits": []any{}}}, nil
 	}
 	commits, err := r.Log()
 	if err != nil {

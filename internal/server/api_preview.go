@@ -519,10 +519,23 @@ type activePreviewState struct {
 // (re)sends the current theme. Runs in <head> before paint to avoid a flash.
 const previewThemeShim = `<script>(function(){function r(m){m=(m||"").toLowerCase();if(m==="dark"||m==="light")return m;try{return window.matchMedia&&window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"}catch(e){return "light"}}function a(m,c){var e=document.documentElement;e.setAttribute("data-theme",m);e.style.colorScheme=m;if(c)e.style.setProperty("--digitorn-accent",c)}try{var q=new URLSearchParams(location.search);a(r(q.get("theme")||q.get("mode")),q.get("accent"))}catch(e){}window.addEventListener("message",function(e){var d=e.data;if(!d||d.type!=="digi:theme-change"||!d.theme)return;a(r(d.theme.mode),d.theme.accent)});try{if(window.parent&&window.parent!==window)window.parent.postMessage({type:"digi:ready"},"*")}catch(e){}})();</script>`
 
-// injectThemeShim inserts the theme shim into an HTML document — right before
-// </head> when present, else just after the opening <head>, else prepended.
+// previewErrorShim captures the previewed app's runtime failures (uncaught
+// errors, unhandled rejections, console.error) and postMessages them to the host
+// as `digi:preview-error`, so a crash surfaces in the Problems panel instead of a
+// silent blank page. Passive (listeners + postMessage only, no DOM mutation) so
+// it never breaks an embedded web app. Deduped + capped at 50 to avoid flooding.
+const previewErrorShim = `<script>(function(){var n=0,seen={};function p(k,m,s,f,l,c){if(n>50)return;var key=k+"|"+m+"|"+(l||0);if(seen[key])return;seen[key]=1;n++;try{if(window.parent&&window.parent!==window)window.parent.postMessage({type:"digi:preview-error",error:{kind:k,message:String(m||""),stack:s?String(s).slice(0,4000):"",source:f||"",line:l||0,column:c||0}},"*")}catch(e){}}window.addEventListener("error",function(e){if(e&&(e.error||e.message))p("error",e.message,e.error&&e.error.stack,e.filename,e.lineno,e.colno)});window.addEventListener("unhandledrejection",function(e){var r=e&&e.reason;p("unhandledrejection",(r&&r.message)||String(r),r&&r.stack,"",0,0)});var ce=console.error;console.error=function(){try{var a=[].slice.call(arguments).map(function(x){return x&&x.message?x.message:String(x)}).join(" ");p("console.error",a,arguments[0]&&arguments[0].stack,"",0,0)}catch(_){}return ce.apply(console,arguments)}})();</script>`
+
+// previewNavShim gives the host real browser-style back/forward over the preview.
+// The iframe is cross-origin so the host can't touch its history directly: this
+// reports every navigation (push/replace/pop) to the host and executes the host's
+// back/forward commands from inside the frame (same-origin to itself). Passive.
+const previewNavShim = `<script>(function(){function s(k){try{if(window.parent&&window.parent!==window)window.parent.postMessage({type:"digi:nav",url:location.href,kind:k},"*")}catch(e){}}var p=history.pushState;history.pushState=function(){var r=p.apply(this,arguments);s("push");return r};var rp=history.replaceState;history.replaceState=function(){var r=rp.apply(this,arguments);s("replace");return r};window.addEventListener("popstate",function(){s("pop")});window.addEventListener("hashchange",function(){s("push")});window.addEventListener("message",function(e){var d=e.data;if(!d)return;if(d.type==="digi:nav-back")history.back();else if(d.type==="digi:nav-forward")history.forward()});s("push")})();</script>`
+
+// injectThemeShim inserts the theme + error + nav shims into an HTML document —
+// right before </head> when present, else after the opening <head>, else prepended.
 func injectThemeShim(html []byte) []byte {
-	shim := []byte(previewThemeShim)
+	shim := []byte(previewThemeShim + previewErrorShim + previewNavShim)
 	low := bytes.ToLower(html)
 	if i := bytes.Index(low, []byte("</head>")); i >= 0 {
 		return append(append(append(make([]byte, 0, len(html)+len(shim)), html[:i]...), shim...), html[i:]...)

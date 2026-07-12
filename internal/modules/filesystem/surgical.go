@@ -79,6 +79,11 @@ func resolveEditOp(content string, loc editLocator) (updated string, count int, 
 		if loc.Occurrence > 0 {
 			return editNthOccurrence(content, loc.OldString, loc.NewString, loc.Occurrence)
 		}
+		if loc.StartLine > 0 && !loc.ReplaceAll {
+			if upd, n, strat, ok := editNearestLine(content, loc.OldString, loc.NewString, loc.StartLine); ok {
+				return upd, n, strat, nil
+			}
+		}
 		return applyEdit(content, loc.OldString, loc.NewString, loc.ReplaceAll)
 	case loc.InsertAfter != "":
 		return editInsert(content, loc.InsertAfter, loc.NewString, true)
@@ -162,6 +167,15 @@ func editInsert(content, anchor, newStr string, after bool) (string, int, string
 	at := hits[0]
 	if after {
 		at++
+		// If the anchor line OPENS a brace block (function/class/if…), the agent
+		// almost always means "after the whole block", not after the signature
+		// line — inserting there would land inside the body. Jump past the
+		// matching close brace. Falls back to line behaviour if braces don't
+		// balance cleanly, so it's never worse than before.
+		if end, ok := blockCloseLine(m.lines, hits[0]); ok && end+1 > at {
+			at = end + 1
+			strat = "insert_after_block"
+		}
 	}
 	ins := replacementLines(newStr)
 	out := make([]string, 0, len(m.lines)+len(ins))
@@ -170,6 +184,58 @@ func editInsert(content, anchor, newStr string, after bool) (string, int, string
 	out = append(out, m.lines[at:]...)
 	m.lines = out
 	return m.join(), 1, strat, nil
+}
+
+// blockCloseLine returns the line index of the "}" that closes the first "{"
+// opened on/after line start, or ok=false if the anchor line opens no block or
+// the braces don't balance before EOF. Skips braces inside strings and //, /* */
+// comments so code text can't throw off the count.
+func blockCloseLine(lines []string, start int) (int, bool) {
+	depth := 0
+	opened := false
+	var str byte // 0 or the open quote: " ' `
+	inBlock := false
+	for li := start; li < len(lines); li++ {
+		l := lines[li]
+		lineComment := false
+		for i := 0; i < len(l); i++ {
+			c := l[i]
+			switch {
+			case inBlock:
+				if c == '*' && i+1 < len(l) && l[i+1] == '/' {
+					inBlock = false
+					i++
+				}
+			case lineComment:
+				i = len(l)
+			case str != 0:
+				if c == '\\' {
+					i++
+				} else if c == str {
+					str = 0
+				}
+			case c == '/' && i+1 < len(l) && l[i+1] == '/':
+				lineComment = true
+			case c == '/' && i+1 < len(l) && l[i+1] == '*':
+				inBlock = true
+				i++
+			case c == '"' || c == '\'' || c == '`':
+				str = c
+			case c == '{':
+				depth++
+				opened = true
+			case c == '}':
+				depth--
+				if opened && depth == 0 {
+					return li, true
+				}
+				if depth < 0 {
+					return 0, false
+				}
+			}
+		}
+	}
+	return 0, false
 }
 
 // editEnds prepends or appends new_string as whole lines, preserving the file's
@@ -186,6 +252,43 @@ func editEnds(content, newStr string, prepend bool) (string, int, string, error)
 	}
 	m.lines = append(m.lines, ins...)
 	return m.join(), 1, "append", nil
+}
+
+// editNearestLine disambiguates an old_string that occurs several times by the
+// start_line the agent read: among the EXACT matches, it edits the one whose
+// line is closest to the hint. Only a tiebreak between identical matches (never
+// a speculative edit), so it can't corrupt. ok=false when old_string is unique
+// (0 or 1 match) so the normal path handles it (and its miss/closest hint).
+func editNearestLine(content, oldStr, newStr string, line int) (string, int, string, bool) {
+	if oldStr == "" {
+		return "", 0, "", false
+	}
+	var offs []int
+	for off := 0; ; {
+		i := strings.Index(content[off:], oldStr)
+		if i < 0 {
+			break
+		}
+		abs := off + i
+		offs = append(offs, abs)
+		off = abs + len(oldStr)
+	}
+	if len(offs) < 2 {
+		return "", 0, "", false
+	}
+	best, bestDist := 0, 1<<30
+	for idx, abs := range offs {
+		ln := 1 + strings.Count(content[:abs], "\n")
+		d := ln - line
+		if d < 0 {
+			d = -d
+		}
+		if d < bestDist {
+			bestDist, best = d, idx
+		}
+	}
+	abs := offs[best]
+	return content[:abs] + newStr + content[abs+len(oldStr):], 1, "old_string@nearest_line", true
 }
 
 // editNthOccurrence replaces ONLY the Nth (1-based) exact occurrence of oldStr,
@@ -220,7 +323,7 @@ func editNthOccurrence(content, oldStr, newStr string, n int) (string, int, stri
 // flag so the agent knows when its match wasn't byte-exact.
 func isFuzzyStrategy(strategy string) bool {
 	switch strategy {
-	case "exact", "line_range", "insert_after", "insert_before", "prepend", "append", "noop":
+	case "exact", "line_range", "insert_after", "insert_after_block", "insert_before", "prepend", "append", "noop":
 		return false
 	}
 	return !strings.HasPrefix(strategy, "occurrence")

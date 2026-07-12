@@ -536,6 +536,81 @@ func TestExecuteTool_ParamsTakesPrecedence(t *testing.T) {
 	}
 }
 
+// TestExecuteTool_ParamsStringParses : a well-formed JSON STRING (the common
+// discovery-mode shape) is decoded and forwarded with its fields intact.
+func TestExecuteTool_ParamsStringParses(t *testing.T) {
+	inner := &fakeInner{}
+	d := &meta.MetaDispatcher{IndexLookup: lookupOf(buildTestIndex(t)), Inner: inner}
+	d.Dispatch(context.Background(), runtime.ToolInvocation{
+		Name: "context_builder.execute_tool",
+		Args: map[string]any{
+			"name":   "filesystem.read",
+			"params": `{"path":"/from/string"}`,
+		},
+	})
+	if len(inner.calls) != 1 || inner.calls[0].Args["path"] != "/from/string" {
+		t.Fatalf("string params not decoded : calls=%d args=%v", len(inner.calls), inner.calls)
+	}
+}
+
+// TestExecuteTool_MalformedParamsErrorsNotEmpty : a params string that is not
+// valid JSON (the dropped-escape case) must NOT be forwarded as an empty map —
+// it returns an honest parse error the model can act on.
+func TestExecuteTool_MalformedParamsErrorsNotEmpty(t *testing.T) {
+	inner := &fakeInner{}
+	d := &meta.MetaDispatcher{IndexLookup: lookupOf(buildTestIndex(t)), Inner: inner}
+	out := d.Dispatch(context.Background(), runtime.ToolInvocation{
+		Name: "context_builder.execute_tool",
+		Args: map[string]any{
+			"name":   "filesystem.write",
+			"params": `{"path":"a.txt","content":"x": 1}`, // broken escape / stray quote
+		},
+	})
+	if len(inner.calls) != 0 {
+		t.Fatalf("malformed params reached the target tool : %v", inner.calls)
+	}
+	if out.Status != "errored" || !strings.Contains(out.Error, "not valid JSON") {
+		t.Fatalf("want honest parse error, got status=%q err=%q", out.Status, out.Error)
+	}
+}
+
+// TestExecuteTool_BareNameReachesInner : execute_tool accepts the target with or
+// without the module prefix — a bare "read" resolves to filesystem.read before
+// the gate, exactly like "filesystem.read".
+func TestExecuteTool_BareNameReachesInner(t *testing.T) {
+	inner := &fakeInner{}
+	d := &meta.MetaDispatcher{IndexLookup: lookupOf(buildTestIndex(t)), Inner: inner}
+	for _, name := range []string{"read", "filesystem.read"} {
+		inner.calls = nil
+		d.Dispatch(context.Background(), runtime.ToolInvocation{
+			Name: "context_builder.execute_tool",
+			Args: map[string]any{"name": name, "params": map[string]any{"path": "/x"}},
+		})
+		if len(inner.calls) != 1 || inner.calls[0].Name != "filesystem.read" {
+			t.Fatalf("execute_tool(name=%q) → inner %v, want filesystem.read", name, inner.calls)
+		}
+	}
+}
+
+// TestResolveToolName_BareResolves : an unambiguous bare action resolves to its
+// FQN (so the pre-dispatch gate sees the real tool), while an already-qualified
+// or ambiguous name is returned unchanged.
+func TestResolveToolName_BareResolves(t *testing.T) {
+	d := &meta.MetaDispatcher{IndexLookup: lookupOf(buildTestIndex(t))}
+	cases := map[string]string{
+		"read":            "filesystem.read",
+		"write":           "filesystem.write",
+		"bash":            "shell.bash",
+		"filesystem.read": "filesystem.read",
+		"nonexistent":     "nonexistent",
+	}
+	for in, want := range cases {
+		if got := d.ResolveToolName("app", "main", in); got != want {
+			t.Errorf("ResolveToolName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 // --- auto-routing --------------------------------------------------
 
 // TestAutoRoute_DotForm_GoesToInner : LLM calls "filesystem.read"

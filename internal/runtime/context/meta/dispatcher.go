@@ -160,6 +160,26 @@ func (m *MetaDispatcher) resolveIndex(call runtime.ToolInvocation) *index.ToolIn
 	return m.IndexLookup(call.AppID, call.AgentID)
 }
 
+// ResolveToolName qualifies a possibly-bare tool name to its canonical FQN using
+// the same steps Dispatch applies, so callers that run BEFORE Dispatch (the
+// security gate) evaluate the real tool, not a bare action with an empty module.
+func (m *MetaDispatcher) ResolveToolName(appID, agentID, name string) string {
+	canonical := ResolveAlias(Canonicalize(name))
+	if strings.Contains(canonical, ".") || m == nil || m.IndexLookup == nil {
+		return canonical
+	}
+	idx := m.IndexLookup(appID, agentID)
+	if idx == nil {
+		return canonical
+	}
+	fqns := idx.FQNList()
+	canonical = toolname.QualifyBareName(canonical, fqns)
+	if !strings.Contains(canonical, ".") {
+		canonical = toolname.ResolveMangled(canonical, fqns)
+	}
+	return canonical
+}
+
 // DefaultBrowsePageSize matches the reference daemon's
 // browse_category default (actions_meta.py).
 const DefaultBrowsePageSize = 20
@@ -481,7 +501,12 @@ func (m *MetaDispatcher) handleExecuteTool(ctx context.Context, call runtime.Too
 		return errored("execute_tool: 'name' is required")
 	}
 
-	params := extractExecuteToolParams(call.Args)
+	params, perr := extractExecuteToolParams(call.Args)
+	if perr != nil {
+		return errored(fmt.Sprintf(
+			"execute_tool: `params` for %q is not valid JSON — %s. Resend `params` as a JSON object (NOT a stringified blob); for a large value, verify every quote inside it is escaped.",
+			name, perr.Error()))
+	}
 
 	// Build a fresh ToolInvocation with the resolved target. CallID,
 	// AppID, AgentID, UserID, AgentRunID and UserJWT are preserved so the
@@ -517,55 +542,118 @@ func (m *MetaDispatcher) handleExecuteTool(ctx context.Context, call runtime.Too
 	if blocked := m.gateTarget(ctx, target); blocked != nil {
 		return *blocked
 	}
-	// Re-enter Dispatch — handles meta→domain, runs Inner, etc.
-	return m.Dispatch(ctx, target)
+	out := m.Dispatch(ctx, target)
+	if out.Status == "errored" {
+		out.Error = appendParamSchema(out.Error, target.Name, m.resolveIndex(call))
+	}
+	return out
 }
 
-// extractExecuteToolParams walks `args` and returns the inner
-// parameter map regardless of which of the accepted shapes the LLM
-// produced. Precedence : explicit `params` > explicit `arguments` >
-// explicit `args` > flattened top-level (everything except "name").
-//
-// Returning an empty (non-nil) map for the no-params case keeps the
-// downstream dispatcher's nil-checks simpler — every domain tool
-// is exercised with a real map.
-// coerceParamMap accepts a tool-params value as either a JSON object
-// (map[string]any) or a JSON-encoded string and returns the decoded map.
-// LLMs in discovery mode frequently emit params as a string, e.g.
-// execute_tool(name="filesystem.read", params="{\"path\":\"note.txt\"}").
-// Returns nil when the value is neither shape or the string won't parse.
-func coerceParamMap(v any) map[string]any {
+// appendParamSchema tacks the target tool's parameter list onto a param-shaped
+// error so the model sees exactly what to send on retry.
+func appendParamSchema(errMsg, fqn string, idx *index.ToolIndex) string {
+	if idx == nil || !looksLikeParamError(errMsg) {
+		return errMsg
+	}
+	t := idx.Get(Canonicalize(fqn))
+	if t == nil || len(t.Params) == 0 {
+		return errMsg
+	}
+	parts := make([]string, 0, len(t.Params))
+	for _, p := range t.Params {
+		s := p.Name + " (" + p.Type
+		if p.Required {
+			s += ", required"
+		}
+		parts = append(parts, s+")")
+	}
+	return errMsg + "\n" + fqn + " params: " + strings.Join(parts, ", ")
+}
+
+func looksLikeParamError(msg string) bool {
+	for _, kw := range []string{"must not be empty", "required", "no edit locator"} {
+		if strings.Contains(msg, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+// paramParseError marks a params value present as a non-empty string that is
+// not valid JSON, so the caller reports an honest parse error instead of
+// silently coercing it to an empty map.
+type paramParseError struct{ detail string }
+
+func (e *paramParseError) Error() string { return e.detail }
+
+// coerceParams decodes a tool-params value: (m,nil) for an object or a string
+// that parses; (nil,nil) when absent/blank; (nil,err) when a non-empty string
+// is present but invalid JSON. No "repair" — a wrong guess could corrupt a write.
+func coerceParams(v any) (map[string]any, error) {
 	switch t := v.(type) {
 	case map[string]any:
-		return t
+		return t, nil
 	case string:
 		s := strings.TrimSpace(t)
 		if s == "" {
-			return nil
+			return nil, nil
 		}
 		var m map[string]any
-		if json.Unmarshal([]byte(s), &m) == nil {
-			return m
+		if err := json.Unmarshal([]byte(s), &m); err != nil {
+			return nil, &paramParseError{detail: describeJSONError(s, err)}
 		}
+		return m, nil
 	}
-	return nil
+	return nil, nil
 }
 
-func extractExecuteToolParams(args map[string]any) map[string]any {
-	// params/arguments/args may arrive as a JSON object OR — very commonly from
-	// LLMs in discovery mode — as a JSON-encoded STRING. coerceParamMap accepts
-	// both, so a string like "{\"path\":\"note.txt\"}" no longer falls through
-	// to the empty flattened map (which silently stripped every argument).
+func coerceParamMap(v any) map[string]any {
+	m, _ := coerceParams(v)
+	return m
+}
+
+// describeJSONError points the model at the exact break: message + byte offset
+// + a snippet around it.
+func describeJSONError(s string, err error) string {
+	off := -1
+	if se, ok := err.(*json.SyntaxError); ok {
+		off = int(se.Offset)
+	} else if ute, ok := err.(*json.UnmarshalTypeError); ok {
+		off = int(ute.Offset)
+	}
+	if off < 0 {
+		return err.Error()
+	}
+	if off > len(s) {
+		off = len(s)
+	}
+	lo, hi := off-28, off+28
+	if lo < 0 {
+		lo = 0
+	}
+	if hi > len(s) {
+		hi = len(s)
+	}
+	return fmt.Sprintf("%s (at byte %d of %d, near: %q)", err.Error(), off, len(s), s[lo:hi])
+}
+
+// extractExecuteToolParams returns the inner param map from whichever shape the
+// LLM produced: params > arguments > args > flattened top-level. A present but
+// malformed JSON string returns an error, never the empty-map fallthrough.
+func extractExecuteToolParams(args map[string]any) (map[string]any, error) {
 	for _, key := range []string{"params", "arguments", "args"} {
-		if v, ok := args[key]; ok {
-			if m := coerceParamMap(v); m != nil {
-				return m
-			}
+		v, ok := args[key]
+		if !ok {
+			continue
+		}
+		m, err := coerceParams(v)
+		if err != nil {
+			return nil, err
+		}
+		if m != nil {
+			return m, nil
 		}
 	}
-	// Flattened fallback : copy every key except "name" into a fresh
-	// map. Avoids mutating the caller's args map (defensive) and
-	// shields the inner dispatcher from the "name" key.
 	out := make(map[string]any, len(args))
 	for k, v := range args {
 		switch k {
@@ -575,7 +663,7 @@ func extractExecuteToolParams(args map[string]any) map[string]any {
 			out[k] = v
 		}
 	}
-	return out
+	return out, nil
 }
 
 // handleListCategories : return the list of modules currently

@@ -210,6 +210,9 @@ func (d *Daemon) createSession(w http.ResponseWriter, r *http.Request) {
 	// A launcher-supplied model override : pin the entry agent's model for the whole
 	// session BEFORE the first turn fires, so the inline message already runs on it.
 	// The gateway re-validates the model at turn time, so no kind-check is needed here.
+	// entryPinned remembers which agent got the explicit pick — it wins over the
+	// stored per-app default below.
+	entryPinned := ""
 	if req.Model != "" && d.appMgr != nil {
 		if def, derr := d.appMgr.GetManifest(r.Context(), appID); derr == nil {
 			if agentID, _ := resolveEntryAgent(def, req.EntryAgent); agentID != "" {
@@ -218,13 +221,19 @@ func (d *Daemon) createSession(w http.ResponseWriter, r *http.Request) {
 					SessionID: sid,
 					AppID:     appID,
 					UserID:    userID,
-					Meta:      &sessionstore.MetaPayload{Model: req.Model, AgentID: agentID},
+					// Cross-provider vault models (local/BYOK) need their provider
+					// pinned too, or the first turn routes to the brain's provider.
+					Meta: &sessionstore.MetaPayload{Model: req.Model, AgentID: agentID, Provider: d.directVaultProvider(r.Context(), userID, req.Model)},
 				}); merr != nil {
 					d.logger.Warn("createSession: model override failed", "sid", sid, "err", merr.Error())
 				}
+				entryPinned = agentID
 			}
 		}
 	}
+	// The user's per-app default models (app settings) apply to every agent that
+	// didn't get an explicit pick — still BEFORE the first turn.
+	d.applyModelDefaults(ctxApp, userID, appID, sid, entryPinned)
 	// Inline first message : web clients send it with the create call. Append
 	// the user message and kick the turn, exactly as POST /messages would.
 	var firstMsgSeq uint64

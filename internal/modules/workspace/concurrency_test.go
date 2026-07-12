@@ -17,6 +17,11 @@ func TestConcurrent_SameWorkdirSerialised(t *testing.T) {
 	dir := t.TempDir()
 	m := New()
 	ctx := context.Background()
+	// Seed a starting file so the baseline (workspace start) exists; the
+	// concurrent goroutines then ADD files, which are real changes to commit.
+	if err := os.WriteFile(filepath.Join(dir, "seed.txt"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if r, err := m.baseline(ctx, mj(map[string]any{"workdir": dir})); err != nil || !r.Success {
 		t.Fatalf("baseline: %v %v", err, r.Error)
 	}
@@ -75,18 +80,25 @@ func TestConcurrent_ManyWorkdirsParallel(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			dir := dirs[i]
+			name := fmt.Sprintf("w%d.txt", i)
+			// Scaffold the starting file, baseline it (= workspace start), then
+			// EDIT it — only the edit is a change, and it stays isolated to this
+			// workdir.
+			if err := os.WriteFile(filepath.Join(dir, name), []byte(fmt.Sprintf("hello %d\n", i)), 0o644); err != nil {
+				fail <- err.Error()
+				return
+			}
 			if r, _ := m.baseline(ctx, mj(map[string]any{"workdir": dir})); !r.Success {
 				fail <- "baseline: " + r.Error
 				return
 			}
-			name := fmt.Sprintf("w%d.txt", i)
-			if err := os.WriteFile(filepath.Join(dir, name), []byte(fmt.Sprintf("hello %d\n", i)), 0o644); err != nil {
+			if err := os.WriteFile(filepath.Join(dir, name), []byte(fmt.Sprintf("hello %d edited\n", i)), 0o644); err != nil {
 				fail <- err.Error()
 				return
 			}
 			r, _ := m.changes(ctx, mj(map[string]any{"workdir": dir}))
 			files := filesOf(t, r.Data)
-			if len(files) != 1 || files[0].Path != name || files[0].Status != "added" {
+			if len(files) != 1 || files[0].Path != name || files[0].Status != "modified" {
 				fail <- fmt.Sprintf("workdir %d isolation wrong: %+v", i, files)
 			}
 		}(i)

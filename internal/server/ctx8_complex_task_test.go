@@ -151,4 +151,6 @@ func runComplexTaskContinuation(t *testing.T, bgSummary bool) {
 func TestLive_CTX8_ComplexTaskContinuation_Legacy(t *testing.T) { runComplexTaskContinuation(t, false) }
 
 // TestLive_CTX8_ComplexTaskContinuation_Prepared — CTX-8 non-blocking path (flag ON).
-func TestLive_CTX8_ComplexTaskContinuation_Prepared(t *testing.T) { runComplexTaskContinuation(t, true) }
+func TestLive_CTX8_ComplexTaskContinuation_Prepared(t *testing.T) {
+	runComplexTaskContinuation(t, true)
+}

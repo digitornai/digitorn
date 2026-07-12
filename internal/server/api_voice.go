@@ -56,7 +56,7 @@ func (d *Daemon) voiceAudioWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	route := llmaudio.Route{UserJWT: jwt, SessionID: sid, UserID: uid}
+	route := llmaudio.Route{UserJWT: jwt, AppID: appID, SessionID: sid, UserID: uid}
 	stt := llmaudio.NewSTT(d.llmClient, llmaudio.STTConfig{
 		Model:      q.Get("stt_model"),
 		Language:   q.Get("language"),

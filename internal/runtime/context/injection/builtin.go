@@ -93,7 +93,7 @@ func builtinToolSpecs() []llm.ToolSpec {
 		},
 		{
 			Name:        "context_builder.execute_tool",
-			Description: "Execute any tool by name with the given parameters. The runtime also auto-routes direct calls (e.g. filesystem.read({...})) through this action.",
+			Description: "Execute any tool by name with the given parameters. The runtime also auto-routes direct calls (e.g. filesystem.read({...})) through this action. Pass `params` as a native JSON OBJECT, never a stringified blob — a hand-escaped string breaks on large values. For a large or JSON-heavy file body, use the target tool's `content_b64` (base64) field so escaping can't fail.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

@@ -245,11 +245,9 @@ type liveToolCall struct {
 	emittedChars int    // argChars at the last emitted event (throttle baseline)
 }
 
-// streamDetailPrefixCap bounds the accumulated args prefix : the useful first
-// param (file_path, command…) sits in the opening bytes of the JSON.
 const streamDetailPrefixCap = 600
 
-// streamDetailKeys, in priority order, are the arg names worth surfacing live.
+// Arg names worth surfacing live, in priority order.
 var streamDetailKeys = []string{
 	"file_path", "path", "command", "pattern", "url", "query", "name",
 }
@@ -262,9 +260,7 @@ var streamDetailRe = func() map[string]*regexp.Regexp {
 	return m
 }()
 
-// extractStreamDetail pulls the first COMPLETE known-key string value out of a
-// partial JSON args prefix. Best-effort : returns "" until the value's closing
-// quote has streamed in.
+// extractStreamDetail: first complete known-key value in a partial JSON prefix.
 func extractStreamDetail(prefix string) string {
 	for _, k := range streamDetailKeys {
 		if m := streamDetailRe[k].FindStringSubmatch(prefix); m != nil && m[1] != "" {

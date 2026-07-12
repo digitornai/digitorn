@@ -31,6 +31,7 @@ type Route struct {
 	BYOK          bool
 	APIKey        string
 	BaseURL       string
+	AppID         string
 	SessionID     string
 	UserID        string
 	AgentID       string
@@ -108,6 +109,7 @@ func (s *sttStream) transcribe(wav []byte) {
 		APIKey:        r.APIKey,
 		UserJWT:       r.UserJWT,
 		BaseURL:       r.BaseURL,
+		AppID:         r.AppID,
 		SessionID:     r.SessionID,
 		UserID:        r.UserID,
 		AgentID:       r.AgentID,
@@ -185,6 +187,7 @@ func (e *TTS) Synthesize(ctx context.Context, text string) (<-chan voice.Frame, 
 		APIKey:        r.APIKey,
 		UserJWT:       r.UserJWT,
 		BaseURL:       r.BaseURL,
+		AppID:         r.AppID,
 		SessionID:     r.SessionID,
 		UserID:        r.UserID,
 		AgentID:       r.AgentID,

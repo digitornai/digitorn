@@ -25,11 +25,12 @@ const githubProviderKey = "github"
 const githubWorkspaceAppID = "@github-workspace"
 
 type githubLinkState struct {
-	FullName string `json:"full_name"` // owner/repo
-	URL      string `json:"url"`       // https://github.com/owner/repo
-	Branch   string `json:"branch"`
-	LinkedAt string `json:"linked_at"`
-	LastPush string `json:"last_push,omitempty"`
+	FullName    string `json:"full_name"` // owner/repo
+	URL         string `json:"url"`       // https://github.com/owner/repo
+	Branch      string `json:"branch"`
+	LinkedAt    string `json:"linked_at"`
+	LastPush    string `json:"last_push,omitempty"`
+	LastPushSHA string `json:"last_push_sha,omitempty"` // HEAD at the last successful push — drives the ahead count
 }
 
 func githubLinkPath(workdir string) string {
@@ -117,6 +118,57 @@ func (d *Daemon) githubOAuthStart(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"auth_url": authURL, "state": state})
 }
 
+// githubRepoView is one repo in the picker list (a trimmed GitHub repo).
+type githubRepoView struct {
+	FullName      string `json:"full_name"`
+	Name          string `json:"name"`
+	Private       bool   `json:"private"`
+	Description   string `json:"description"`
+	DefaultBranch string `json:"default_branch"`
+	PushedAt      string `json:"pushed_at"`
+	URL           string `json:"url"`
+}
+
+// GET /api/github/repos — the connected user's repositories, most-recently-pushed
+// first, for the "open a repo" picker. User-scoped (no session needed): the
+// empty-state calls it before any workspace exists.
+func (d *Daemon) githubRepos(w http.ResponseWriter, r *http.Request) {
+	token, err := d.githubToken(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "github_not_connected", err.Error())
+		return
+	}
+	b, code, err := githubAPI(token, "GET",
+		"/user/repos?per_page=100&sort=pushed&affiliation=owner,collaborator,organization_member", nil)
+	if err != nil || code != 200 {
+		writeError(w, http.StatusBadGateway, "github_repos_failed",
+			fmt.Sprintf("github /user/repos: %d %v", code, err))
+		return
+	}
+	var raw []struct {
+		FullName      string `json:"full_name"`
+		Name          string `json:"name"`
+		Private       bool   `json:"private"`
+		Description   string `json:"description"`
+		DefaultBranch string `json:"default_branch"`
+		PushedAt      string `json:"pushed_at"`
+		HTMLURL       string `json:"html_url"`
+	}
+	if err := json.Unmarshal(b, &raw); err != nil {
+		writeError(w, http.StatusBadGateway, "github_repos_parse", err.Error())
+		return
+	}
+	repos := make([]githubRepoView, 0, len(raw))
+	for _, x := range raw {
+		repos = append(repos, githubRepoView{
+			FullName: x.FullName, Name: x.Name, Private: x.Private,
+			Description: x.Description, DefaultBranch: x.DefaultBranch,
+			PushedAt: x.PushedAt, URL: x.HTMLURL,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"repos": repos, "count": len(repos)})
+}
+
 // GET /api/apps/{app_id}/sessions/{session_id}/github/status
 func (d *Daemon) githubStatus(w http.ResponseWriter, r *http.Request) {
 	sid := chi.URLParam(r, "session_id")
@@ -135,6 +187,24 @@ func (d *Daemon) githubStatus(w http.ResponseWriter, r *http.Request) {
 		out["url"] = st.URL
 		out["branch"] = st.Branch
 		out["last_push"] = st.LastPush
+		// Sync state vs GitHub: commits waiting to push (ahead of the last pushed
+		// SHA) + pending uncommitted changes. Best-effort — a git hiccup never
+		// fails the status call, the counts just fall back to absent.
+		if repo, oerr := gitrepo.Open(wd); oerr == nil {
+			if changes, cerr := repo.Changes(); cerr == nil {
+				out["uncommitted"] = len(changes)
+			}
+			if log, lerr := repo.Log(); lerr == nil {
+				ahead := 0
+				for _, c := range log {
+					if c.Sha == st.LastPushSHA {
+						break
+					}
+					ahead++
+				}
+				out["ahead"] = ahead
+			}
+		}
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -189,7 +259,13 @@ func (d *Daemon) githubLink(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"repo": st.FullName, "url": st.URL, "branch": st.Branch})
 }
 
-// POST .../github/push {message} — commit pending work and push HEAD.
+// POST .../github/push — push the workspace's COMMITTED history to GitHub.
+//
+// The workspace Changes panel is the single commit authority: this handler never
+// fabricates a commit. It pushes HEAD as-is (the commits the user/agent made in
+// the panel) and reports any still-uncommitted changes so the UI can nudge the
+// user to commit them first — non-blocking. It only refuses when nothing has been
+// committed at all (there is no HEAD to push).
 func (d *Daemon) githubPush(w http.ResponseWriter, r *http.Request) {
 	sid := chi.URLParam(r, "session_id")
 	wd, err := d.sessionWorkdir(r.Context(), sid)
@@ -207,27 +283,24 @@ func (d *Daemon) githubPush(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "github_not_linked", "link a repository first")
 		return
 	}
-	var req struct {
-		Message string `json:"message"`
-	}
-	_ = readJSONLenient(r, &req)
 	repo, err := gitrepo.Open(wd)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "git_open_failed", err.Error())
 		return
 	}
-	if err := repo.StageAll(); err != nil {
-		writeError(w, http.StatusInternalServerError, "git_stage_failed", err.Error())
+	head, err := repo.HeadSHA()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "git_head_failed", err.Error())
 		return
 	}
-	msg := strings.TrimSpace(req.Message)
-	if msg == "" {
-		msg = "digitorn: workspace push"
-	}
-	commit, cerr := repo.Commit(msg, nil)
-	if cerr != nil && !errors.Is(cerr, gitrepo.ErrNothingStaged) {
-		writeError(w, http.StatusInternalServerError, "git_commit_failed", cerr.Error())
+	if head == "" {
+		writeError(w, http.StatusConflict, "github_nothing_to_push",
+			"commit your changes in the workspace first, then push")
 		return
+	}
+	uncommitted := 0
+	if changes, cerr := repo.Changes(); cerr == nil {
+		uncommitted = len(changes)
 	}
 	remote := "https://github.com/" + st.FullName + ".git"
 	if err := repo.PushToRemote(remote, token, st.Branch); err != nil {
@@ -235,9 +308,11 @@ func (d *Daemon) githubPush(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	st.LastPush = time.Now().UTC().Format(time.RFC3339)
+	st.LastPushSHA = head
 	_ = writeGithubLink(wd, st)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"repo": st.FullName, "url": st.URL, "branch": st.Branch, "commit": commit,
+		"repo": st.FullName, "url": st.URL, "branch": st.Branch,
+		"commit": head, "uncommitted": uncommitted,
 	})
 }
 

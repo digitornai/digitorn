@@ -76,6 +76,7 @@ type SpeechRequest struct {
 	Timeout time.Duration `json:"timeout,omitempty"`
 
 	// Identity for gateway/provider tracing.
+	AppID         string `json:"app_id,omitempty"`
 	SessionID     string `json:"session_id,omitempty"`
 	UserID        string `json:"user_id,omitempty"`
 	AgentID       string `json:"agent_id,omitempty"`
@@ -100,6 +101,7 @@ type TranscribeRequest struct {
 	BaseURL string        `json:"base_url,omitempty"`
 	Timeout time.Duration `json:"timeout,omitempty"`
 
+	AppID         string `json:"app_id,omitempty"`
 	SessionID     string `json:"session_id,omitempty"`
 	UserID        string `json:"user_id,omitempty"`
 	AgentID       string `json:"agent_id,omitempty"`

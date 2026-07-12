@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -808,21 +809,53 @@ func (d *Daemon) putWorkspaceFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Content string `json:"content"`
+		Content    string `json:"content"`
+		ContentB64 string `json:"content_b64"`
 	}
 	if err := readJSONLenient(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
-
 	pp := workdir.NewPolicy(workdir.Options{Root: wd})
-	if _, perr := pp.Enforce(rel); perr != nil {
+	abs, perr := pp.Enforce(rel)
+	if perr != nil {
 		writeError(w, http.StatusForbidden, "forbidden_path", perr.Error())
 		return
 	}
-	// Same context the agent's write runs under → same confinement + atomic
-	// write + index refresh + live poke. The notifier folds sub-agent sessions to
-	// the root room; we only have the user session here, which is exactly right.
+
+	// Binary upload (images, pdf, fonts…): the bytes can't transit filesystem.write
+	// because json.Marshal coerces invalid UTF-8 to U+FFFD. Decode and write them
+	// straight to disk — still confined by the PathPolicy above, atomic (temp+rename),
+	// then fire the live poke so the tree + preview refresh.
+	if body.ContentB64 != "" {
+		raw, derr := base64.StdEncoding.DecodeString(body.ContentB64)
+		if derr != nil {
+			writeError(w, http.StatusBadRequest, "bad_request", "invalid content_b64")
+			return
+		}
+		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+			writeError(w, http.StatusInternalServerError, "workspace_error", err.Error())
+			return
+		}
+		tmp := abs + ".dgt-upload"
+		if err := os.WriteFile(tmp, raw, 0o644); err != nil {
+			writeError(w, http.StatusInternalServerError, "workspace_error", err.Error())
+			return
+		}
+		if err := os.Rename(tmp, abs); err != nil {
+			_ = os.Remove(tmp)
+			writeError(w, http.StatusInternalServerError, "workspace_error", err.Error())
+			return
+		}
+		if d.workspaceLive != nil {
+			d.workspaceLive.FileChanged(sid, wd, filepath.ToSlash(rel))
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"path": filepath.ToSlash(rel), "bytes": len(raw)})
+		return
+	}
+
+	// Text path: route through filesystem.write for diff/index refresh + live poke —
+	// same context the agent's write runs under (confinement + atomic write).
 	ctx := workdir.WithPathPolicy(r.Context(), pp)
 	ctx = tool.WithIdentity(ctx, tool.Identity{
 		SessionID: sid,
@@ -1035,4 +1068,98 @@ func guessLanguage(path string) string {
 	default:
 		return ""
 	}
+}
+
+func (d *Daemon) workspaceFileOp(w http.ResponseWriter, r *http.Request) {
+	sid := sessionIDParam(r)
+	wd, err := d.sessionWorkdir(r.Context(), sid)
+	if err != nil {
+		writeError(w, errStatus(err), errCode(err), err.Error())
+		return
+	}
+	if wd == "" {
+		writeError(w, http.StatusBadRequest, "no_workdir", "session has no workdir")
+		return
+	}
+	var req struct {
+		Op   string `json:"op"`
+		Path string `json:"path"`
+		To   string `json:"to"`
+	}
+	if err := readJSONLenient(r, &req); err != nil || strings.TrimSpace(req.Path) == "" {
+		writeError(w, http.StatusBadRequest, "bad_request", "op and path are required")
+		return
+	}
+	rel := filepath.ToSlash(strings.TrimSpace(req.Path))
+	if isShadowRel(rel) {
+		writeError(w, http.StatusForbidden, "forbidden_path", "path is daemon-internal")
+		return
+	}
+	pp := workdir.NewPolicy(workdir.Options{Root: wd})
+	abs, perr := pp.Enforce(rel)
+	if perr != nil {
+		writeError(w, http.StatusForbidden, "forbidden_path", perr.Error())
+		return
+	}
+	changed := []string{rel}
+	switch req.Op {
+	case "create":
+		if _, serr := os.Stat(abs); serr == nil {
+			writeError(w, http.StatusConflict, "exists", rel+" already exists")
+			return
+		}
+		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+			writeError(w, http.StatusInternalServerError, "op_failed", err.Error())
+			return
+		}
+		if err := os.WriteFile(abs, nil, 0o644); err != nil {
+			writeError(w, http.StatusInternalServerError, "op_failed", err.Error())
+			return
+		}
+	case "mkdir":
+		if err := os.MkdirAll(abs, 0o755); err != nil {
+			writeError(w, http.StatusInternalServerError, "op_failed", err.Error())
+			return
+		}
+	case "rename":
+		to := filepath.ToSlash(strings.TrimSpace(req.To))
+		if to == "" || isShadowRel(to) {
+			writeError(w, http.StatusBadRequest, "bad_request", "valid `to` is required")
+			return
+		}
+		absTo, terr := pp.Enforce(to)
+		if terr != nil {
+			writeError(w, http.StatusForbidden, "forbidden_path", terr.Error())
+			return
+		}
+		if _, serr := os.Stat(absTo); serr == nil {
+			writeError(w, http.StatusConflict, "exists", to+" already exists")
+			return
+		}
+		if err := os.MkdirAll(filepath.Dir(absTo), 0o755); err != nil {
+			writeError(w, http.StatusInternalServerError, "op_failed", err.Error())
+			return
+		}
+		if err := os.Rename(abs, absTo); err != nil {
+			writeError(w, http.StatusInternalServerError, "op_failed", err.Error())
+			return
+		}
+		changed = append(changed, to)
+	case "delete":
+		if _, serr := os.Stat(abs); serr != nil {
+			writeError(w, http.StatusNotFound, "not_found", rel+" does not exist")
+			return
+		}
+		if err := os.RemoveAll(abs); err != nil {
+			writeError(w, http.StatusInternalServerError, "op_failed", err.Error())
+			return
+		}
+	default:
+		writeError(w, http.StatusBadRequest, "bad_request", "op must be create|mkdir|rename|delete")
+		return
+	}
+	if d.workspaceLive != nil {
+		d.workspaceLive.FileChanged(sid, wd, changed...)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"op": req.Op, "path": rel, "to": req.To})
 }
