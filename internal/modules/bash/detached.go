@@ -69,7 +69,13 @@ func runDetached(ctx context.Context, kind, path, command, dir string, env []str
 	errb := newBoundedBuf(maxOut)
 	cmd.Stdout = out
 	cmd.Stderr = errb
-	if r := tool.StdinPipeFromContext(ctx); r != nil {
+	if input != "" {
+		// A one-shot payload: deliver it then EOF (like `echo data | cmd`), even
+		// when an interactive stdin pipe is also attached (background dispatch).
+		// Preferring the never-closing pipe here would drop `input` and hang a
+		// read-until-EOF command (cat, sed, sys.stdin.read()) until timeout.
+		cmd.Stdin = strings.NewReader(input)
+	} else if r := tool.StdinPipeFromContext(ctx); r != nil {
 		if subStdin, pipeErr := cmd.StdinPipe(); pipeErr == nil {
 			go func() {
 				defer subStdin.Close()
@@ -93,8 +99,6 @@ func runDetached(ctx context.Context, kind, path, command, dir string, env []str
 				}
 			}()
 		}
-	} else if input != "" {
-		cmd.Stdin = strings.NewReader(input)
 	}
 	// Live tail : if the caller (the BackgroundManager) attached a live sink,
 	// tee the running command's stdout+stderr into it so a status check can show

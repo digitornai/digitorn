@@ -101,6 +101,7 @@ type grepRequest struct {
 	re          *regexp.Regexp                  // compiled pattern (nil if pure literal)
 	literal     []byte                          // non-nil → literal fast path (no regexp)
 	include     string                          // optional basename glob filter
+	includeAlts []string                        // brace-expanded include ("*.{ts,tsx}" → *.ts, *.tsx)
 	mode        grepOutput
 	contextN    int
 	maxResults  int
@@ -135,7 +136,14 @@ type fileEnumerator func(yield func(path string) bool)
 // confinement check shared by both enumerators.
 func acceptFile(req grepRequest, path, name string) bool {
 	if req.include != "" {
-		if ok, _ := filepath.Match(req.include, name); !ok {
+		matched := false
+		for _, pat := range req.includeAlts {
+			if ok, _ := filepath.Match(pat, name); ok {
+				matched = true
+				break
+			}
+		}
+		if !matched {
 			return false
 		}
 	}

@@ -18,6 +18,8 @@ type AppDefinition struct {
 	// Context : app-wide system-prompt context sections injected each turn
 	// (user/session data, date, custom blocks). Applies to every agent.
 	Context *ContextBlock `yaml:"context,omitempty" json:"context,omitempty"`
+	// Documents : fragmented JSON documents (docstore) bound at session start.
+	Documents []DocumentDecl `yaml:"documents,omitempty" json:"documents,omitempty"`
 	// Legacy top-level aliases for tools.modules and tools.capabilities; the
 	// compiler folds them into Tools before downstream phases see the tree.
 	ModulesTop      map[string]ModuleBlock `yaml:"modules,omitempty" json:"modules,omitempty"`

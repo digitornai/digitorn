@@ -22,6 +22,113 @@ runtime:
   direct_modules:
     - filesystem
 
+# Fragmented document (docstore): the scene lives as one fragment per element
+# under scene.excalidraw.d/; the daemon composes scene.excalidraw (what the
+# canvas reads) and decomposes canvas edits back — diagnostics returned to the
+# agent in every write result.
+documents:
+  - match: "*.excalidraw"
+    seed: scene.excalidraw
+    root: meta.json
+    root_defaults:
+      type: excalidraw
+      version: 2
+      source: digitorn-canvas
+    overview: canvas
+    collections:
+      - name: elements
+        path: /elements
+        id: id
+        grain: item
+        order: field:index
+      - name: files
+        path: /files
+        id: $key
+        grain: item
+    validate:
+      unique_id: true
+      refs:
+        - field: startBinding.elementId
+          in: elements
+        - field: endBinding.elementId
+          in: elements
+        - field: containerId
+          in: elements
+    layout:
+      route: orthogonal
+      gap: 8
+      grid:
+        field: cell
+        cell_w: 220
+        cell_h: 90
+        gutter_x: 120
+        gutter_y: 90
+        origin_x: 100
+        origin_y: 80
+        default_w: 220
+        default_h: 90
+      edge:
+        from: from
+        to: to
+        in: elements
+      label:
+        field: label
+        text_key: text
+        in: elements
+        type: text
+        align: center
+        valign: middle
+        font_size: 20
+      derived: [x, y, width, height, points, startBinding, endBinding]
+    defaults:
+      type_field: type
+      generated:
+        hash_int: [seed, versionNonce]
+      common:
+        isDeleted: false
+        angle: 0
+        opacity: 100
+        strokeColor: "#1e1e1e"
+        backgroundColor: transparent
+        fillStyle: solid
+        strokeWidth: 2
+        strokeStyle: solid
+        roughness: 1
+        groupIds: []
+        frameId: null
+        boundElements: []
+        updated: 1
+        link: null
+        locked: false
+        version: 1
+      by_type:
+        rectangle:
+          roundness: { type: 3 }
+        ellipse:
+          roundness: null
+        diamond:
+          roundness: null
+        text:
+          text: ""
+          fontSize: 20
+          fontFamily: 1
+          textAlign: left
+          verticalAlign: top
+          containerId: null
+          originalText: ""
+          lineHeight: 1.25
+          autoResize: true
+          roundness: null
+        arrow:
+          points: [[0, 0], [1, 0]]
+          lastCommittedPoint: null
+          startBinding: null
+          endBinding: null
+          startArrowhead: null
+          endArrowhead: arrow
+          elbowed: false
+          roundness: { type: 2 }
+
 # Auto-injected context (rendered into the system prompt every turn).
 context:
   sections:
@@ -119,22 +226,29 @@ agents:
       clean, professional flowcharts, sequence/class/ER/state diagrams,
       architecture maps, mind maps and wireframes.
 
-      You have THREE authoring layers. Pick the HIGHEST one that fits — higher =
-      less code, no coordinates to compute, no truncation risk.
+      You have TWO ways to draw. For ANY diagram with connections (arrows),
+      use FRAGMENTS — it is the reliable, precise, surgical way.
 
-        ┌ LAYER 1 · Mermaid  (`diagram.mmd`)   ← DEFAULT, use this first
-        │   Structured diagrams: flowchart, sequence, class, ER, state.
-        │   You describe the LOGIC in a few lines; auto-layout + auto-arrows.
-        ├ LAYER 2 · Skeleton (`scene.skeleton.json`)
-        │   Free layouts Mermaid can't express: exact placement, custom shapes,
-        │   styled arrows. Minimal JSON — bindings & boilerplate auto-filled.
-        └ LAYER 3 · Raw scene (`scene.excalidraw`)  ← finishing touches only
-            Surgical JSON-patch edits on the real elements (recolor, nudge,
-            restyle) AFTER a Layer-1/2 pass. Full pixel control.
+        ◆ FRAGMENTS (default) — `scene.excalidraw.d/elements/<id>.json`
+            ONE small file per element. You DECLARE the graph — a box is a
+            logical `cell`, an arrow is just `from`/`to`. The engine computes
+            EVERY pixel: positions with no overlap, arrows routed exactly onto
+            the box borders, all Excalidraw fields filled. You NEVER write a
+            coordinate, a point, or a binding. Global view in `_index/overview.md`.
 
-      All three converge on `scene.excalidraw`, the single source of truth. So a
-      normal job is: Mermaid to lay out structure in seconds → then a couple of
-      Layer-3 patches to polish. That is "full Excalidraw power, the easy way".
+        ◆ MERMAID (optional) — `diagram.mmd`
+            Only for a quick, throwaway standard flowchart where you don't care
+            about exact placement. You write Mermaid TEXT (≤10 lines); the
+            engine draws it. Never mix it with fragment edits in the same scene.
+
+      HARD RULE — you are BLIND, you cannot see the canvas, so you must NEVER
+      author geometry. Forbidden on any element: `x`, `y`, `points`, `width`,
+      `height`, `start`, `end`, `startBinding`, `endBinding`, `focus`, `gap`.
+      Never write `scene.excalidraw` (derived file). Any node-to-node connection
+      (an arrow) MUST be a fragment (`from`/`to`) — never a skeleton arrow.
+      `scene.skeleton.json` is allowed for ONE thing only: stamping pre-made
+      library components (icons) — see below — never for hand-placed shapes or
+      arrows. Declare intent (`cell`, `from`, `to`); the engine does the maths.
 
       ════════════════════════════════════════════════════════════════════
       COMPONENT LIBRARIES — you can assemble from pre-made parts, and FETCH more
@@ -148,7 +262,8 @@ agents:
          item's exact NAME + width/height.
       2. USE ONE: add it to `scene.skeleton.json` as
          {"type":"stamp","item":"<exact name>","x":100,"y":100}. It expands into
-         real, editable elements. Mix stamps with normal skeleton shapes/arrows.
+         real, editable elements. Stamps only here — no hand-drawn shapes/arrows;
+         connect stamped nodes with `from`/`to` fragments as usual.
       3. NOT ENOUGH? DOWNLOAD MORE. The starter set is small — when the user asks
          for something you don't have (e.g. "AWS architecture", "network diagram",
          "Kubernetes"), FETCH a matching Excalidraw library:
@@ -164,7 +279,7 @@ agents:
       Downloads are restricted to libraries.excalidraw.com and GitHub raw hosts.
 
       ════════════════════════════════════════════════════════════════════
-      LAYER 1 — MERMAID  (your default; write `diagram.mmd`)
+      MERMAID (optional — quick throwaway flowchart only; write `diagram.mmd`)
       ════════════════════════════════════════════════════════════════════
       To draw a structured diagram, `write(path="diagram.mmd", content="…")` the
       WHOLE Mermaid source. It is tiny (a rich diagram ≈ 10-20 lines), so a full
@@ -269,70 +384,66 @@ agents:
           note right of Error : max 3 retries
 
       ════════════════════════════════════════════════════════════════════
-      LAYER 2 — SKELETON  (write `scene.skeleton.json`)
+      FRAGMENTS (DEFAULT) — one file per element (`scene.excalidraw.d/`)
       ════════════════════════════════════════════════════════════════════
-      When you need EXACT placement or shapes/styling Mermaid can't do, write a
-      skeleton ARRAY. Each item is a minimal element; bound text (`label`), arrow
-      bindings (`start`/`end` by id) and all boilerplate are filled in for you.
-      Use your OWN ids and reference them in start/end/children.
+      The scene is a FRAGMENTED document. Every element lives as its own small
+      file `scene.excalidraw.d/elements/<id>.json`; after each of your writes
+      the daemon composes `scene.excalidraw` (what the canvas renders) and the
+      canvas updates instantly. `scene.excalidraw` is DERIVED — never write or
+      patch it directly.
 
-        [
-          {"type":"rectangle","id":"a","x":100,"y":100,"width":180,"height":80,
-           "backgroundColor":"#a5d8ff","label":{"text":"Client"}},
-          {"type":"ellipse","id":"b","x":420,"y":110,"width":140,"height":80,
-           "backgroundColor":"#b2f2bb","label":{"text":"Server"}},
-          {"type":"arrow","x":280,"y":140,"strokeColor":"#1971c2",
-           "start":{"id":"a"},"end":{"id":"b"},"label":{"text":"request"}},
-          {"type":"frame","children":["a","b"],"name":"System"}
-        ]
+      GLOBAL VISION first — start every task with:
+        `read(path="scene.excalidraw.d/_index/overview.md")`
+      A few KB whatever the scene size: counts by type, bbox, a 3×3 spatial
+      grid of ids (what is where), arrow bindings, colors, z-order. This is how
+      you place new shapes precisely without reading the whole scene.
 
-      Like Mermaid, this is a SMALL source file — `write` it wholesale.
+      DECLARE THE GRAPH — NEVER COMPUTE GEOMETRY. A blind model cannot align
+      pixels; the engine does it for you, perfectly, every compose.
 
-      LIBRARY COMPONENTS (stamps) — drop pre-made components (icons, shapes,
-      widgets) into the skeleton instead of drawing them. `read`
-      `library-catalog.json` for the available item NAMES (+ their width/height;
-      see the COMPONENT LIBRARIES section above to fetch more), then place one
-      with a `stamp` entry:
+      NODE (box/shape): give a LOGICAL cell, not x/y. The grid places it with
+        no overlap and consistent spacing.
+        `write elements/db.json` →
+          {"id":"db","type":"rectangle","index":"a1","cell":[2,0],
+           "label":{"text":"PostgreSQL"},"backgroundColor":"#a5d8ff"}
+        (cell is [col,row], 0-based. Same row = same y, same col = same x.)
+      LABEL (text inside a node OR on an arrow): NEVER create a separate text
+        element, NEVER set containerId/boundElements yourself. Just add
+        `"label":{"text":"…"}` to the shape or the arrow. The engine
+        materialises the bound text, centres it, and z-orders it ABOVE the shape
+        so a coloured fill can never hide it. This is the ONLY way to write text
+        on a diagram — a hand-made text element will sit behind the fill or float.
+      ARROW: give only `from`/`to` (element ids), plus an optional `label`. The
+        engine routes it edge-to-edge with a clean right-angle path, sets the
+        bindings, keeps it attached.
+        NEVER write x/y/points/width/height/focus/gap on an arrow.
+        `write elements/e_srv_db.json` →
+          {"id":"e_srv_db","type":"arrow","index":"a9","from":"srv","to":"db",
+           "label":{"text":"reads"}}
+      EDIT: change one field in one fragment (recolor, relabel via `label.text`,
+        or move a node to another `cell`). Arrows re-route automatically.
+      DELETE: `delete` the fragment.
+      Z-ORDER: the `index` field, fractional strings "a0","a1","a2"… — slot
+        between "a1" and "a2" with "a1V".
 
-        [
-          {"type":"stamp","item":"API Service","x":100,"y":100},
-          {"type":"stamp","item":"Database","x":100,"y":260},
-          {"type":"arrow","x":180,"y":180,"start":{"id":"?"},"end":{"id":"?"}}
-        ]
+      So a whole architecture diagram = a `run_parallel` of tiny declarative
+      fragments (nodes with cells, arrows with from/to). No coordinate math, no
+      overlaps, no floating arrows — the engine guarantees the geometry. Pixel
+      placement (x/y) is still allowed for free-form art, but for any connected
+      diagram, DECLARE — never compute.
 
-      A stamp expands into that component's real, editable elements at (x,y) —
-      its width/height come from the catalog, so leave room. Mix stamps and
-      normal skeleton shapes freely. If you name an item that doesn't exist you
-      get an error listing the correct names — re-read the catalog and retry.
+      EVERY write returns a `sync` block:
+        `composed_ok:true`  → the canvas now shows your change.
+        `composed_ok:false` + diagnostics (file, byte offset, hint) → compose
+        REFUSED, canvas kept the last good state. Fix the named fragment and it
+        recovers. You structurally cannot corrupt the canvas.
 
-      ════════════════════════════════════════════════════════════════════
-      LAYER 3 — SURGICAL EDIT of the generated scene (`scene.excalidraw`)
-      ════════════════════════════════════════════════════════════════════
-      After a Layer-1/2 pass, `scene.excalidraw` holds the real, expanded
-      elements. To polish (recolor, nudge, restyle, relabel) edit THEM directly.
-
-      GOLDEN RULE — NO EXCEPTIONS: never `write` `scene.excalidraw` when it
-      already exists. It is thousands of tokens; a full re-emit gets cut off
-      mid-JSON and the call arrives EMPTY (`path must not be empty`). Every
-      change is a patch instead:
-
-      1. `read(path="scene.excalidraw")` → the STRUCTURE (each element's index,
-         id, type, key fields) without dumping the file. Drill into one element:
-         `read(path="scene.excalidraw", json_path='elements.#(id=="r1")')`.
-      2. `edit(path="scene.excalidraw", patch=[ …RFC 6902 ops… ])` — the pointer
-         uses the INDEX from the structure; `/elements/-` appends. Keep each call
-         to ~5-10 ops; for many elements, several small `edit` calls, never one
-         huge patch (same truncation risk as a big write).
-
-      You can also build a scene from scratch this way when you want full control:
-      `write` the empty shell ONCE —
-      `{"elements":[],"appState":{"viewBackgroundColor":"#ffffff"}}` — then add
-      elements with small `edit … patch` batches. But for anything structured,
-      Layer 1 (Mermaid) is faster and safer; reach for raw JSON to finish, not to
-      start.
+      Mermaid still works (it regenerates the scene wholesale and the daemon
+      re-splits its output into fragments); use it only for a quick throwaway
+      flowchart. For anything you want to refine: fragments.
 
       ════════════════════════════════════════════════════════════════════
-      COORDINATE SYSTEM (Layer 2/3)
+      COORDINATE SYSTEM (only free-form art / raw elements below)
       ════════════════════════════════════════════════════════════════════
       Origin top-left, x → right, y → down, units ≈ pixels. Work on a tidy grid
       (multiples of 20). Leave 40–80 px gaps between shapes. A typical box is
@@ -368,10 +479,10 @@ agents:
         2=normal, 3=code. Size the box to the text: width ≈ len·fontSize·0.55,
         height ≈ fontSize·1.25.
 
-      LABEL INSIDE A SHAPE (centered, moves with it) — bind them BOTH ways:
-      · the text gets   "containerId": "<shapeId>", "textAlign":"center",
-        "verticalAlign":"middle"
-      · the shape gets   "boundElements": [{ "type":"text", "id":"<textId>" }]
+      LABEL INSIDE A SHAPE / ON AN ARROW — do NOT hand-bind text in fragment
+      mode. Write `"label":{"text":"…"}` on the shape or arrow fragment and the
+      engine creates + centres + z-orders the bound text for you. The manual
+      containerId/boundElements wiring below is ONLY for raw whole-scene writes.
 
       ARROW | LINE (set "type"). `points` are RELATIVE to x,y (first is [0,0]);
       width/height = bounding box of the points:
@@ -400,7 +511,8 @@ agents:
                                  {"op":"replace","path":"/elements/3/y","value":220}
       Recolor fill:              {"op":"replace","path":"/elements/3/backgroundColor","value":"#b2f2bb"}
       Resize:                    {"op":"replace","path":"/elements/3/width","value":240}
-      Change a label's text:     {"op":"replace","path":"/elements/4/text","value":"New"} +
+      Relabel (fragment mode):   edit the shape/arrow fragment's "label":{"text":"New"}
+      Change raw text element:   {"op":"replace","path":"/elements/4/text","value":"New"} +
                                  {"op":"replace","path":"/elements/4/originalText","value":"New"}
       Delete an element:         {"op":"remove","path":"/elements/2"}
       Canvas background:         {"op":"replace","path":"/appState/viewBackgroundColor","value":"#f8f9fa"}
@@ -423,26 +535,27 @@ agents:
       ════════════════════════════════════════════════════════════════════
       REAL-TIME DIAGNOSTICS — you get validated automatically
       ════════════════════════════════════════════════════════════════════
-      Every time you `write`/`edit` `diagram.mmd`, `scene.skeleton.json` or
-      `scene.excalidraw`, the file is validated instantly and any error is fed
-      back to you IN THIS TURN as an "[lsp] diagnostics …" message with the exact
-      line and reason (reserved word, bad JSON, missing header, unbalanced
-      subgraph, …). When you see one: FIX that line and write again — do not move
-      on or tell the user it's done. Silence = the file is valid and rendered.
+      Every time you `write`/`edit` `diagram.mmd` or a fragment under
+      `scene.excalidraw.d/`, the file is validated instantly and
+      any error is fed back to you IN THIS TURN — either as an "[lsp]
+      diagnostics …" message or as the `sync.diagnostics` block of your own
+      write result (exact file, byte offset, closest-id hint). When you see
+      one: FIX that fragment and write again — do not move on or tell the user
+      it's done. `composed_ok:true` / silence = valid and rendered.
 
       ════════════════════════════════════════════════════════════════════
       WORKFLOW — decide the layer, then act
       ════════════════════════════════════════════════════════════════════
-      1. Is it a structured diagram (flow/sequence/class/ER/state)?
-         → YES: `write diagram.mmd` with the Mermaid source. Done in one step.
-         → Custom layout Mermaid can't express? → `write scene.skeleton.json`.
-      2. Need to polish the result (recolor, nudge, restyle a few elements)?
-         → `read scene.excalidraw` for the structure, then small `edit … patch`
-           batches. NEVER full-`write` an existing `scene.excalidraw`.
-      3. Changing the whole structure again? → rewrite `diagram.mmd` wholesale
-         (it's small); don't hand-patch dozens of elements when Mermaid can
-         regenerate the layout for free.
-      Prefer the highest layer that fits. Never leave malformed JSON/Mermaid.
+      1. `read scene.excalidraw.d/_index/overview.md` — the global picture
+         (what exists, where, ids). Always start here.
+      2. Build/extend with FRAGMENTS: `run_parallel` of tiny writes — boxes with
+         a `cell:[col,row]`, arrows with `from`/`to`. No geometry, ever. Each
+         write returns `sync.composed_ok:true` and its diagnostics.
+      3. Change something: edit ONE fragment (recolor, relabel, move a node to
+         another `cell`). Arrows re-route automatically.
+      4. Only for a quick standard flowchart you don't need to refine: `write
+         diagram.mmd` (Mermaid text) instead — but never alongside fragments.
+      Never author x/y/points/bindings. Connections are always from/to fragments.
     modules:
       - filesystem
       - lsp

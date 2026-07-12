@@ -53,7 +53,7 @@ func (m *Module) PromptSections(domainmodule.PromptScope) []domainmodule.PromptS
 	return []domainmodule.PromptSection{{
 		Title:    "Filesystem",
 		Priority: 50,
-		Content: "All paths are relative to the workspace root and MUST include the filename — never a bare directory unless you deliberately want its tree (`read \"src\"`). Example: a file at the workspace root named `scene.excalidraw` is addressed as path `\"scene.excalidraw\"` — not `\"\"`, not `\".\"`, not `\"scene\"`. Nested: `\"src/components/App.tsx\"`. Absolute paths and `..` escapes are rejected.\n" +
+		Content: "All paths are relative to the workspace root and MUST include the filename — never a bare directory unless you deliberately want its tree (`read \"src\"`). Example: a file at the workspace root named `scene.excalidraw` is addressed as path `\"scene.excalidraw\"` — not `\"\"`, not `\".\"`, not `\"scene\"`. Nested: `\"src/components/App.tsx\"`. An absolute path INSIDE the workspace also works; only a path that escapes the workspace (a `..` beyond it, or an absolute path outside) is rejected — with a clear error, never a silent empty result.\n" +
 			"Workflow that always works:\n" +
 			"1. FIND: `glob` by name (`**` recurses) or `grep` contents — never guess a path.\n" +
 			"2. MAP a big file: `read` with `outline: true` → functions/classes + line numbers, cheaply; then `read` a precise line range (offset/limit). Read several files at once with `paths: [...]`. Reading an IMAGE (png/jpg/…) shows it to you directly — you can SEE it.\n" +
@@ -835,9 +835,13 @@ func (m *Module) write(ctx context.Context, raw json.RawMessage) (tool.Result, e
 		"action":  action,
 		"existed": existed,
 	})
+	data := map[string]any{"path": p.Path, "bytes": len(string(p.Content)), "action": action}
+	if s := docSyncData(ctx, abs); s != nil {
+		data["sync"] = s
+	}
 	return tool.Result{
 		Success: true,
-		Data:    map[string]any{"path": p.Path, "bytes": len(string(p.Content)), "action": action},
+		Data:    data,
 		Diff:    diffView(p.Path, oldContent, string(p.Content)),
 	}, nil
 }
@@ -1065,6 +1069,9 @@ func (m *Module) edit(ctx context.Context, raw json.RawMessage) (tool.Result, er
 		"additions":    d.Added,
 		"deletions":    d.Removed,
 	})
+	if s := docSyncData(ctx, abs); s != nil {
+		data["sync"] = s
+	}
 	return tool.Result{Success: true, Data: data, Diff: diffView(p.Path, content, updated)}, nil
 }
 
@@ -1197,10 +1204,14 @@ func (m *Module) multiEdit(ctx context.Context, raw json.RawMessage) (tool.Resul
 		"additions":    d.Added,
 		"deletions":    d.Removed,
 	})
-	return tool.Result{Success: true, Data: map[string]any{
+	mdata := map[string]any{
 		"path": p.Path, "edits": applied, "replacements": total,
 		"additions": d.Added, "deletions": d.Removed,
-	}, Diff: diffView(p.Path, original, cur)}, nil
+	}
+	if s := docSyncData(ctx, abs); s != nil {
+		mdata["sync"] = s
+	}
+	return tool.Result{Success: true, Data: mdata, Diff: diffView(p.Path, original, cur)}, nil
 }
 
 type deleteParams struct {
@@ -1247,7 +1258,11 @@ func (m *Module) delete(ctx context.Context, raw json.RawMessage) (tool.Result, 
 	notifyFileChange(ctx, abs) // live workspace push (non-blocking, best-effort)
 	// Emit event for the background service
 	emitFileEvent(ctx, "file.deleted", p.Path, nil)
-	return tool.Result{Success: true, Data: map[string]any{"path": p.Path, "deleted": true}}, nil
+	ddata := map[string]any{"path": p.Path, "deleted": true}
+	if s := docSyncData(ctx, abs); s != nil {
+		ddata["sync"] = s
+	}
+	return tool.Result{Success: true, Data: ddata}, nil
 }
 
 // applyFuzzySpans rebuilds content with each located span replaced by the
@@ -1445,7 +1460,12 @@ func (m *Module) grep(ctx context.Context, raw json.RawMessage) (tool.Result, er
 		p.Pattern = strings.TrimSpace(p.Grep)
 	}
 	if strings.TrimSpace(p.Pattern) == "" {
-		err := errors.New("pattern must not be empty")
+		// No regex — but ast_pattern is a valid standalone structural search,
+		// so run just that instead of dead-ending on "pattern must not be empty".
+		if strings.TrimSpace(p.ASTPattern) != "" {
+			return m.grepASTOnly(ctx, p)
+		}
+		err := errors.New("pattern must not be empty (or pass ast_pattern for a structural search)")
 		return errResult(err), err
 	}
 	if p.MaxResults <= 0 {
@@ -1514,6 +1534,7 @@ func (m *Module) grep(ctx context.Context, raw json.RawMessage) (tool.Result, er
 		base:        base,
 		ignore:      loadGitignore(base),
 		include:     p.Include,
+		includeAlts: expandBraces(p.Include),
 		re:          re,
 		literal:     literal,
 		mode:        mode,
@@ -1631,6 +1652,28 @@ func (m *Module) grep(ctx context.Context, raw json.RawMessage) (tool.Result, er
 		case <-time.After(500 * time.Millisecond):
 		case <-ctx.Done():
 		}
+	}
+	return tool.Result{Success: true, Data: data}, nil
+}
+
+// grepASTOnly runs just the treesitter structural search when the agent gave an
+// ast_pattern with no regex pattern, so a standalone structural query works.
+func (m *Module) grepASTOnly(ctx context.Context, p grepParams) (tool.Result, error) {
+	if p.Path == "" {
+		p.Path = "."
+	}
+	root, err := m.resolveCtx(ctx, p.Path)
+	if err != nil {
+		return errResult(err), err
+	}
+	max := int(p.MaxResults)
+	if max <= 0 {
+		max = 1000
+	}
+	hits := m.astSearch(ctx, root, strings.TrimSpace(p.ASTPattern), max)
+	data := map[string]any{"scanned": 0, "truncated": false}
+	if len(hits) > 0 {
+		data["ast_matches"] = hits
 	}
 	return tool.Result{Success: true, Data: data}, nil
 }

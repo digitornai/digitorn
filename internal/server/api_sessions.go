@@ -176,6 +176,7 @@ func (d *Daemon) createSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_workdir", err.Error())
 		return
 	}
+	d.seedDocuments(r.Context(), appID, resolvedWD)
 
 	ev := sessionstore.Event{
 		Type:      sessionstore.EventSessionStarted,

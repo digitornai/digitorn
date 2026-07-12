@@ -1,0 +1,224 @@
+package docstore
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+)
+
+// ErrInvalid is returned when error-severity diagnostics block composition;
+// the previously composed file must be left untouched by callers.
+var ErrInvalid = errors.New("docstore: fragments invalid — compose refused")
+
+type fragment struct {
+	file  string // basename, e.g. "title.json"
+	raw   json.RawMessage
+	obj   map[string]any
+	id    string
+	dirty bool // resolver touched obj → re-marshal before assembly
+}
+
+// Compose assembles the fragments under dir into the composed document.
+// Error-severity diagnostics refuse composition (composed == nil); warnings
+// are returned alongside a successful compose.
+func Compose(m Manifest, dir string) (composed []byte, diags []Diagnostic, err error) {
+	root := map[string]json.RawMessage{}
+	rootFile := m.Root
+	if rootFile == "" {
+		rootFile = "meta.json"
+	}
+	if b, rerr := os.ReadFile(filepath.Join(dir, rootFile)); rerr == nil {
+		if derr := json.Unmarshal(b, &root); derr != nil {
+			diags = append(diags, parseDiag(rootFile, b, derr))
+		}
+	}
+	for k, v := range m.RootDefaults {
+		if _, has := root[k]; !has {
+			if b, merr := json.Marshal(v); merr == nil {
+				root[k] = b
+			}
+		}
+	}
+
+	idSets := map[string]map[string]string{} // collection → id → fragment file
+	colFrags := map[string][]fragment{}
+	for _, c := range m.Collections {
+		frags, ids, ds := loadCollection(dir, c)
+		diags = append(diags, ds...)
+		colFrags[c.Name] = frags
+		idSets[c.Name] = ids
+	}
+
+	diags = append(diags, checkRefs(m, colFrags, idSets)...)
+
+	for _, d := range diags {
+		if d.Severity == "error" {
+			return nil, diags, ErrInvalid
+		}
+	}
+
+	// Geometry solver: declarative graph → computed pixels (positions + routed
+	// edges + bindings). Deterministic; the agent never authors coordinates.
+	resolveLayout(m, colFrags)
+	// Labels: declarative node labels → bound, centred text elements (created
+	// after geometry so they sit inside their node, before completion so they
+	// are filled like any element).
+	resolveLabels(m, colFrags)
+	// Completion: fill every missing field from the app's per-type template so a
+	// declarative fragment becomes a full, renderable element. Missing-only, so
+	// it never clobbers authored or computed values.
+	applyDefaults(m, colFrags)
+
+	for _, c := range m.Collections {
+		key, perr := c.pointerKey()
+		if perr != nil {
+			return nil, append(diags, Diagnostic{Severity: "error", Rule: "manifest", Message: perr.Error()}), ErrInvalid
+		}
+		frags := colFrags[c.Name]
+		orderItems(frags, c.Order)
+		root[key] = assemble(frags, c.isMap())
+	}
+
+	out, merr := json.Marshal(root)
+	if merr != nil {
+		return nil, diags, merr
+	}
+	return out, diags, nil
+}
+
+func loadCollection(dir string, c Collection) (frags []fragment, ids map[string]string, diags []Diagnostic) {
+	ids = map[string]string{}
+	base := filepath.Join(dir, filepath.FromSlash(c.Name))
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		return nil, ids, nil // no fragments yet — empty collection
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") || strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		rel := c.Name + "/" + e.Name()
+		b, rerr := os.ReadFile(filepath.Join(base, e.Name()))
+		if rerr != nil {
+			diags = append(diags, Diagnostic{Severity: "error", Rule: "io", File: rel, Message: rerr.Error()})
+			continue
+		}
+		var obj map[string]any
+		if derr := json.Unmarshal(b, &obj); derr != nil {
+			diags = append(diags, parseDiag(rel, b, derr))
+			continue
+		}
+		f := fragment{file: e.Name(), raw: json.RawMessage(b), obj: obj}
+		if c.isMap() {
+			f.id = strings.TrimSuffix(e.Name(), ".json")
+		} else {
+			f.id, _ = obj[c.ID].(string)
+			if f.id == "" {
+				diags = append(diags, Diagnostic{Severity: "error", Rule: "id", File: rel,
+					Message: fmt.Sprintf("item has no %q field — every fragment needs a stable id", c.ID)})
+				continue
+			}
+			if prev, dup := ids[f.id]; dup {
+				diags = append(diags, Diagnostic{Severity: "error", Rule: "unique_id", File: rel,
+					Message: fmt.Sprintf("id %q already defined in %s/%s", f.id, c.Name, prev)})
+				continue
+			}
+			if want := sanitizeID(f.id) + ".json"; e.Name() != want {
+				diags = append(diags, Diagnostic{Severity: "warning", Rule: "filename", File: rel,
+					Message: fmt.Sprintf("filename does not match id %q", f.id),
+					Hint:    "rename to " + c.Name + "/" + want})
+			}
+		}
+		ids[f.id] = e.Name()
+		frags = append(frags, f)
+	}
+	return frags, ids, diags
+}
+
+func checkRefs(m Manifest, colFrags map[string][]fragment, idSets map[string]map[string]string) []Diagnostic {
+	var diags []Diagnostic
+	if len(m.Validate.Refs) == 0 {
+		return nil
+	}
+	for _, c := range m.Collections {
+		for _, f := range colFrags[c.Name] {
+			for _, ref := range m.Validate.Refs {
+				v, ok := fieldValue(f.obj, ref.Field)
+				if !ok {
+					continue
+				}
+				want, _ := v.(string)
+				if want == "" {
+					continue
+				}
+				targets := idSets[ref.In]
+				if _, exists := targets[want]; exists {
+					continue
+				}
+				known := make([]string, 0, len(targets))
+				for id := range targets {
+					known = append(known, id)
+				}
+				sort.Strings(known)
+				d := Diagnostic{Severity: "error", Rule: "refs", File: c.Name + "/" + f.file,
+					Message: fmt.Sprintf("%s %q references no item in %s", ref.Field, want, ref.In)}
+				if close := closestID(want, known); close != "" {
+					d.Hint = fmt.Sprintf("closest id: %q", close)
+				}
+				diags = append(diags, d)
+			}
+		}
+	}
+	return diags
+}
+
+// assemble concatenates raw fragments into a compact array or object without
+// re-marshaling their contents.
+func assemble(frags []fragment, asMap bool) json.RawMessage {
+	var b bytes.Buffer
+	open, close := byte('['), byte(']')
+	if asMap {
+		open, close = '{', '}'
+	}
+	b.WriteByte(open)
+	for i, f := range frags {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		if asMap {
+			k, _ := json.Marshal(f.id)
+			b.Write(k)
+			b.WriteByte(':')
+		}
+		var compact bytes.Buffer
+		if err := json.Compact(&compact, f.raw); err == nil {
+			b.Write(compact.Bytes())
+		} else {
+			b.Write(f.raw)
+		}
+	}
+	b.WriteByte(close)
+	return json.RawMessage(b.Bytes())
+}
+
+func parseDiag(file string, src []byte, err error) Diagnostic {
+	d := Diagnostic{Severity: "error", Rule: "parse", File: file, Message: err.Error()}
+	var syn *json.SyntaxError
+	if errors.As(err, &syn) {
+		off := int(syn.Offset)
+		lo, hi := off-25, off+25
+		if lo < 0 {
+			lo = 0
+		}
+		if hi > len(src) {
+			hi = len(src)
+		}
+		d.Message = fmt.Sprintf("%v (at byte %d, near: %q)", err, off, string(src[lo:hi]))
+	}
+	return d
+}

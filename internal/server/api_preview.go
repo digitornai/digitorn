@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"mime"
 	"net/http"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/digitornai/digitorn/internal/docstore"
 	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
 	"github.com/digitornai/digitorn/internal/runtime/workdir"
 )
@@ -490,6 +492,19 @@ func (d *Daemon) putPreviewFile(w http.ResponseWriter, r *http.Request) {
 	if err := os.WriteFile(abs, []byte(body.Content), 0o644); err != nil {
 		http.Error(w, "write error", http.StatusInternalServerError)
 		return
+	}
+	// Docstore round-trip: the embedded app saving its composed document (the
+	// canvas write path) decomposes back onto fragments — diff by id, only the
+	// changed fragments rewritten. A fragment written via this route composes.
+	switch dir, kind := docstore.FindDocDir(abs); kind {
+	case "composed":
+		if _, derr := docstore.SyncComposed(abs); derr != nil {
+			d.logger.Warn("docstore: decompose failed", "file", abs, "err", derr.Error())
+		}
+	case "fragment":
+		if _, derr := docstore.SyncFragments(dir); derr != nil && !errors.Is(derr, docstore.ErrInvalid) {
+			d.logger.Warn("docstore: compose failed", "file", abs, "err", derr.Error())
+		}
 	}
 	if d.workspaceLive != nil {
 		// Name the exact file so the change is pushed immediately + reliably
