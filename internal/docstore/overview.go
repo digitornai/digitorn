@@ -22,6 +22,11 @@ func GenerateOverview(m Manifest, dir string) error {
 	name := filepath.Base(ComposedPath(dir))
 	fmt.Fprintf(&md, "# %s — fragmented document\n\n", name)
 
+	// The composed document holds the RESOLVED scene (declarative fragments get
+	// their geometry at compose) — overviews must describe it, not the raw
+	// fragments, or every declarative element would look position-less.
+	resolved := loadResolved(m, dir)
+
 	for _, c := range m.Collections {
 		frags, _, _ := loadCollection(dir, c)
 		stats[c.Name] = len(frags)
@@ -30,10 +35,23 @@ func GenerateOverview(m Manifest, dir string) error {
 			md.WriteString("(empty — add fragments under " + c.Name + "/<id>.json)\n\n")
 			continue
 		}
-		if m.Overview == "canvas" {
-			writeCanvasSection(&md, stats, c, frags)
+		els := resolved[c.Name]
+		if m.Overview == "canvas" && len(els) > 0 {
+			writeCanvasSection(&md, stats, c, els)
 		} else {
 			writeAutoSection(&md, c, frags)
+		}
+	}
+	if m.Overview == "canvas" {
+		var all []map[string]any
+		for _, c := range m.Collections {
+			all = append(all, resolved[c.Name]...)
+		}
+		if art := renderBraille(all, 96, 36); art != "" {
+			md.WriteString("\n### Visual raster — the rendered scene, braille dots (LOOK at it:\n")
+			md.WriteString("silhouettes, alignment, overlaps, gaps — then correct fragments)\n```\n")
+			md.WriteString(art)
+			md.WriteString("```\n")
 		}
 	}
 	md.WriteString("\n> Edit one fragment per change; the composed file is derived — never edit it directly.\n")
@@ -45,6 +63,48 @@ func GenerateOverview(m Manifest, dir string) error {
 	return os.WriteFile(filepath.Join(dir, journalDir, "stats.json"), sb, 0o644)
 }
 
+// loadResolved parses the composed document into per-collection resolved items,
+// composing in-memory when the composed file isn't on disk yet.
+func loadResolved(m Manifest, dir string) map[string][]map[string]any {
+	out := map[string][]map[string]any{}
+	b, err := os.ReadFile(ComposedPath(dir))
+	if err != nil {
+		if cb, _, cerr := Compose(m, dir); cerr == nil {
+			b = cb
+		} else {
+			return out
+		}
+	}
+	var top map[string]json.RawMessage
+	if json.Unmarshal(b, &top) != nil {
+		return out
+	}
+	for _, c := range m.Collections {
+		key, kerr := c.pointerKey()
+		if kerr != nil {
+			continue
+		}
+		raw := top[key]
+		if len(raw) == 0 {
+			continue
+		}
+		if c.isMap() {
+			var mm map[string]json.RawMessage
+			if json.Unmarshal(raw, &mm) == nil {
+				for id := range mm {
+					out[c.Name] = append(out[c.Name], map[string]any{"id": id})
+				}
+			}
+			continue
+		}
+		var items []map[string]any
+		if json.Unmarshal(raw, &items) == nil {
+			out[c.Name] = items
+		}
+	}
+	return out
+}
+
 func writeAutoSection(md *strings.Builder, c Collection, frags []fragment) {
 	ids := make([]string, 0, len(frags))
 	for _, f := range frags {
@@ -54,7 +114,7 @@ func writeAutoSection(md *strings.Builder, c Collection, frags []fragment) {
 	fmt.Fprintf(md, "ids: %s\n\n", clipJoin(ids, 40))
 }
 
-func writeCanvasSection(md *strings.Builder, stats map[string]any, c Collection, frags []fragment) {
+func writeCanvasSection(md *strings.Builder, stats map[string]any, c Collection, els []map[string]any) {
 	types := map[string]int{}
 	colors := map[string]int{}
 	minX, minY := math.Inf(1), math.Inf(1)
@@ -64,35 +124,32 @@ func writeCanvasSection(md *strings.Builder, stats map[string]any, c Collection,
 		x, y, w, h float64
 		hasPos     bool
 	}
-	boxes := make([]box, 0, len(frags))
+	boxes := make([]box, 0, len(els))
 	var arrows []string
 
-	num := func(f fragment, k string) (float64, bool) {
-		v, ok := f.obj[k].(float64)
-		return v, ok
-	}
-	for _, f := range frags {
-		if t, ok := f.obj["type"].(string); ok {
+	for _, e := range els {
+		id, _ := e["id"].(string)
+		if t, ok := e["type"].(string); ok {
 			types[t]++
 		}
 		for _, k := range []string{"strokeColor", "backgroundColor"} {
-			if col, ok := f.obj[k].(string); ok && col != "" && col != "transparent" {
+			if col, ok := e[k].(string); ok && col != "" && col != "transparent" {
 				colors[col]++
 			}
 		}
-		b := box{id: f.id}
-		if b.x, b.hasPos = num(f, "x"); b.hasPos {
-			b.y, _ = num(f, "y")
-			b.w, _ = num(f, "width")
-			b.h, _ = num(f, "height")
+		b := box{id: id}
+		if b.x, b.hasPos = e["x"].(float64); b.hasPos {
+			b.y, _ = e["y"].(float64)
+			b.w, _ = e["width"].(float64)
+			b.h, _ = e["height"].(float64)
 			minX, minY = math.Min(minX, b.x), math.Min(minY, b.y)
 			maxX, maxY = math.Max(maxX, b.x+b.w), math.Max(maxY, b.y+b.h)
 		}
 		boxes = append(boxes, b)
-		src, _ := fieldValue(f.obj, "startBinding.elementId")
-		dst, _ := fieldValue(f.obj, "endBinding.elementId")
+		src, _ := fieldValue(e, "startBinding.elementId")
+		dst, _ := fieldValue(e, "endBinding.elementId")
 		if src != nil || dst != nil {
-			arrows = append(arrows, fmt.Sprintf("%s: %v → %v", f.id, orDash(src), orDash(dst)))
+			arrows = append(arrows, fmt.Sprintf("%s: %v → %v", id, orDash(src), orDash(dst)))
 		}
 	}
 
@@ -145,15 +202,13 @@ func writeCanvasSection(md *strings.Builder, stats map[string]any, c Collection,
 	}
 	if strings.HasPrefix(c.Order, "field:") {
 		field := strings.TrimPrefix(c.Order, "field:")
-		ordered := make([]fragment, len(frags))
-		copy(ordered, frags)
-		orderItems(ordered, c.Order)
-		parts := make([]string, 0, len(ordered))
-		for _, f := range ordered {
-			if v, ok := fieldValue(f.obj, field); ok {
-				parts = append(parts, fmt.Sprintf("%s(%v)", f.id, v))
+		parts := make([]string, 0, len(els)) // composed order IS the z-order
+		for _, e := range els {
+			id, _ := e["id"].(string)
+			if v, ok := fieldValue(e, field); ok {
+				parts = append(parts, fmt.Sprintf("%s(%v)", id, v))
 			} else {
-				parts = append(parts, f.id)
+				parts = append(parts, id)
 			}
 		}
 		md.WriteString("\n### Z-order\n  " + clipJoin(parts, 60) + "\n")

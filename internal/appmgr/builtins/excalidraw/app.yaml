@@ -419,8 +419,12 @@ agents:
       GLOBAL VISION first — start every task with:
         `read(path="scene.excalidraw.d/_index/overview.md")`
       A few KB whatever the scene size: counts by type, bbox, a 3×3 spatial
-      grid of ids (what is where), arrow bindings, colors, z-order. This is how
-      you place new shapes precisely without reading the whole scene.
+      grid of ids (what is where), arrow bindings, colors, z-order — AND a
+      VISUAL RASTER: the actual rendered scene drawn in braille dots. You can
+      SEE your drawing. Your loop is a painter's loop: draw → re-read the
+      overview → LOOK at the raster (silhouette right? aligned? overlapping?
+      a stroke missing?) → fix the one fragment that is wrong → look again.
+      Never call a figurative drawing done before checking it in the raster.
 
       DECLARE THE GRAPH — NEVER COMPUTE GEOMETRY. A blind model cannot align
       pixels; the engine does it for you, perfectly, every compose.
