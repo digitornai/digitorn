@@ -79,6 +79,15 @@ documents:
         align: center
         valign: middle
         font_size: 20
+      frame:
+        contains: contains
+        pad: 24
+      group_field: group
+      path:
+        field: path
+        box: box
+        type: freedraw
+        step: 6
       derived: [x, y, width, height, points, startBinding, endBinding]
     defaults:
       type_field: type
@@ -128,6 +137,21 @@ documents:
           endArrowhead: arrow
           elbowed: false
           roundness: { type: 2 }
+        freedraw:
+          pressures: []
+          simulatePressure: true
+          lastCommittedPoint: null
+          roundness: null
+        line:
+          lastCommittedPoint: null
+          startBinding: null
+          endBinding: null
+          startArrowhead: null
+          endArrowhead: null
+          roundness: { type: 2 }
+        frame:
+          name: ""
+          roundness: null
 
 # Auto-injected context (rendered into the system prompt every turn).
 context:
@@ -425,6 +449,14 @@ agents:
       DELETE: `delete` the fragment.
       Z-ORDER: the `index` field, fractional strings "a0","a1","a2"… — slot
         between "a1" and "a2" with "a1V".
+      FRAME (container): list the member ids — the engine sizes the frame to
+        wrap them exactly (+padding) and re-sizes it whenever a member moves.
+        Never author a frame's x/y/width/height.
+        `write elements/backend.json` →
+          {"id":"backend","type":"frame","index":"a8","name":"Backend",
+           "contains":["auth","order","payment"]}
+      GROUP: give elements the same `"group":"g_legend"` — they move and style
+        as one. The engine expands it into groupIds.
 
       So a whole architecture diagram = a `run_parallel` of tiny declarative
       fragments (nodes with cells, arrows with from/to). No coordinate math, no
@@ -441,6 +473,36 @@ agents:
       Mermaid still works (it regenerates the scene wholesale and the daemon
       re-splits its output into fragments); use it only for a quick throwaway
       flowchart. For anything you want to refine: fragments.
+
+      ════════════════════════════════════════════════════════════════════
+      ART MODE — draw ANYTHING like a painter (cats, landscapes, portraits)
+      ════════════════════════════════════════════════════════════════════
+      For figurative drawing, author vector strokes in SVG PATH SYNTAX — a
+      language you know deeply. Put a `path` on a fragment; the engine samples
+      your curves into hand-drawn strokes (freedraw), scaled and centred into
+      your target box. You draw in YOUR OWN coordinate space (e.g. 0–100); you
+      never compute a canvas pixel.
+
+        `write elements/eiffel.json` →
+          {"id":"eiffel","index":"a3","box":[300,100,220,420],
+           "path":"M30,100 C38,60 44,35 50,0 C56,35 62,60 70,100 M20,78 L80,78 M32,55 Q50,47 68,55",
+           "strokeColor":"#495057","strokeWidth":2}
+
+      · `path`: M/L/H/V/C/S/Q/T/A/Z, absolute or relative. Each `M…` subpath =
+        one pen stroke (pen lifts between subpaths — a figure is several strokes
+        in ONE fragment; extra strokes inherit the fragment's style).
+      · `box:[x,y,w,h]`: where the drawing lands (uniform scale, centred). Or
+        give a `cell` instead — the figure draws inside that grid cell.
+      · Style per fragment: strokeColor, strokeWidth, opacity. For a FILLED
+        closed shape use `"type":"line"` + Z-closed path + backgroundColor +
+        fillStyle ("solid" flat, "hachure" sketchy).
+      · Compose a scene like a painter: back-to-front, one fragment per figure
+        part (sky → buildings → subject → details), z-ordered by `index`.
+        Layer several paths with different colors for depth.
+      · Bad path syntax → the write returns the parse error and the canvas
+        keeps its last good state; fix and rewrite.
+      Draw generously: real figures need 5–20 strokes, not 2. Vary stroke
+      weight (outline 2–3, details 1), use the palette for mood.
 
       ════════════════════════════════════════════════════════════════════
       COORDINATE SYSTEM (only free-form art / raw elements below)

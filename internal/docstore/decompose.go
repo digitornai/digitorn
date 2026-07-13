@@ -40,8 +40,8 @@ func Decompose(m Manifest, composed []byte, dir string, j *Journal) (changed []s
 		}
 		seen := map[string]bool{}
 		for _, it := range items {
-			if isGeneratedLabel(m, it.id) {
-				continue // resolver-generated text — never a hand-authored fragment
+			if isGeneratedID(m, it.id) {
+				continue // resolver-generated element — never a hand-authored fragment
 			}
 			jk := c.Name + "/" + it.id
 			if name := j.Files[jk]; name != "" {

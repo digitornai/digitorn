@@ -65,6 +65,18 @@ func Compose(m Manifest, dir string) (composed []byte, diags []Diagnostic, err e
 	// Geometry solver: declarative graph → computed pixels (positions + routed
 	// edges + bindings). Deterministic; the agent never authors coordinates.
 	resolveLayout(m, colFrags)
+	// Painter: SVG-path fragments → sampled strokes fitted into their box/cell.
+	// Invalid path data refuses composition like any error diagnostic.
+	pdiags := resolvePaths(m, colFrags)
+	diags = append(diags, pdiags...)
+	for _, d := range pdiags {
+		if d.Severity == "error" {
+			return nil, diags, ErrInvalid
+		}
+	}
+	// Containers: frames auto-sized around their members, group fields expanded.
+	resolveFrames(m, colFrags)
+	resolveGroups(m, colFrags)
 	// Labels: declarative node labels → bound, centred text elements (created
 	// after geometry so they sit inside their node, before completion so they
 	// are filled like any element).

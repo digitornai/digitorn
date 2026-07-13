@@ -41,12 +41,36 @@ type Defaults struct {
 }
 
 type Layout struct {
-	Route   string     `json:"route,omitempty" yaml:"route,omitempty"` // "orthogonal" (default) | "straight"
-	Gap     float64    `json:"gap,omitempty" yaml:"gap,omitempty"`
-	Grid    *GridSpec  `json:"grid,omitempty" yaml:"grid,omitempty"`
-	Edge    *EdgeSpec  `json:"edge,omitempty" yaml:"edge,omitempty"`
-	Label   *LabelSpec `json:"label,omitempty" yaml:"label,omitempty"`
-	Derived []string   `json:"derived,omitempty" yaml:"derived,omitempty"` // fields computed here, stripped on decompose
+	Route      string     `json:"route,omitempty" yaml:"route,omitempty"` // "orthogonal" (default) | "straight"
+	Gap        float64    `json:"gap,omitempty" yaml:"gap,omitempty"`
+	Grid       *GridSpec  `json:"grid,omitempty" yaml:"grid,omitempty"`
+	Edge       *EdgeSpec  `json:"edge,omitempty" yaml:"edge,omitempty"`
+	Label      *LabelSpec `json:"label,omitempty" yaml:"label,omitempty"`
+	Frame      *FrameSpec `json:"frame,omitempty" yaml:"frame,omitempty"`
+	Path       *PathSpec  `json:"path,omitempty" yaml:"path,omitempty"`
+	GroupField string     `json:"group_field,omitempty" yaml:"group_field,omitempty"` // element field → groupIds expansion
+	Derived    []string   `json:"derived,omitempty" yaml:"derived,omitempty"`         // fields computed here, stripped on decompose
+}
+
+// FrameSpec auto-sizes a container: the agent lists member ids in Contains and
+// the engine sets the frame rect (members' bbox + Pad) and stamps each member's
+// FrameRef. Generic — a "frame" here is whatever the app calls a container.
+type FrameSpec struct {
+	Contains string  `json:"contains" yaml:"contains"`                       // frame field listing child ids
+	FrameRef string  `json:"frame_ref,omitempty" yaml:"frame_ref,omitempty"` // child field set to the frame id (default "frameId")
+	Pad      float64 `json:"pad,omitempty" yaml:"pad,omitempty"`             // padding around the members' bbox (default 24)
+}
+
+// PathSpec is the painter mode: the agent authors vector strokes in SVG path
+// syntax (a language it truly masters) and the engine samples them into
+// perfectly placed point strokes — scaled and centred into the fragment's
+// target box. One subpath = one stroke element; extra subpaths become
+// generated siblings.
+type PathSpec struct {
+	Field string  `json:"field" yaml:"field"`                     // fragment field holding the SVG path data
+	Box   string  `json:"box,omitempty" yaml:"box,omitempty"`     // fragment field [x,y,w,h] to fit the drawing into (default "box")
+	Type  string  `json:"type,omitempty" yaml:"type,omitempty"`   // element type for strokes (default "freedraw")
+	Step  float64 `json:"step,omitempty" yaml:"step,omitempty"`   // sampling step in px (default 6)
 }
 
 // LabelSpec makes a container's text label declarative: the agent writes a

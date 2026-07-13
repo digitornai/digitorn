@@ -195,6 +195,15 @@ func authoredKeys(m Manifest) []string {
 	if m.Layout.Label != nil && m.Layout.Label.Field != "" {
 		ks = append(ks, m.Layout.Label.Field)
 	}
+	if m.Layout.Frame != nil && m.Layout.Frame.Contains != "" {
+		ks = append(ks, m.Layout.Frame.Contains)
+	}
+	if m.Layout.GroupField != "" {
+		ks = append(ks, m.Layout.GroupField)
+	}
+	if m.Layout.Path != nil && m.Layout.Path.Field != "" {
+		ks = append(ks, m.Layout.Path.Field, orDefault(m.Layout.Path.Box, "box"))
+	}
 	return ks
 }
 
@@ -229,20 +238,36 @@ func preserveAuthored(m Manifest, old, updated json.RawMessage) json.RawMessage 
 	return updated
 }
 
-// stripDerived keeps a decomposed EDGE fragment declarative: geometry the
+// stripDerived keeps a decomposed RESOLVED fragment declarative: geometry the
 // resolver computes (points, x/y, bindings…) is removed so the stored fragment
-// carries only the agent's intent (from/to). Non-edge items pass through
-// untouched — a box the user dragged keeps its new position. No-op without a
-// layout/edge/derived declaration.
+// carries only the agent's intent (from/to, contains, path). Plain items pass
+// through untouched — a box the user dragged keeps its new position. No-op
+// without a layout/derived declaration.
 func stripDerived(m Manifest, raw json.RawMessage) json.RawMessage {
-	if m.Layout == nil || m.Layout.Edge == nil || len(m.Layout.Derived) == 0 {
+	if m.Layout == nil || len(m.Layout.Derived) == 0 {
 		return raw
 	}
 	var obj map[string]any
 	if json.Unmarshal(raw, &obj) != nil {
 		return raw
 	}
-	if _, isEdge := obj[m.Layout.Edge.From].(string); !isEdge {
+	resolved := false
+	if e := m.Layout.Edge; e != nil {
+		if _, ok := obj[e.From].(string); ok {
+			resolved = true
+		}
+	}
+	if fr := m.Layout.Frame; !resolved && fr != nil && fr.Contains != "" {
+		if _, ok := stringSlice(obj[fr.Contains]); ok {
+			resolved = true
+		}
+	}
+	if p := m.Layout.Path; !resolved && p != nil && p.Field != "" {
+		if s, ok := obj[p.Field].(string); ok && s != "" {
+			resolved = true
+		}
+	}
+	if !resolved {
 		return raw
 	}
 	for _, k := range m.Layout.Derived {

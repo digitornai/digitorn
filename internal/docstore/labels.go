@@ -96,13 +96,32 @@ func labelText(v any, textKey string) string {
 	return ""
 }
 
-// isGeneratedLabel reports whether an item id is one the label resolver
-// produces — so decompose never persists it as a hand-authored fragment.
-func isGeneratedLabel(m Manifest, id string) bool {
-	if m.Layout == nil || m.Layout.Label == nil {
+// isGeneratedID reports whether an item id is one a resolver produces (label
+// texts, painter sibling strokes) — so decompose never persists it as a
+// hand-authored fragment.
+func isGeneratedID(m Manifest, id string) bool {
+	if m.Layout == nil {
 		return false
 	}
-	return strings.HasSuffix(id, orDefault(m.Layout.Label.IDSuffix, "__label"))
+	if m.Layout.Label != nil && strings.HasSuffix(id, orDefault(m.Layout.Label.IDSuffix, "__label")) {
+		return true
+	}
+	if m.Layout.Path != nil {
+		if i := strings.LastIndex(id, "__s"); i > 0 && i+3 < len(id) {
+			digits := id[i+3:]
+			ok := true
+			for _, r := range digits {
+				if r < '0' || r > '9' {
+					ok = false
+					break
+				}
+			}
+			if ok {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func orDefault(v, def string) string {

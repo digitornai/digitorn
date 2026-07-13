@@ -29,12 +29,28 @@ type DocDefaults struct {
 }
 
 type DocLayout struct {
-	Route   string    `yaml:"route,omitempty" json:"route,omitempty"`
-	Gap     float64   `yaml:"gap,omitempty" json:"gap,omitempty"`
-	Grid    *DocGrid  `yaml:"grid,omitempty" json:"grid,omitempty"`
-	Edge    *DocEdge  `yaml:"edge,omitempty" json:"edge,omitempty"`
-	Label   *DocLabel `yaml:"label,omitempty" json:"label,omitempty"`
-	Derived []string  `yaml:"derived,omitempty" json:"derived,omitempty"`
+	Route      string    `yaml:"route,omitempty" json:"route,omitempty"`
+	Gap        float64   `yaml:"gap,omitempty" json:"gap,omitempty"`
+	Grid       *DocGrid  `yaml:"grid,omitempty" json:"grid,omitempty"`
+	Edge       *DocEdge  `yaml:"edge,omitempty" json:"edge,omitempty"`
+	Label      *DocLabel `yaml:"label,omitempty" json:"label,omitempty"`
+	Frame      *DocFrame `yaml:"frame,omitempty" json:"frame,omitempty"`
+	Path       *DocPath  `yaml:"path,omitempty" json:"path,omitempty"`
+	GroupField string    `yaml:"group_field,omitempty" json:"group_field,omitempty"`
+	Derived    []string  `yaml:"derived,omitempty" json:"derived,omitempty"`
+}
+
+type DocFrame struct {
+	Contains string  `yaml:"contains" json:"contains"`
+	FrameRef string  `yaml:"frame_ref,omitempty" json:"frame_ref,omitempty"`
+	Pad      float64 `yaml:"pad,omitempty" json:"pad,omitempty"`
+}
+
+type DocPath struct {
+	Field string  `yaml:"field" json:"field"`
+	Box   string  `yaml:"box,omitempty" json:"box,omitempty"`
+	Type  string  `yaml:"type,omitempty" json:"type,omitempty"`
+	Step  float64 `yaml:"step,omitempty" json:"step,omitempty"`
 }
 
 type DocLabel struct {
@@ -120,6 +136,13 @@ func (d DocumentDecl) Manifest() docstore.Manifest {
 				Align: lb.Align, VAlign: lb.VAlign, FontSize: lb.FontSize, Pad: lb.Pad,
 			}
 		}
+		if fr := d.Layout.Frame; fr != nil {
+			l.Frame = &docstore.FrameSpec{Contains: fr.Contains, FrameRef: fr.FrameRef, Pad: fr.Pad}
+		}
+		if pt := d.Layout.Path; pt != nil {
+			l.Path = &docstore.PathSpec{Field: pt.Field, Box: pt.Box, Type: pt.Type, Step: pt.Step}
+		}
+		l.GroupField = d.Layout.GroupField
 		m.Layout = l
 	}
 	if d.Defaults != nil {
