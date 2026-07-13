@@ -184,3 +184,27 @@ func (p *PromotingDispatcher) UseSkillWired() bool {
 	}
 	return false
 }
+
+// The engine probes its dispatcher for optional capabilities (gate-level
+// bare-name resolution, index introspection) via interface assertions. A
+// wrapper must forward them or every probe silently no-ops in production —
+// exactly the class of bug that made bare tool names undeliverable while the
+// unwrapped tests passed.
+
+func (p *PromotingDispatcher) ResolveToolName(appID, agentID, name string) string {
+	if r, ok := p.inner.(interface {
+		ResolveToolName(appID, agentID, name string) string
+	}); ok {
+		return r.ResolveToolName(appID, agentID, name)
+	}
+	return name
+}
+
+func (p *PromotingDispatcher) IndexFQNs(appID, agentID string) []string {
+	if r, ok := p.inner.(interface {
+		IndexFQNs(appID, agentID string) []string
+	}); ok {
+		return r.IndexFQNs(appID, agentID)
+	}
+	return nil
+}

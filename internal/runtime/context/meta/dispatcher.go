@@ -160,6 +160,19 @@ func (m *MetaDispatcher) resolveIndex(call runtime.ToolInvocation) *index.ToolIn
 	return m.IndexLookup(call.AppID, call.AgentID)
 }
 
+// IndexFQNs exposes the per-agent tool index's FQN list for external
+// inspection (the dogfooding surface endpoint). Nil when no index was built.
+func (m *MetaDispatcher) IndexFQNs(appID, agentID string) []string {
+	if m == nil || m.IndexLookup == nil {
+		return nil
+	}
+	idx := m.IndexLookup(appID, agentID)
+	if idx == nil {
+		return nil
+	}
+	return idx.FQNList()
+}
+
 // ResolveToolName qualifies a possibly-bare tool name to its canonical FQN using
 // the same steps Dispatch applies, so callers that run BEFORE Dispatch (the
 // security gate) evaluate the real tool, not a bare action with an empty module.

@@ -182,9 +182,9 @@ func TestRunParallel_PartialFailureSurfaced(t *testing.T) {
 	}
 }
 
-func TestRunParallel_RejectsOver50Actions(t *testing.T) {
+func TestRunParallel_RejectsOverCap(t *testing.T) {
 	d := &meta.MetaDispatcher{}
-	bigList := make([]any, 51)
+	bigList := make([]any, 257)
 	for i := range bigList {
 		bigList[i] = map[string]any{"name": "x.y", "params": map[string]any{}}
 	}
@@ -193,14 +193,14 @@ func TestRunParallel_RejectsOver50Actions(t *testing.T) {
 		Args: map[string]any{"actions": bigList},
 	})
 	if out.Status != "errored" {
-		t.Errorf("51 actions should be rejected, got %q", out.Status)
+		t.Errorf("257 actions should be rejected, got %q", out.Status)
 	}
 }
 
-func TestRunParallel_Accepts50Actions(t *testing.T) {
+func TestRunParallel_AcceptsCap(t *testing.T) {
 	inner := &echoInner{}
 	d := &meta.MetaDispatcher{Inner: inner}
-	bigList := make([]any, 50)
+	bigList := make([]any, 256)
 	for i := range bigList {
 		bigList[i] = map[string]any{"name": "x.y", "params": map[string]any{}}
 	}
@@ -209,7 +209,7 @@ func TestRunParallel_Accepts50Actions(t *testing.T) {
 		Args: map[string]any{"actions": bigList},
 	})
 	if out.Status != "completed" {
-		t.Errorf("50 actions must be accepted, got %q (%s)", out.Status, out.Error)
+		t.Errorf("256 actions must be accepted, got %q (%s)", out.Status, out.Error)
 	}
 }
 

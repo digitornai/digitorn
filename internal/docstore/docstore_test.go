@@ -98,24 +98,31 @@ func TestCompose_OrdersByFractionalIndex(t *testing.T) {
 	}
 }
 
-func TestCompose_BrokenFragmentRefusedWithOffset(t *testing.T) {
+func TestCompose_BrokenFragmentSkippedNotBlocking(t *testing.T) {
 	dir := t.TempDir()
 	m := excalidrawManifest()
 	os.MkdirAll(filepath.Join(dir, "elements"), 0o755)
 	os.WriteFile(filepath.Join(dir, "elements", "bad.json"), []byte(`{"id":"bad", "x": }`), 0o644)
+	os.WriteFile(filepath.Join(dir, "elements", "good.json"), []byte(`{"id":"good","type":"rectangle"}`), 0o644)
 	composed, diags, err := Compose(m, dir)
-	if err == nil || composed != nil {
-		t.Fatalf("broken fragment must refuse compose")
+	if err != nil || composed == nil {
+		t.Fatalf("one broken fragment must NOT block compose: err=%v", err)
 	}
-	if len(diags) == 0 || diags[0].Rule != "parse" || !strings.Contains(diags[0].Message, "at byte") {
-		t.Fatalf("want parse diag with offset, got %+v", diags)
+	if _, ok := elemByID(t, composed)["good"]; !ok {
+		t.Fatalf("the good fragment must still compose")
 	}
-	if diags[0].File != "elements/bad.json" {
-		t.Fatalf("diag must name the fragment: %+v", diags[0])
+	var d *Diagnostic
+	for i := range diags {
+		if diags[i].File == "elements/bad.json" {
+			d = &diags[i]
+		}
+	}
+	if d == nil || d.Severity != "warning" || d.Rule != "parse" || !strings.Contains(d.Message, "at byte") {
+		t.Fatalf("want a parse WARNING with offset naming the file, got %+v", diags)
 	}
 }
 
-func TestCompose_DanglingRefGetsClosestHint(t *testing.T) {
+func TestCompose_DanglingBindingGetsClosestHint(t *testing.T) {
 	dir := t.TempDir()
 	m := excalidrawManifest()
 	os.MkdirAll(filepath.Join(dir, "elements"), 0o755)
@@ -124,38 +131,65 @@ func TestCompose_DanglingRefGetsClosestHint(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "elements", "arrow_9.json"),
 		[]byte(`{"id":"arrow_9","type":"arrow","startBinding":{"elementId":"center_rct"}}`), 0o644)
 	_, diags, err := Compose(m, dir)
-	if err == nil {
-		t.Fatalf("dangling ref must refuse compose")
+	if err != nil {
+		t.Fatalf("dangling ref must warn, not block: %v", err)
 	}
 	found := false
 	for _, d := range diags {
-		if d.Rule == "refs" && strings.Contains(d.Hint, "center_rect") {
+		if d.Rule == "refs" && d.Severity == "warning" && strings.Contains(d.Hint, "center_rect") {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("want refs diag with closest hint, got %+v", diags)
+		t.Fatalf("want refs warning with closest hint, got %+v", diags)
 	}
 }
 
-func TestCompose_DuplicateIDRefused(t *testing.T) {
+func TestCompose_DanglingEdgeDroppedAndWarned(t *testing.T) {
 	dir := t.TempDir()
-	m := excalidrawManifest()
-	os.MkdirAll(filepath.Join(dir, "elements"), 0o755)
-	os.WriteFile(filepath.Join(dir, "elements", "one.json"), []byte(`{"id":"dup"}`), 0o644)
-	os.WriteFile(filepath.Join(dir, "elements", "two.json"), []byte(`{"id":"dup"}`), 0o644)
-	_, diags, err := Compose(m, dir)
-	if err == nil {
-		t.Fatalf("duplicate id must refuse compose")
+	m := layoutManifest()
+	writeFrag(t, dir, "a.json", `{"id":"a","type":"rectangle","index":"a0","x":0,"y":0,"width":100,"height":50}`)
+	writeFrag(t, dir, "e.json", `{"id":"e","type":"arrow","index":"a1","from":"a","to":"ghost"}`)
+	composed, diags, err := Compose(m, dir)
+	if err != nil {
+		t.Fatalf("dangling from/to must warn, not block: %v", err)
+	}
+	e := elemByID(t, composed)["e"]
+	if del, _ := e["isDeleted"].(bool); !del {
+		t.Fatalf("dangling edge must be marked isDeleted (no ghost stub), got %v", e["isDeleted"])
 	}
 	found := false
 	for _, d := range diags {
-		if d.Rule == "unique_id" {
+		if d.Rule == "refs" && strings.Contains(d.Message, "ghost") {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("want unique_id diag, got %+v", diags)
+		t.Fatalf("want a refs warning naming the dangling target, got %+v", diags)
+	}
+}
+
+func TestCompose_DuplicateIDSkippedNotBlocking(t *testing.T) {
+	dir := t.TempDir()
+	m := excalidrawManifest()
+	os.MkdirAll(filepath.Join(dir, "elements"), 0o755)
+	os.WriteFile(filepath.Join(dir, "elements", "one.json"), []byte(`{"id":"dup","type":"rectangle"}`), 0o644)
+	os.WriteFile(filepath.Join(dir, "elements", "two.json"), []byte(`{"id":"dup","type":"ellipse"}`), 0o644)
+	composed, diags, err := Compose(m, dir)
+	if err != nil || composed == nil {
+		t.Fatalf("duplicate id must warn, not block: %v", err)
+	}
+	if n := len(elemByID(t, composed)); n != 1 {
+		t.Fatalf("duplicate must be dropped, want 1 element, got %d", n)
+	}
+	found := false
+	for _, d := range diags {
+		if d.Rule == "unique_id" && d.Severity == "warning" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("want unique_id warning, got %+v", diags)
 	}
 }
 

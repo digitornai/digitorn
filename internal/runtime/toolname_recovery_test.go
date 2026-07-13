@@ -28,7 +28,7 @@ func TestCanonicalize_BareActionRecovery(t *testing.T) {
 		{"run", "bash.run"},                   // bare → recovered
 		{"bash_run", "bash.run"},              // single underscore → recovered
 		{"agent", "agent_spawn.agent"},        // internal alias still wins
-		{"search_tools", "search_tools"},      // meta-tool : no module, left bare
+		{"search_tools", "context_builder.search_tools"}, // meta-tool → qualified canonical
 		{"list", "list"},                      // ambiguous : left bare (agent must qualify)
 		{"nonexistent", "nonexistent"},        // unknown : left as-is
 	}

@@ -69,7 +69,9 @@ func resolveLayout(m Manifest, colFrags map[string][]fragment) {
 		a, okA := rects[from]
 		b, okB := rects[to]
 		if !okA || !okB {
-			continue // dangling ref — compose's ref check reports it
+			f.obj["isDeleted"] = true
+			remarshal(f)
+			continue
 		}
 		var x, y float64
 		var pts [][2]float64
@@ -202,7 +204,9 @@ func authoredKeys(m Manifest) []string {
 		ks = append(ks, m.Layout.GroupField)
 	}
 	if m.Layout.Path != nil && m.Layout.Path.Field != "" {
-		ks = append(ks, m.Layout.Path.Field, orDefault(m.Layout.Path.Box, "box"))
+		ks = append(ks, m.Layout.Path.Field,
+			orDefault(m.Layout.Path.Box, "box"),
+			orDefault(m.Layout.Path.View, "view"))
 	}
 	return ks
 }

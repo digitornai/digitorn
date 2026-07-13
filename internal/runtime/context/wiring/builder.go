@@ -24,6 +24,7 @@ package wiring
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"sync"
 
@@ -402,5 +403,28 @@ func specialistsFor(agent *schema.Agent, siblings []schema.Agent) []prompt.Speci
 	for _, id := range agent.DelegateTo {
 		out = append(out, prompt.SpecialistEntry{ID: id, Specialty: specialty[id]})
 	}
+	return out
+}
+
+// CacheDebug lists the build cache's entries — key plus whether an index was
+// stored — for the external tool-testing surface. Diagnostic only.
+func (b *Builder) CacheDebug() []string {
+	if b == nil {
+		return nil
+	}
+	var out []string
+	b.cache.Range(func(k, v any) bool {
+		ck := k.(cacheKey)
+		e := v.(*cacheEntry)
+		state := "idx"
+		if e.idx == nil {
+			state = "idx=nil"
+		}
+		if e.err != nil {
+			state += " err=" + e.err.Error()
+		}
+		out = append(out, fmt.Sprintf("app=%q ver=%q agent=%q %s", ck.AppID, ck.AppVersion, ck.AgentID, state))
+		return true
+	})
 	return out
 }

@@ -161,9 +161,11 @@ type BackgroundStatus struct {
 	Log string `json:"log,omitempty"`
 }
 
-// runParallelMaxActions caps how many actions one run_parallel call
-// may fan out. Doc-mandated upper bound is 50.
-const runParallelMaxActions = 50
+// runParallelMaxActions caps how many actions one run_parallel call may fan
+// out. Building a large scene (hundreds of fragments) means many cheap writes,
+// so the bound is generous; the real safety valve against goroutine explosion
+// is maxParallelDepth (no nesting), not this count.
+const runParallelMaxActions = 256
 
 // ctxKey is the private type for context values this package stores, so
 // the keys can never collide with another package's.
@@ -190,7 +192,7 @@ func parallelDepth(ctx context.Context) int {
 // semantics (04c-primitives.md "Parallel execution") :
 //
 //   - param key is `actions`, NOT `calls` (V0 typo, corrected here).
-//   - `actions` is a list of {name, params}, 1-50 elements.
+//   - `actions` is a list of {name, params}, 1-256 elements.
 //   - Each action is independent — failures in one don't cancel the
 //     others.
 //   - Results come back in the same order as input.

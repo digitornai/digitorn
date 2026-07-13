@@ -1,9 +1,16 @@
 package docstore
 
 import (
+	"errors"
 	"fmt"
 	"math"
 )
+
+// ErrEmptyPath is a benign, non-blocking parse outcome: the path is valid but
+// draws nothing (e.g. a lone move-to). The painter skips that one stroke with a
+// warning instead of refusing the whole compose — a stray dot in a 40-stroke
+// portrait must not blank the canvas.
+var ErrEmptyPath = errors.New("path has no drawable segments")
 
 // samplePath converts SVG path data into polylines — one per subpath. This is
 // the painter bridge: the model authors curves in a syntax it has seen millions
@@ -216,7 +223,7 @@ func samplePath(d string, step float64) ([][][2]float64, error) {
 	}
 	flush()
 	if len(subs) == 0 {
-		return nil, fmt.Errorf("path has no drawable segments")
+		return nil, ErrEmptyPath
 	}
 	return subs, nil
 }

@@ -98,6 +98,21 @@ var internalAliases = map[string]string{
 	"TaskCreate":  "memory.task_create",
 	"task_update": "memory.task_update",
 	"TaskUpdate":  "memory.task_update",
+	// context_builder meta-tools + always-direct primitives. Models see the
+	// BARE names in their tool list; a turn maps them through the spec's
+	// Canonical, but out-of-band callers (voice, tool-exec API) dispatch by
+	// name — the bare form must resolve here or IsContextBuilderMeta never
+	// matches and the call leaks to the bus adapter.
+	"search_tools":    "context_builder.search_tools",
+	"get_tool":        "context_builder.get_tool",
+	"execute_tool":    "context_builder.execute_tool",
+	"list_categories": "context_builder.list_categories",
+	"browse_category": "context_builder.browse_category",
+	"run_parallel":    "context_builder.run_parallel",
+	"background_run":  "context_builder.background_run",
+	"use_skill":       "context_builder.use_skill",
+	"call_app":        "context_builder.call_app",
+	"ask_user":        "context_builder.ask_user",
 }
 
 // internalFQNByFlat recovers a model-mangled form of a runtime-internal FQN

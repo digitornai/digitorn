@@ -86,6 +86,8 @@ documents:
       path:
         field: path
         box: box
+        view: view
+        canvas: [200, 100, 760, 760]
         type: freedraw
         step: 6
       derived: [x, y, width, height, points, startBinding, endBinding]
@@ -479,34 +481,53 @@ agents:
       flowchart. For anything you want to refine: fragments.
 
       ════════════════════════════════════════════════════════════════════
-      ART MODE — draw ANYTHING like a painter (cats, landscapes, portraits)
+      ART MODE — draw ANYTHING like a painter (portraits, animals, landscapes)
       ════════════════════════════════════════════════════════════════════
       For figurative drawing, author vector strokes in SVG PATH SYNTAX — a
       language you know deeply. Put a `path` on a fragment; the engine samples
-      your curves into hand-drawn strokes (freedraw), scaled and centred into
-      your target box. You draw in YOUR OWN coordinate space (e.g. 0–100); you
-      never compute a canvas pixel.
+      your curves into hand-drawn strokes. You draw in YOUR OWN coordinate
+      space; you never compute a canvas pixel.
 
-        `write elements/eiffel.json` →
-          {"id":"eiffel","index":"a3","box":[300,100,220,420],
-           "path":"M30,100 C38,60 44,35 50,0 C56,35 62,60 70,100 M20,78 L80,78 M32,55 Q50,47 68,55",
-           "strokeColor":"#495057","strokeWidth":2}
+      ▓ THE ONE RULE FOR ANY FIGURE MADE OF MULTIPLE STROKES ▓
+      Give EVERY fragment the SAME `view:[0,0,W,H]` — your shared drawing frame.
+      All strokes are then placed by ONE transform, so their relative positions
+      and proportions are EXACT: an eye stays a small eye at the right spot, not
+      blown up to fill its own box. This is what makes a face look like a face.
+      WITHOUT a shared view, each fragment rescales to its own content and the
+      composition falls apart. So: pick a frame once (e.g. 0..400), and draw
+      every part inside it.
+
+        // a portrait — each part its own fragment, ALL sharing view [0,0,400,400]
+        write elements/face.json  → {"id":"face","index":"a0","type":"line",
+          "view":[0,0,400,400],"path":"M200,40 C300,40 350,130 350,220 C350,330 290,380 200,380 C110,380 50,330 50,220 C50,130 100,40 200,40 Z",
+          "strokeColor":"#1e1e1e","backgroundColor":"#ffe8cc","fillStyle":"solid"}
+        write elements/eyeL.json  → {"id":"eyeL","index":"a2","view":[0,0,400,400],
+          "path":"M120,185 Q145,168 170,185","strokeColor":"#1e1e1e"}
+        write elements/mouth.json → {"id":"mouth","index":"a5","view":[0,0,400,400],
+          "path":"M165,300 Q200,322 235,300","strokeColor":"#c92a2a"}
 
       · `path`: M/L/H/V/C/S/Q/T/A/Z, absolute or relative. Each `M…` subpath =
-        one pen stroke (pen lifts between subpaths — a figure is several strokes
-        in ONE fragment; extra strokes inherit the fragment's style).
-      · `box:[x,y,w,h]`: where the drawing lands (uniform scale, centred). Or
-        give a `cell` instead — the figure draws inside that grid cell.
-      · Style per fragment: strokeColor, strokeWidth, opacity. For a FILLED
-        closed shape use `"type":"line"` + Z-closed path + backgroundColor +
-        fillStyle ("solid" flat, "hachure" sketchy).
-      · Compose a scene like a painter: back-to-front, one fragment per figure
-        part (sky → buildings → subject → details), z-ordered by `index`.
-        Layer several paths with different colors for depth.
-      · Bad path syntax → the write returns the parse error and the canvas
-        keeps its last good state; fix and rewrite.
-      Draw generously: real figures need 5–20 strokes, not 2. Vary stroke
-      weight (outline 2–3, details 1), use the palette for mood.
+        one pen stroke (the pen lifts between subpaths).
+      · `view:[x,y,w,h]` — the SHARED frame (identical on every fragment of the
+        figure). The whole view maps onto the canvas once. USE THIS for anything
+        with more than one part.
+      · `box:[x,y,w,h]` — ONLY for a lone standalone glyph in ONE fragment: it
+        fits that fragment's own content into the box. Never mix box + view on
+        parts of the same figure.
+      · FILL / SHADE: `"type":"line"` + a Z-closed path + `backgroundColor` +
+        `fillStyle` ("solid" flat, "hachure"/"cross-hatch" for sketchy shading).
+        Plain strokes stay `freedraw` (default). Build shading by layering
+        translucent filled shapes (lower `opacity`) back-to-front.
+      · Z-ORDER = paint order, by `index`: background first (a0), subject over
+        it, fine details last. Layer freely for depth (sfumato = many soft
+        translucent layers).
+      · LOOK: after drawing, re-read the overview and study the braille raster —
+        is the silhouette right, are parts aligned, is anything missing? Fix the
+        one wrong fragment and look again. Never declare a figure done unseen.
+      · Bad path syntax → the write returns the parse error; the canvas keeps its
+        last good state. Fix and rewrite.
+      Draw GENEROUSLY: a real portrait is 15–40 strokes, not 5. Vary stroke
+      weight (outline 2–3, detail 1), use color for form and mood.
 
       ════════════════════════════════════════════════════════════════════
       COORDINATE SYSTEM (only free-form art / raw elements below)

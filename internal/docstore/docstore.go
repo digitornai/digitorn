@@ -67,10 +67,13 @@ type FrameSpec struct {
 // target box. One subpath = one stroke element; extra subpaths become
 // generated siblings.
 type PathSpec struct {
-	Field string  `json:"field" yaml:"field"`                     // fragment field holding the SVG path data
-	Box   string  `json:"box,omitempty" yaml:"box,omitempty"`     // fragment field [x,y,w,h] to fit the drawing into (default "box")
-	Type  string  `json:"type,omitempty" yaml:"type,omitempty"`   // element type for strokes (default "freedraw")
-	Step  float64 `json:"step,omitempty" yaml:"step,omitempty"`   // sampling step in px (default 6)
+	Field       string     `json:"field" yaml:"field"`
+	Box         string     `json:"box,omitempty" yaml:"box,omitempty"`
+	View        string     `json:"view,omitempty" yaml:"view,omitempty"`
+	Canvas      [4]float64 `json:"canvas,omitempty" yaml:"canvas,omitempty"`
+	Type        string     `json:"type,omitempty" yaml:"type,omitempty"`
+	Step        float64    `json:"step,omitempty" yaml:"step,omitempty"`
+	StyleFields []string   `json:"style_fields,omitempty" yaml:"style_fields,omitempty"`
 }
 
 // LabelSpec makes a container's text label declarative: the agent writes a
@@ -104,11 +107,11 @@ type EdgeSpec struct {
 }
 
 type Collection struct {
-	Name  string `json:"name" yaml:"name"`   // fragment subdir, e.g. "elements"
-	Path  string `json:"path" yaml:"path"`   // JSON pointer in the composed doc (v1: top-level "/elements")
-	ID    string `json:"id" yaml:"id"`       // id field inside each item, or "$key" for object-map collections
-	Grain string `json:"grain" yaml:"grain"` // "item" (v1) | "chunk" (v2)
-	Order string `json:"order" yaml:"order"` // "field:<name>" | "name"
+	Name  string `json:"name" yaml:"name"`
+	Path  string `json:"path" yaml:"path"`
+	ID    string `json:"id" yaml:"id"`
+	Grain string `json:"grain" yaml:"grain"`
+	Order string `json:"order" yaml:"order"`
 }
 
 type Validate struct {

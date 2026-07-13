@@ -113,18 +113,22 @@ func TestPaths_ArcAndInvalid(t *testing.T) {
 	}
 
 	writeFrag(t, dir, "bad.json", `{"id":"bad","index":"a1","path":"M0,0 X99"}`)
-	_, diags, err := Compose(m, dir)
-	if err == nil {
-		t.Fatalf("invalid path must refuse composition")
+	composed, diags, err := Compose(m, dir)
+	if err != nil {
+		t.Fatalf("invalid path must warn, not block: %v", err)
+	}
+	bad := elemByID(t, composed)["bad"]
+	if del, _ := bad["isDeleted"].(bool); !del {
+		t.Fatalf("bad-path stroke must be marked isDeleted, got %v", bad["isDeleted"])
 	}
 	found := false
 	for _, d := range diags {
-		if d.Rule == "path" && d.Severity == "error" {
+		if d.Rule == "path" && d.Severity == "warning" {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("missing path diagnostic: %v", diags)
+		t.Fatalf("missing path warning: %v", diags)
 	}
 }
 
@@ -154,5 +158,61 @@ func TestFrames_AutoSizeAndGroups(t *testing.T) {
 	ga := els["a"]["groupIds"].([]any)
 	if len(ga) != 1 || ga[0] != "g1" {
 		t.Fatalf("group not expanded: %v", ga)
+	}
+}
+
+// Shared view: separate fragments keep their true relative positions and
+// proportions — the core unlock for multi-stroke figurative art.
+func TestPaths_SharedViewAligns(t *testing.T) {
+	dir := t.TempDir()
+	m := painterManifest()
+	m.Layout.Path.View = "view"
+	m.Layout.Path.Canvas = [4]float64{0, 0, 400, 400}
+	// two features in the SAME view; a big head and a tiny eye at (120,180)
+	writeFrag(t, dir, "head.json", `{"id":"head","index":"a0","view":[0,0,400,400],"path":"M20,200 L380,200"}`)
+	writeFrag(t, dir, "eye.json", `{"id":"eye","index":"a1","view":[0,0,400,400],"path":"M120,180 L140,180"}`)
+	composed, _, err := Compose(m, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	els := elemByID(t, composed)
+	// view == canvas (identity): head spans x 20..380, eye spans 120..140.
+	// The eye must stay TINY (width ~20) and at its place — NOT rescaled to fill.
+	ew := els["eye"]["width"].(float64)
+	if ew < 15 || ew > 25 {
+		t.Fatalf("shared view broke: eye width=%.1f, want ~20 (rescaled to its own box?)", ew)
+	}
+	hw := els["head"]["width"].(float64)
+	if hw < 350 {
+		t.Fatalf("head width=%.1f, want ~360", hw)
+	}
+	// eye sits to the left of head centre (200), as authored
+	if els["eye"]["x"].(float64) > 150 {
+		t.Fatalf("eye misplaced: x=%.1f", els["eye"]["x"])
+	}
+}
+
+// A degenerate lone move-to is a WARNING (stroke skipped), not a compose-killer —
+// one stray dot in a 40-stroke portrait must not blank the canvas.
+func TestPaths_EmptyPathIsWarningNotError(t *testing.T) {
+	dir := t.TempDir()
+	m := painterManifest()
+	writeFrag(t, dir, "good.json", `{"id":"good","index":"a0","view":[0,0,100,100],"path":"M0,0 L100,100"}`)
+	writeFrag(t, dir, "dot.json", `{"id":"dot","index":"a1","view":[0,0,100,100],"path":"M50,50"}`)
+	composed, diags, err := Compose(m, dir)
+	if err != nil {
+		t.Fatalf("a lone move-to must NOT refuse composition: %v", err)
+	}
+	if _, ok := elemByID(t, composed)["good"]; !ok {
+		t.Fatal("the good stroke should still compose")
+	}
+	warned := false
+	for _, d := range diags {
+		if d.Rule == "path" && d.Severity == "warning" {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Fatalf("expected a path warning for the empty stroke, got %v", diags)
 	}
 }

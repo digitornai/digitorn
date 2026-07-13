@@ -16,7 +16,7 @@ import (
 //  2. runtime.entry_agent — the app's designated coordinator / front door.
 //  3. the first declared agent — the single-agent default.
 //
-// The caller has already guaranteed len(def.Agents) > 0.
+// nil when the app declares no agents at all (or names an unknown id).
 func resolveAgent(def *schema.AppDefinition, agentID string) *schema.Agent {
 	if agentID != "" {
 		for i := range def.Agents {
@@ -32,6 +32,9 @@ func resolveAgent(def *schema.AppDefinition, agentID string) *schema.Agent {
 				return &def.Agents[i]
 			}
 		}
+	}
+	if len(def.Agents) == 0 {
+		return nil
 	}
 	return &def.Agents[0]
 }

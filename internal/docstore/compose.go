@@ -45,7 +45,7 @@ func Compose(m Manifest, dir string) (composed []byte, diags []Diagnostic, err e
 		}
 	}
 
-	idSets := map[string]map[string]string{} // collection → id → fragment file
+	idSets := map[string]map[string]string{}
 	colFrags := map[string][]fragment{}
 	for _, c := range m.Collections {
 		frags, ids, ds := loadCollection(dir, c)
@@ -117,12 +117,14 @@ func loadCollection(dir string, c Collection) (frags []fragment, ids map[string]
 		rel := c.Name + "/" + e.Name()
 		b, rerr := os.ReadFile(filepath.Join(base, e.Name()))
 		if rerr != nil {
-			diags = append(diags, Diagnostic{Severity: "error", Rule: "io", File: rel, Message: rerr.Error()})
+			diags = append(diags, Diagnostic{Severity: "warning", Rule: "io", File: rel, Message: rerr.Error()})
 			continue
 		}
 		var obj map[string]any
 		if derr := json.Unmarshal(b, &obj); derr != nil {
-			diags = append(diags, parseDiag(rel, b, derr))
+			d := parseDiag(rel, b, derr)
+			d.Severity = "warning"
+			diags = append(diags, d)
 			continue
 		}
 		f := fragment{file: e.Name(), raw: json.RawMessage(b), obj: obj}
@@ -131,13 +133,13 @@ func loadCollection(dir string, c Collection) (frags []fragment, ids map[string]
 		} else {
 			f.id, _ = obj[c.ID].(string)
 			if f.id == "" {
-				diags = append(diags, Diagnostic{Severity: "error", Rule: "id", File: rel,
-					Message: fmt.Sprintf("item has no %q field — every fragment needs a stable id", c.ID)})
+				diags = append(diags, Diagnostic{Severity: "warning", Rule: "id", File: rel,
+					Message: fmt.Sprintf("item has no %q field — every fragment needs a stable id; skipped", c.ID)})
 				continue
 			}
 			if prev, dup := ids[f.id]; dup {
-				diags = append(diags, Diagnostic{Severity: "error", Rule: "unique_id", File: rel,
-					Message: fmt.Sprintf("id %q already defined in %s/%s", f.id, c.Name, prev)})
+				diags = append(diags, Diagnostic{Severity: "warning", Rule: "unique_id", File: rel,
+					Message: fmt.Sprintf("id %q already defined in %s/%s — this one skipped", f.id, c.Name, prev)})
 				continue
 			}
 			if want := sanitizeID(f.id) + ".json"; e.Name() != want {
@@ -154,13 +156,21 @@ func loadCollection(dir string, c Collection) (frags []fragment, ids map[string]
 
 func checkRefs(m Manifest, colFrags map[string][]fragment, idSets map[string]map[string]string) []Diagnostic {
 	var diags []Diagnostic
-	if len(m.Validate.Refs) == 0 {
+	type refCheck struct{ field, in string }
+	checks := make([]refCheck, 0, len(m.Validate.Refs)+2)
+	for _, r := range m.Validate.Refs {
+		checks = append(checks, refCheck{r.Field, r.In})
+	}
+	if e := edgeSpec(m); e != nil && e.In != "" {
+		checks = append(checks, refCheck{e.From, e.In}, refCheck{e.To, e.In})
+	}
+	if len(checks) == 0 {
 		return nil
 	}
 	for _, c := range m.Collections {
 		for _, f := range colFrags[c.Name] {
-			for _, ref := range m.Validate.Refs {
-				v, ok := fieldValue(f.obj, ref.Field)
+			for _, ref := range checks {
+				v, ok := fieldValue(f.obj, ref.field)
 				if !ok {
 					continue
 				}
@@ -168,7 +178,7 @@ func checkRefs(m Manifest, colFrags map[string][]fragment, idSets map[string]map
 				if want == "" {
 					continue
 				}
-				targets := idSets[ref.In]
+				targets := idSets[ref.in]
 				if _, exists := targets[want]; exists {
 					continue
 				}
@@ -177,8 +187,8 @@ func checkRefs(m Manifest, colFrags map[string][]fragment, idSets map[string]map
 					known = append(known, id)
 				}
 				sort.Strings(known)
-				d := Diagnostic{Severity: "error", Rule: "refs", File: c.Name + "/" + f.file,
-					Message: fmt.Sprintf("%s %q references no item in %s", ref.Field, want, ref.In)}
+				d := Diagnostic{Severity: "warning", Rule: "refs", File: c.Name + "/" + f.file,
+					Message: fmt.Sprintf("%s %q references no item in %s", ref.field, want, ref.in)}
 				if close := closestID(want, known); close != "" {
 					d.Hint = fmt.Sprintf("closest id: %q", close)
 				}
@@ -187,6 +197,13 @@ func checkRefs(m Manifest, colFrags map[string][]fragment, idSets map[string]map
 		}
 	}
 	return diags
+}
+
+func edgeSpec(m Manifest) *EdgeSpec {
+	if m.Layout == nil {
+		return nil
+	}
+	return m.Layout.Edge
 }
 
 // assemble concatenates raw fragments into a compact array or object without

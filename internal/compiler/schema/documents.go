@@ -47,10 +47,13 @@ type DocFrame struct {
 }
 
 type DocPath struct {
-	Field string  `yaml:"field" json:"field"`
-	Box   string  `yaml:"box,omitempty" json:"box,omitempty"`
-	Type  string  `yaml:"type,omitempty" json:"type,omitempty"`
-	Step  float64 `yaml:"step,omitempty" json:"step,omitempty"`
+	Field       string     `yaml:"field" json:"field"`
+	Box         string     `yaml:"box,omitempty" json:"box,omitempty"`
+	View        string     `yaml:"view,omitempty" json:"view,omitempty"`
+	Canvas      [4]float64 `yaml:"canvas,omitempty" json:"canvas,omitempty"`
+	Type        string     `yaml:"type,omitempty" json:"type,omitempty"`
+	Step        float64    `yaml:"step,omitempty" json:"step,omitempty"`
+	StyleFields []string   `yaml:"style_fields,omitempty" json:"style_fields,omitempty"`
 }
 
 type DocLabel struct {
@@ -140,7 +143,7 @@ func (d DocumentDecl) Manifest() docstore.Manifest {
 			l.Frame = &docstore.FrameSpec{Contains: fr.Contains, FrameRef: fr.FrameRef, Pad: fr.Pad}
 		}
 		if pt := d.Layout.Path; pt != nil {
-			l.Path = &docstore.PathSpec{Field: pt.Field, Box: pt.Box, Type: pt.Type, Step: pt.Step}
+			l.Path = &docstore.PathSpec{Field: pt.Field, Box: pt.Box, View: pt.View, Canvas: pt.Canvas, Type: pt.Type, Step: pt.Step, StyleFields: pt.StyleFields}
 		}
 		l.GroupField = d.Layout.GroupField
 		m.Layout = l

@@ -28,7 +28,7 @@ func TestResolveAlias(t *testing.T) {
 		"agent_spawn.agent":            "agent_spawn.agent",
 		"filesystem.read":              "filesystem.read",
 		"context_builder.execute_tool": "context_builder.execute_tool",
-		"search_tools":                 "search_tools",
+		"search_tools":                 "context_builder.search_tools",
 		"":                             "",
 	}
 	for in, want := range cases {

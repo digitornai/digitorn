@@ -2448,6 +2448,21 @@ func (e *Engine) enforceGate(
 // resolveToolName qualifies a bare tool name to its FQN via the dispatcher's
 // resolver, so the gate evaluates the real tool instead of denying a bare
 // action with an empty module. Unknown/ambiguous names are returned unchanged.
+// ToolIndexFQNs returns the per-agent tool index's FQN list (empty agentID
+// resolves to the app's default agent). Diagnostic surface for external tool
+// testing — shows exactly what bare-name resolution can qualify against.
+func (e *Engine) ToolIndexFQNs(ctx context.Context, appID, agentID string) []string {
+	_, agent := e.resolveAppAgent(ctx, appID, agentID)
+	aid := ""
+	if agent != nil {
+		aid = agent.ID
+	}
+	if r, ok := e.dispatcher().(interface{ IndexFQNs(appID, agentID string) []string }); ok {
+		return r.IndexFQNs(appID, aid)
+	}
+	return nil
+}
+
 func (e *Engine) resolveToolName(appID, agentID, name string) string {
 	if r, ok := e.dispatcher().(interface {
 		ResolveToolName(appID, agentID, name string) string
@@ -2482,6 +2497,13 @@ func (e *Engine) ExecuteToolGated(ctx context.Context, inv ToolInvocation) ToolO
 			ctx = workdir.WithPathPolicy(ctx, pp)
 		}
 	}
+	// Normalise the invocation the way a turn would: default agent resolved,
+	// bare/aliased tool name qualified ONCE — so the gate and the dispatcher
+	// see the same canonical target (out-of-band callers rarely send either).
+	if _, agent := e.resolveAppAgent(ctx, inv.AppID, inv.AgentID); agent != nil {
+		inv.AgentID = agent.ID
+	}
+	inv.Name = e.resolveToolName(inv.AppID, inv.AgentID, inv.Name)
 	if blocked := e.GateSubTool(ctx, inv); blocked != nil {
 		return *blocked
 	}
@@ -2543,12 +2565,9 @@ func (e *Engine) resolveAppAgent(ctx context.Context, appID, agentID string) (*a
 	if err != nil || app == nil || app.Definition == nil {
 		return app, nil
 	}
-	for i := range app.Definition.Agents {
-		if app.Definition.Agents[i].ID == agentID {
-			return app, &app.Definition.Agents[i]
-		}
-	}
-	return app, nil
+	// resolveAgent handles the empty-id default (entry agent → first agent) —
+	// external callers (voice, tool exec API) rarely name an agent explicitly.
+	return app, resolveAgent(app.Definition, agentID)
 }
 
 func approvalTimeout(app *appmgr.RuntimeApp) time.Duration {

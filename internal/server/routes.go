@@ -258,6 +258,12 @@ func (d *Daemon) MountAPI() {
 			r.Get("/api/_dev/pieces/catalog", d.piecesCatalogDiag)
 		}
 
+		// Dogfooding: drive an owned session's tools through the EXACT agent
+		// path (gates + meta-dispatcher + doc-sentinel) from outside the
+		// daemon. Real JWT auth + session ownership enforced.
+		r.Post("/api/apps/{app_id}/sessions/{session_id}/tools/execute", d.devToolExecute)
+		r.Get("/api/apps/{app_id}/tools/surface", d.devToolSurface)
+
 		// ----- Events stream (for background service primitives adapter) -----
 		r.Get("/api/events/recent", d.handleEventsRecent)
 
