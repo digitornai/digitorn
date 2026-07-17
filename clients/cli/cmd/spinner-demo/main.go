@@ -1,6 +1,3 @@
-// Command spinner-demo animates every candidate spinner motif side by side in
-// the terminal, at the CLI's real cadence (~240ms/frame), so a motif can be
-// chosen by eye rather than from a static frame list. Ctrl+C to quit.
 package main
 
 import (
@@ -28,8 +25,8 @@ var motifs = []motif{
 }
 
 const (
-	tick = 120 * time.Millisecond // base animation tick
-	slow = 2                      // hold each frame for `slow` ticks → 240ms/frame
+	tick = 120 * time.Millisecond
+	slow = 2
 	cyan = "\x1b[1;36m"
 	dim  = "\x1b[2m"
 	rst  = "\x1b[0m"
@@ -39,8 +36,8 @@ func main() {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt)
 
-	fmt.Print("\x1b[?25l")       // hide cursor
-	defer fmt.Print("\x1b[?25h") // restore on exit
+	fmt.Print("\x1b[?25l")
+	defer fmt.Print("\x1b[?25h")
 
 	t := time.NewTicker(tick)
 	defer t.Stop()
@@ -48,11 +45,10 @@ func main() {
 
 	render := func() {
 		var b []byte
-		b = append(b, "\x1b[H\x1b[2J"...) // home + clear
+		b = append(b, "\x1b[H\x1b[2J"...)
 		b = append(b, (dim + "  spinners — cadence réelle 240ms/frame · Ctrl+C pour quitter\n\n" + rst)...)
 		for _, m := range motifs {
 			g := m.frames[(frame/slow)%len(m.frames)]
-			// glyph in a "loading…" line, like the real session/picker spinner
 			line := fmt.Sprintf("   %s%s%s  loading…   %s%-22s%s\n", cyan, g, rst, dim, m.name, rst)
 			b = append(b, line...)
 		}

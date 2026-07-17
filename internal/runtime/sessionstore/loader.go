@@ -70,12 +70,6 @@ func Load(p Paths, sid string, opts LoadOptions) (*LoadResult, error) {
 		applyLocked(state, ev)
 		res.EventsApplied++
 	}
-	// Crash reconciliation : this is a COLD load (fresh process), so no agent
-	// goroutine exists. Any child still "running" was orphaned by a daemon stop
-	// mid-delegation — it never wrote its agent_result. Flip it to "interrupted"
-	// so the resync view is honest (no eternal "running" zombies). If that agent
-	// is somehow still alive (rare evict-then-reload while up), its real
-	// agent_result later overwrites this through the normal projection.
 	now := int64(0)
 	for i := range state.Children {
 		if state.Children[i].Status == "running" {
@@ -87,9 +81,6 @@ func Load(p Paths, sid string, opts LoadOptions) (*LoadResult, error) {
 			state.Children[i].UpdatedAt = now
 		}
 	}
-	// Same reconciliation for background tasks : a task left "running" had its
-	// goroutine die with the daemon, so on cold load it's an orphan, not a live
-	// task. Flip it to "interrupted" so the resync view is honest.
 	for i := range state.BackgroundTasks {
 		if state.BackgroundTasks[i].State == "running" {
 			state.BackgroundTasks[i].State = "interrupted"
@@ -99,7 +90,6 @@ func Load(p Paths, sid string, opts LoadOptions) (*LoadResult, error) {
 
 	meta, err := ReadMeta(p.MetaFile(sid))
 	if err != nil {
-		// Treat corrupt meta as missing — we just rebuild it.
 		meta = nil
 	}
 	if meta == nil || meta.LastSeq < state.LastSeq || meta.EventCount != uint64(jres.LinesRead) ||
@@ -142,10 +132,6 @@ func hydrateFromSnapshot(s *SessionState, snap *SessionSnapshot) {
 	s.FirstSeq = snap.FirstSeq
 	s.LastSeq = snap.LastSeq
 	s.Messages = append(s.Messages[:0], snap.Messages...)
-	// Guard on len (not != nil) so an empty map on disk — or a nil one from
-	// the alloc-free Snapshot path — never overwrites the non-nil map that
-	// NewSessionState seeded; the projection writes to these maps assuming
-	// they are never nil.
 	if len(snap.ToolCalls) > 0 {
 		s.ToolCalls = cloneToolCalls(snap.ToolCalls)
 	}
@@ -175,19 +161,9 @@ func hydrateFromSnapshot(s *SessionState, snap *SessionSnapshot) {
 	s.Compactions = append(s.Compactions[:0], snap.Compactions...)
 	s.ContextCompaction = cloneContextCompaction(snap.ContextCompaction)
 	s.PreparedSummary = clonePreparedSummary(snap.PreparedSummary)
-	// The snapshot carries the FULL transcript (lossless), but the live in-memory
-	// window must load bounded to the model's view : if a context compaction had
-	// already happened, drop the pre-cutoff messages here. Post-snapshot
-	// EventContextCompacted replays trim further via the projection. The full
-	// transcript is rebuilt from disk on demand (ReadTranscript), never from this.
 	if s.ContextCompaction != nil {
 		s.Messages = MessagesAfterCutoff(s.Messages, s.ContextCompaction.CutoffSeq)
 	}
-	// CTX-7 : restore the persisted context-occupancy gauge + breakdown so a
-	// cold-loaded session reports its LAST real context immediately (e.g. the CLI
-	// footer shows ctx used/window on open, before any new turn). They are written
-	// to the snapshot but were never read back ; post-snapshot EventContextTokens
-	// replays refine them via the projection.
 	s.ContextTokens = snap.ContextTokens
 	s.ContextSystemTokens = snap.ContextSystemTokens
 	s.ContextToolsTokens = snap.ContextToolsTokens

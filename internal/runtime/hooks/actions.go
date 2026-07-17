@@ -27,7 +27,7 @@ type MessageInjection struct {
 type ActionEffects struct {
 	Gate     *GateDecision
 	Injects  []*MessageInjection
-	Modified bool // true when transform_params/transform_result changed something
+	Modified bool
 }
 
 
@@ -241,7 +241,7 @@ func runModuleActionInject(ctx context.Context, params map[string]any, p Payload
 	}
 	out = strings.TrimSpace(out)
 	if out == "" {
-		return ActionEffects{}, nil // nothing to inject
+		return ActionEffects{}, nil
 	}
 	role, _ := params["role"].(string)
 	if role == "" {
@@ -316,8 +316,6 @@ func runShell(ctx context.Context, params map[string]any, p Payload, deps Action
 		args["cwd"] = cwd
 	}
 	if t, ok := params["timeout"]; ok {
-		// bash.run names the field timeout_seconds ; the hook doc names it
-		// `timeout`. Bridge here.
 		args["timeout_seconds"] = t
 	}
 
@@ -445,7 +443,7 @@ func formatLSPDiagnostics(path, raw string) string {
 	}
 	projectHasIssues := r.Project != nil && (r.Project.TotalErrors > 0 || r.Project.TotalWarnings > 0)
 	if r.Errors == 0 && r.Warnings == 0 && !projectHasIssues {
-		return "" // clean here AND across the project — say nothing
+		return ""
 	}
 	var b strings.Builder
 	if r.Errors > 0 || r.Warnings > 0 {
@@ -492,7 +490,7 @@ func applyOnError(params map[string]any, err error, deps ActionDeps, p Payload, 
 		return err
 	case "ignore":
 		return nil
-	default: // "log" or unset
+	default:
 		if deps.Logger != nil {
 			deps.Logger.Warn("hook: "+action+" action failed",
 				"err", err.Error(), "hook_event", string(p.Event))

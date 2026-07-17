@@ -8,12 +8,7 @@ import (
 	"github.com/digitornai/digitorn/internal/compiler/schema"
 )
 
-// reCache memoises compiled hook-condition regexes. Patterns come from the
-// app's YAML (a bounded, validated set), so the cache is bounded — but
-// condition evaluation is on the per-event hot path (HK-4 targets 10M
-// sessions), where re-compiling the same pattern on every fire was pure waste.
-// Both successes and compile errors are cached so a bad pattern isn't retried.
-var reCache sync.Map // pattern string → compiledRe
+var reCache sync.Map
 
 type compiledRe struct {
 	re  *regexp.Regexp
@@ -30,19 +25,6 @@ func cachedRegexp(pat string) (*regexp.Regexp, error) {
 	return re, err
 }
 
-// EvalCondition evaluates a HookCondition against a Payload per
-// docs-site/language/31-tool-hooks.md "Conditions (14 built-in)".
-//
-// The 14 supported types :
-//
-//	always, never,
-//	context_pressure, turn_count, tool_calls, message_count,
-//	tool_name, tool_failed,
-//	content_contains, error_type, expression,
-//	all_of (alias all), any_of (alias any), not
-//
-// Unknown / unsupported condition types default to FALSE (safe
-// fallback ; the compiler validates types separately).
 func EvalCondition(cond schema.HookCondition, p Payload) bool {
 	switch cond.Type {
 	case "", "always":
@@ -82,15 +64,6 @@ func EvalCondition(cond schema.HookCondition, p Payload) bool {
 	return false
 }
 
-// =====================================================================
-// turn_count / message_count / tool_calls / context_pressure
-// =====================================================================
-
-// condContextPressure : fires when TokensUsed / MaxTokens > threshold.
-// threshold is REQUIRED — the catalog enforces it at compile-time and the
-// auto_compact injection always supplies runtime.context.compression_trigger.
-// No value is hardcoded here: a hook reaching this point without a (positive)
-// threshold, or before any budget is known, simply never fires.
 func condContextPressure(params map[string]any, p Payload) bool {
 	if _, ok := params["threshold"]; !ok {
 		return false
@@ -103,12 +76,6 @@ func condContextPressure(params map[string]any, p Payload) bool {
 	return ratio > threshold
 }
 
-// condTurnCount : fires AT or EVERY N turns per doc.
-// Params : threshold (required), every (optional).
-//
-//	"every" set → fires every (current % every == 0) AND
-//	              current >= threshold.
-//	"every" unset → fires when current == threshold.
 func condTurnCount(params map[string]any, p Payload) bool {
 	threshold := readInt(params, "threshold", -1)
 	if threshold < 0 {
@@ -121,8 +88,6 @@ func condTurnCount(params map[string]any, p Payload) bool {
 	return p.TurnCount == threshold
 }
 
-// condTrivialThreshold : value > threshold. Used by tool_calls and
-// message_count which share the same `threshold: int` shape.
 func condTrivialThreshold(params map[string]any, current int) bool {
 	threshold := readInt(params, "threshold", -1)
 	if threshold < 0 {
@@ -131,12 +96,6 @@ func condTrivialThreshold(params map[string]any, current int) bool {
 	return current >= threshold
 }
 
-// =====================================================================
-// tool_name / tool_match
-// =====================================================================
-
-// condToolName : `match` accepts string OR list[str]. Doc says
-// fnmatch glob (NOT regex). Pipe alternation `a|b` supported.
 func condToolName(params map[string]any, toolName string) bool {
 	if toolName == "" {
 		return false
@@ -157,7 +116,6 @@ func condToolName(params map[string]any, toolName string) bool {
 			}
 		}
 	}
-	// `tools` is the alias for tool_match.
 	switch v := params["tools"].(type) {
 	case []string:
 		for _, s := range v {
@@ -175,9 +133,6 @@ func condToolName(params map[string]any, toolName string) bool {
 	return false
 }
 
-// globMatch : fnmatch-style + pipe alternation. Recognised
-// wildcards : * (any chars), ? (one char). Pipe `a|b` matches if
-// any sub-pattern matches.
 func globMatch(pattern, s string) bool {
 	if pattern == "" {
 		return false
@@ -193,9 +148,6 @@ func globMatch(pattern, s string) bool {
 	return fnmatch(pattern, s)
 }
 
-// fnmatch is a minimal `*`/`?` matcher for tool names. Tool names
-// only use letters/digits/dots/underscores so we don't need [ ]
-// character classes. Pure-Go, no allocations on the hot path.
 func fnmatch(pattern, s string) bool {
 	pi, si := 0, 0
 	starPi, starSi := -1, -1
@@ -233,12 +185,6 @@ func fnmatch(pattern, s string) bool {
 	return pi == len(pattern)
 }
 
-// =====================================================================
-// content_contains
-// =====================================================================
-
-// condContentContains : doc says it matches the LLM's response OR
-// the user's message. Param : `keyword: str`.
 func condContentContains(params map[string]any, p Payload) bool {
 	keyword, _ := params["keyword"].(string)
 	if keyword == "" {
@@ -248,12 +194,6 @@ func condContentContains(params map[string]any, p Payload) bool {
 		strings.Contains(p.UserMessage, keyword)
 }
 
-// =====================================================================
-// error_type
-// =====================================================================
-
-// condErrorType : regex against the error type/message. Use with
-// the `error` event. Param : `match: str` (regex).
 func condErrorType(params map[string]any, errType string) bool {
 	pat, _ := params["match"].(string)
 	if pat == "" || errType == "" {
@@ -266,24 +206,6 @@ func condErrorType(params map[string]any, errType string) bool {
 	return re.MatchString(errType)
 }
 
-// =====================================================================
-// expression
-// =====================================================================
-
-// condExpression : doc-defined "Python-like expression against the
-// turn state". V1 implements a SAFE subset :
-//
-//   - `tokens_used > N`     → numeric compare
-//   - `messages > N`        → numeric compare
-//   - `tool_calls > N`      → numeric compare
-//   - `tool_failed`         → bool literal (true when status="errored")
-//   - "true" / "false"      → bool literals
-//
-// Unknown / unsafe expressions return false (defensive default).
-// Production deployments should prefer the typed conditions
-// (context_pressure, turn_count, tool_calls, message_count,
-// tool_failed) which cover the common cases without
-// expression-language risk.
 func condExpression(params map[string]any, p Payload) bool {
 	expr, _ := params["expr"].(string)
 	expr = strings.TrimSpace(expr)
@@ -304,9 +226,6 @@ func condExpression(params map[string]any, p Payload) bool {
 	return false
 }
 
-// evalNumericCompare parses "<var> <op> <num>" where op ∈ {>, >=,
-// <, <=, ==}. Variables : tokens_used | max_tokens | messages |
-// tool_calls | turn_count | open_tasks.
 func evalNumericCompare(expr string, p Payload) (bool, bool) {
 	for _, op := range []string{">=", "<=", "==", ">", "<"} {
 		idx := strings.Index(expr, op)
@@ -354,14 +273,6 @@ func varToFloat(name string, p Payload) (float64, bool) {
 	return 0, false
 }
 
-// =====================================================================
-// all_of / any_of / not
-// =====================================================================
-
-// condComposite evaluates the `conditions` list with AND (when
-// requireAll=true) or OR semantics. Short-circuits on first
-// decisive result, matching the doc-defined behaviour
-// (31-tool-hooks.md "Composite conditions - short-circuit").
 func condComposite(params map[string]any, p Payload, requireAll bool) bool {
 	conds := readNestedConditions(params)
 	if len(conds) == 0 {
@@ -379,17 +290,6 @@ func condComposite(params map[string]any, p Payload, requireAll bool) bool {
 	return requireAll
 }
 
-// condNot supports the doc-defined shape :
-//
-//	not:
-//	  condition: { type: tool_failed }
-//
-// AND a more relaxed multi-form :
-//
-//	not:
-//	  conditions: [ {type: x}, {type: y} ]   # negate ANY match
-//
-// Returns the *underlying* condition's value ; caller negates.
 func condNot(params map[string]any, p Payload) bool {
 	if c, ok := readSingleCondition(params); ok {
 		return EvalCondition(c, p)
@@ -403,8 +303,6 @@ func condNot(params map[string]any, p Payload) bool {
 	return false
 }
 
-// readSingleCondition reads a `condition:` sub-map (the doc-form
-// for `not`).
 func readSingleCondition(params map[string]any) (schema.HookCondition, bool) {
 	raw, ok := params["condition"]
 	if !ok {
@@ -417,8 +315,6 @@ func readSingleCondition(params map[string]any) (schema.HookCondition, bool) {
 	return buildCondFromMap(m), true
 }
 
-// readNestedConditions reads the `conditions` list for all_of /
-// any_of / not (multi-form).
 func readNestedConditions(params map[string]any) []schema.HookCondition {
 	raw, ok := params["conditions"]
 	if !ok {
@@ -440,9 +336,6 @@ func readNestedConditions(params map[string]any) []schema.HookCondition {
 	return out
 }
 
-// buildCondFromMap turns a YAML-decoded condition map back into
-// a schema.HookCondition. `type` becomes Type ; remaining keys
-// become Params.
 func buildCondFromMap(m map[string]any) schema.HookCondition {
 	t, _ := m["type"].(string)
 	params := make(map[string]any, len(m))
@@ -457,10 +350,6 @@ func buildCondFromMap(m map[string]any) schema.HookCondition {
 		Params: params,
 	}
 }
-
-// =====================================================================
-// helpers
-// =====================================================================
 
 func readFloat(params map[string]any, key string, def float64) float64 {
 	if v, ok := params[key].(float64); ok {
@@ -507,8 +396,6 @@ func parseFloat(s string) (float64, bool) {
 	if s == "" {
 		return 0, false
 	}
-	// Simple decimal parse without strconv (avoid import cycle
-	// concerns and keep allocations zero).
 	if dot == -1 {
 		var n int64
 		for _, r := range s {

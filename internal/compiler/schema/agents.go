@@ -10,12 +10,9 @@ type Agent struct {
 	ID           string             `yaml:"id" json:"id"`
 	Role         string             `yaml:"role,omitempty" json:"role,omitempty"`
 	Brain        Brain              `yaml:"brain" json:"brain"`
-	// MaxToolIterations caps the LLM↔tool rounds in a single turn for this agent.
-	// 0/unset → the engine's (high) default. Set it higher for long agentic tasks
-	// (scaffold + install + run), lower to keep a turn short.
 	MaxToolIterations *int            `yaml:"max_tool_iterations,omitempty" json:"max_tool_iterations,omitempty"`
 	SystemPrompt string             `yaml:"system_prompt,omitempty" json:"system_prompt,omitempty"`
-	Prompt       string             `yaml:"prompt,omitempty" json:"prompt,omitempty"` // alias of system_prompt
+	Prompt       string             `yaml:"prompt,omitempty" json:"prompt,omitempty"`
 	PlanFirst    *bool              `yaml:"plan_first,omitempty" json:"plan_first,omitempty"`
 	Specialty    string             `yaml:"specialty,omitempty" json:"specialty,omitempty"`
 	DelegateTo   []string           `yaml:"delegate_to,omitempty" json:"delegate_to,omitempty"`
@@ -25,16 +22,10 @@ type Agent struct {
 	Pool         *AgentPoolConfig   `yaml:"pool,omitempty" json:"pool,omitempty"`
 	Coordination *CoordinationBlock `yaml:"coordination,omitempty" json:"coordination,omitempty"`
 	Instructions *InstructionsBlock `yaml:"instructions,omitempty" json:"instructions,omitempty"`
-	// Context : per-agent context sections, layered ON TOP of the app-level
-	// context (a section sharing an id overrides the app's).
 	Context      *ContextBlock      `yaml:"context,omitempty" json:"context,omitempty"`
 	Hooks        []Hook             `yaml:"hooks,omitempty" json:"hooks,omitempty"`
 }
 
-// AgentModules accepts three YAML shapes:
-//   - [filesystem, shell]                       (list of strings)
-//   - [{filesystem: [read, grep]}]              (list of single-key maps)
-//   - {filesystem: [read, grep], shell: [exec]} (top-level map)
 type AgentModules []ModuleRef
 
 func (m *AgentModules) UnmarshalYAML(node *yaml.Node) error {
@@ -73,7 +64,6 @@ func (m *AgentModules) UnmarshalYAML(node *yaml.Node) error {
 	}
 }
 
-// ModuleRef accepts either "filesystem" or {filesystem: [read, grep]}.
 type ModuleRef struct {
 	ID    string
 	Tools []string
@@ -129,11 +119,6 @@ type AgentPoolConfig struct {
 type Brain struct {
 	ProviderID string `yaml:"provider_id,omitempty" json:"provider_id,omitempty"`
 	Provider   string `yaml:"provider,omitempty" json:"provider,omitempty"`
-	// Model is the DEFAULT model. Kind is the modality this brain operates on
-	// (chat|image|audio|video|embedding) — it constrains which models a session
-	// may switch to. Models lists the declared alternatives (same provider): in
-	// direct/BYOK mode those are the ONLY switchable targets ; in gateway mode a
-	// session may switch to ANY gateway model whose kind == Kind.
 	Model            string         `yaml:"model,omitempty" json:"model,omitempty"`
 	Kind             string         `yaml:"kind,omitempty" json:"kind,omitempty"`
 	Models           []string       `yaml:"models,omitempty" json:"models,omitempty"`

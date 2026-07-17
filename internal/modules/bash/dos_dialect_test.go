@@ -10,12 +10,10 @@ import (
 	"github.com/digitornai/digitorn/internal/domain/tool"
 )
 
-// dosHint must catch Windows cmd.exe usage on a bash shell and never flag a real
-// bash command (incl. Unix absolute-path args like /etc, /bin).
 func TestDosHint(t *testing.T) {
 	flagged := []string{
 		"dir /B /S",
-		"cd my-react-app && dir /B /S", // the bare command word is `cd`; `dir` is the 2nd statement
+		"cd my-react-app && dir /B /S",
 		"copy a b", "xcopy /E src dst", "del foo.txt", "erase foo",
 		"move a b", "ren a b", "rename a b", "cls", "findstr foo *.txt",
 		"echo hi && cls", "ipconfig && dir", "mkdir x && del y",
@@ -38,8 +36,6 @@ func TestDosHint(t *testing.T) {
 	}
 }
 
-// The reported case: a foreground cmd command is rejected fast with guidance,
-// never run to a cryptic exit-127.
 func TestRun_DosCommandRejected(t *testing.T) {
 	m := testModule(t)
 	if m.useGoShell || m.kind != "powershell" {

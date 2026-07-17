@@ -47,12 +47,10 @@ func TestServerFromTool(t *testing.T) {
 
 func TestResolveAuth_NoOpForNonMCPOrNoLookup(t *testing.T) {
 	s := newTestService(t)
-	// No serverAuth lookup wired.
 	ac, ch, err := s.ResolveAuth(context.Background(), "u", "app", "mcp", "mcp_x__y")
 	if err != nil || ac != nil || ch != nil {
 		t.Fatalf("want all-nil without lookup, got (%v,%v,%v)", ac, ch, err)
 	}
-	// Non-mcp module.
 	s.SetServerAuthLookup(func(string, string) *schema.MCPAuthConfig {
 		return &schema.MCPAuthConfig{Type: "oauth2", Provider: "github"}
 	})
@@ -133,7 +131,6 @@ func TestResolveAuth_NoTokenReturnsChallenge(t *testing.T) {
 	if ch == nil || ch.Provider != "github" || ch.ServerID != "srv" || ch.AuthURL == "" || ch.State == "" {
 		t.Fatalf("bad challenge: %+v", ch)
 	}
-	// A state row must have been persisted (bound to the user) for the callback.
 	var count int64
 	s.tokens.db.Model(&models.OAuthState{}).Where("state = ? AND user_id = ?", ch.State, "u").Count(&count)
 	if count != 1 {

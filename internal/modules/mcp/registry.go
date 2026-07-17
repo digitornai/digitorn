@@ -14,13 +14,10 @@ import (
 	"github.com/digitornai/digitorn/internal/compiler/schema"
 )
 
-// registryURL is the official MCP registry search endpoint. Overridable in tests.
 var registryURL = "https://registry.modelcontextprotocol.io/v0/servers"
 
 const registryTTL = 5 * time.Minute
 
-// registry JSON shapes (tolerant: the API has used both camelCase and snake_case
-// over versions, so both tags are accepted where they diverged).
 type registryEnvVar struct {
 	Name       string `json:"name"`
 	IsRequired bool   `json:"is_required"`
@@ -63,8 +60,6 @@ type registryServer struct {
 	Remotes     []registryRemote  `json:"remotes"`
 }
 
-// registrySearchResponse handles both the wrapped ({servers:[{server:{...}}]})
-// and flat ({servers:[{...}]}) response shapes.
 type registrySearchResponse struct {
 	Servers  []json.RawMessage `json:"servers"`
 	Metadata struct {
@@ -94,9 +89,6 @@ type registryCacheEntry struct {
 	at  time.Time
 }
 
-// searchRegistry resolves an unknown server id against the official MCP
-// registry (best-effort, cached 5 min incl. negative results). Returns the
-// best-matching server (exact id match, else first hit).
 func searchRegistry(ctx context.Context, serverID string) (*registryServer, bool) {
 	registryMu.Lock()
 	if e, ok := registryCache[serverID]; ok && nowSince(e.at) < registryTTL {
@@ -115,9 +107,6 @@ func searchRegistry(ctx context.Context, serverID string) (*registryServer, bool
 
 func nowSince(t time.Time) time.Duration { return time.Since(t) }
 
-// listRegistry returns a page of registry servers (search optional, cursor/limit
-// for pagination) plus the next cursor (empty when exhausted). Best-effort: a
-// failed fetch returns an empty page. Used by the management browse route.
 func listRegistry(ctx context.Context, query, cursor string, limit int) ([]registryServer, string) {
 	if limit <= 0 || limit > 100 {
 		limit = 50
@@ -158,8 +147,6 @@ func listRegistry(ctx context.Context, query, cursor string, limit int) ([]regis
 		if srv.Name == "" && len(srv.Packages) == 0 && len(srv.Remotes) == 0 {
 			continue
 		}
-		// The registry lists every version of a server; collapse to one row per
-		// name (the search endpoint already returns latest-first).
 		if srv.Name != "" {
 			if seen[srv.Name] {
 				continue
@@ -194,8 +181,6 @@ func fetchRegistry(ctx context.Context, serverID string) *registryServer {
 	return matchRegistry(body, serverID)
 }
 
-// matchRegistry picks the best server from a search response: exact id match
-// (on the last path segment, with _/- normalised), else the first result.
 func matchRegistry(body []byte, serverID string) *registryServer {
 	var sr registrySearchResponse
 	if json.Unmarshal(body, &sr) != nil || len(sr.Servers) == 0 {
@@ -223,10 +208,6 @@ func matchRegistry(body []byte, serverID string) *registryServer {
 	return first
 }
 
-// registryToConnectSpec maps a registry server into a launch config, applying
-// the user's shorthands to its declared env vars and auto-detecting OAuth from
-// the env-var names. Order: npm package → pip package (uvx) → remote endpoint.
-// Returns the spec, the inferred auth (nil if none / user-supplied), and ok.
 func registryToConnectSpec(srv *registryServer, sc schema.MCPServerConfig) (connectSpec, *detectedAuth, bool) {
 	if srv == nil {
 		return connectSpec{}, nil, false
@@ -278,17 +259,9 @@ func registryToConnectSpec(srv *registryServer, sc schema.MCPServerConfig) (conn
 		spec.Timeout = defaultTimeout
 	}
 
-	// Auto-detect auth from the declared env-var names (only when the user
-	// didn't already declare an auth block).
 	var detected *detectedAuth
 	if sc.Auth == nil {
 		detected = detectOAuthFromEnvVars(allEnvNames)
-		// Dynamic token wiring (covers the common single-token server too, not
-		// just OAuth): if the server declares a token env var and the user
-		// supplied a credential under ANY token-ish shorthand, inject it into
-		// that exact var — so a brand-new server needs no code and no knowledge
-		// of its precise env-var name. (stdio only; remote tokens ride the
-		// Authorization header.)
 		if tokenVar := detectTokenVar(allEnvNames); tokenVar != "" && spec.Env != nil {
 			if _, already := spec.Env[tokenVar]; !already {
 				if v := tokenishValue(sc.Extra); v != "" {
@@ -300,9 +273,6 @@ func registryToConnectSpec(srv *registryServer, sc schema.MCPServerConfig) (conn
 	return spec, detected, true
 }
 
-// mapRegistryEnv fills each declared env var from the user's exact value or any
-// of the candidate shorthands it maps to (lenient, so the user need not know the
-// server's precise env-var names).
 func mapRegistryEnv(vars []registryEnvVar, sc schema.MCPServerConfig) map[string]string {
 	out := map[string]string{}
 	for _, ev := range vars {
@@ -332,8 +302,6 @@ func pickRemote(remotes []registryRemote) *registryRemote {
 	return nil
 }
 
-// substituteHeaders fills {placeholder} tokens in header values from the user's
-// non-standard config keys.
 func substituteHeaders(headers []registryHeader, sc schema.MCPServerConfig) map[string]string {
 	if len(headers) == 0 {
 		return nil

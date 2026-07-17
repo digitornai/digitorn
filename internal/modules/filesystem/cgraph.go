@@ -14,13 +14,6 @@ import (
 	"github.com/digitornai/digitorn/internal/codeast"
 )
 
-// cgraph.go : the per-workdir dependency graph (callers / imports /
-// enclosing-symbol) + the AST chunk adapter, both built on the shared
-// codeast tree-sitter layer. Ephemeral per workdir (LRU+TTL, async build),
-// CGO, gated by the `treesitter` tag (default build uses the no-op stub).
-
-// astChunks adapts codeast's symbol-level chunks to sindex's sChunk. nil for
-// unknown languages, so sindex falls back to line-window chunking.
 func astChunks(path string, src []byte) []sChunk {
 	chs := codeast.Chunks(path, src)
 	if len(chs) == 0 {
@@ -30,12 +23,9 @@ func astChunks(path string, src []byte) []sChunk {
 	for _, c := range chs {
 		lines := strings.Count(c.Text, "\n") + 1
 		out = append(out, sChunk{path: c.Path, line: c.Line, end: c.Line + lines - 1, text: c.Text, sym: c.Symbol})
-		// text kept here — cleared after embedding in sindex.build()
 	}
 	return out
 }
-
-// ---- dependency graph ----
 
 type defLoc struct {
 	Name, Kind, Path string
@@ -43,9 +33,9 @@ type defLoc struct {
 }
 
 type codeGraph struct {
-	byFile  map[string][]defLoc // enclosing-symbol lookup
-	callers map[string][]string // callee name → caller "kind name" labels
-	imports map[string][]string // path → imports
+	byFile  map[string][]defLoc
+	callers map[string][]string
+	imports map[string][]string
 }
 
 func (g *codeGraph) context(path string, line int) symContext {
@@ -67,8 +57,6 @@ func (g *codeGraph) context(path string, line int) symContext {
 		direct := dedupStrings(g.callers[d.Name], 8)
 		sc.Callers = direct
 
-		// Hop-2: callers of direct callers — pure map lookup, ~0µs.
-		// Capped at 5 to avoid noise; appended as a single "↳ ..." entry.
 		func() {
 			defer func() { recover() }()
 			seen := make(map[string]bool, len(direct))
@@ -99,22 +87,17 @@ func (g *codeGraph) context(path string, line int) symContext {
 	return sc
 }
 
-// callerSymName extracts the bare symbol name from a caller label like
-// "func Run", "method Engine.chatOrStream", "type Engine" → "Run", "chatOrStream", "Engine".
 func callerSymName(label string) string {
 	parts := strings.Fields(label)
 	if len(parts) == 0 {
 		return ""
 	}
 	last := parts[len(parts)-1]
-	// Handle "Type.Method" → take the Method part.
 	if i := strings.LastIndexByte(last, '.'); i >= 0 {
 		return last[i+1:]
 	}
 	return last
 }
-
-// ---- per-workdir ephemeral graph manager (mirrors sindex) ----
 
 type cgEntry struct {
 	root     string
@@ -213,10 +196,6 @@ func (e *cgEntry) context(path string, line int) symContext {
 	return e.g.context(path, line)
 }
 
-// buildGraph parses every recognised source file under root (via codeast)
-// and assembles the dependency graph. Parsing (tree-sitter, CPU-bound) runs
-// on a pool of NumCPU workers ; the graph is merged on one goroutine, so no
-// lock guards the maps.
 func buildGraph(root string, maxBytes int64) *codeGraph {
 	g := &codeGraph{byFile: map[string][]defLoc{}, callers: map[string][]string{}, imports: map[string][]string{}}
 
@@ -293,7 +272,6 @@ func buildGraph(root string, maxBytes int64) *codeGraph {
 	return g
 }
 
-// codeContextFor returns the code-graph context for a matched location.
 func codeContextFor(root string, maxBytes int64, path string, line int) symContext {
 	e := cgraphs.get(root, maxBytes)
 	e.maybeBuild()

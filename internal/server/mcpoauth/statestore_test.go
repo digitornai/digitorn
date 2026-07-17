@@ -78,7 +78,6 @@ func TestStateStore_PutTakeSingleUse(t *testing.T) {
 	if got.UserID != "u" || got.ServerID != "srv" || got.Verifier != "the-verifier" || got.RedirectURI != "https://cb" {
 		t.Fatalf("round-trip mismatch: %+v", got)
 	}
-	// Single-use: second take returns nil.
 	again, err := s.TakeValid(ctx, "st1")
 	if err != nil {
 		t.Fatalf("take2: %v", err)
@@ -100,7 +99,6 @@ func TestStateStore_ExpiredIsRejectedAndPurged(t *testing.T) {
 	s, gdb := newTestStateStore(t)
 	ctx := context.Background()
 
-	// Insert a row already expired (bypass Put's TTL).
 	past := time.Now().UTC().Add(-time.Hour)
 	if err := gdb.Create(&models.OAuthState{
 		State: "old", UserID: "u", AppID: "a", Provider: "google", ServerID: "s",

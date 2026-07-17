@@ -18,15 +18,12 @@ func TestResolve_UserWorkdir_UsedAsIs(t *testing.T) {
 	if got != canonical(uw) {
 		t.Errorf("got %q, want %q", got, canonical(uw))
 	}
-	// No managed dir should have been created under home for this case.
 }
 
 func TestResolve_UserWorkdir_Invalid(t *testing.T) {
-	// Not absolute → error.
 	if _, err := Resolve(Request{UserWorkdir: "relative/dir", Home: t.TempDir()}); err == nil {
 		t.Error("relative user workdir must error")
 	}
-	// Absolute but a file, not a dir → error (MkdirAll fails on a file path).
 	f := filepath.Join(t.TempDir(), "afile")
 	if err := os.WriteFile(f, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
@@ -37,7 +34,6 @@ func TestResolve_UserWorkdir_Invalid(t *testing.T) {
 }
 
 func TestResolve_UserWorkdir_MissingIsCreated(t *testing.T) {
-	// Absolute but not yet existing → created (like fixed mode).
 	missing := filepath.Join(t.TempDir(), "new", "proj")
 	got, err := Resolve(Request{UserWorkdir: missing, Home: t.TempDir()})
 	if err != nil {
@@ -124,7 +120,6 @@ func TestResolve_Auto_HostileIdsCannotTraverse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	// The result must stay under <home>/.digitorn/workdirs — no traversal out.
 	base := canonical(filepath.Join(home, ".digitorn", "workdirs"))
 	if !within(base, got) {
 		t.Errorf("hostile ids escaped the workdirs tree: got=%q base=%q", got, base)

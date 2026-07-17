@@ -8,18 +8,11 @@ import (
 	"github.com/digitornai/digitorn/internal/runtime/policy"
 )
 
-// ---- bypass cases (system modules + meta-tools) --------------------
-
-// TestRunGates_SystemModule_BypassesEverything : a call to a system
-// module never reaches the gates. The doc treats this as a security
-// invariant ("trusted infrastructure") — even an explicit deny on a
-// system module should not block. We verify with a deny capability
-// that WOULD block any other module : the system module still passes.
 func TestRunGates_SystemModule_BypassesEverything(t *testing.T) {
 	caps := &schema.CapabilitiesConfig{
-		DefaultPolicy: schema.CapBlock, // everything else denied
+		DefaultPolicy: schema.CapBlock,
 		Deny: []schema.CapabilityGrant{
-			{Module: "context_builder"}, // even an explicit deny
+			{Module: "context_builder"},
 		},
 	}
 	for _, mod := range []string{"context_builder", "llm_provider", "index"} {

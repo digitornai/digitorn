@@ -8,8 +8,6 @@ import (
 	"github.com/digitornai/digitorn/pkg/module"
 )
 
-// The database module's generated schema must mark the DSN as a password so the
-// endpoint redacts it; non-secret fields must pass through untouched.
 func TestRedactSecrets_DatabaseConfig(t *testing.T) {
 	schema := module.SchemaFromType(&dbmod.Config{})
 	if len(schema) == 0 {
@@ -41,7 +39,6 @@ func TestRedactSecrets_DatabaseConfig(t *testing.T) {
 		t.Fatalf("non-secret fields altered: %s", got)
 	}
 
-	// The original value must NOT be mutated (deep copy).
 	if dbs := value["databases"].([]any); dbs[0].(map[string]any)["dsn"] != "postgres://u:secret@h:5432/db" {
 		t.Fatal("original value was mutated")
 	}

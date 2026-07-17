@@ -17,15 +17,10 @@ import (
 	"github.com/digitornai/digitorn/internal/safego"
 )
 
-// client is a minimal JSON-RPC 2.0 client speaking the Language Server
-// Protocol over a language server's stdin/stdout. The server is a persistent
-// subprocess; messages are framed with `Content-Length` headers per the LSP
-// spec. One read loop fans incoming frames out to either a pending request
-// (matched by id) or the notification handler (matched by method).
 type client struct {
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
-	writeM sync.Mutex // serializes frame writes
+	writeM sync.Mutex
 
 	nextID atomic.Int64
 
@@ -35,14 +30,9 @@ type client struct {
 
 	onNotify func(method string, params json.RawMessage)
 
-	// replyGate caps the number of in-flight replyNull goroutines. Server-initiated
-	// requests answered from the read loop must NEVER block the loop on a stdin
-	// write (a misbehaving / slow server would freeze every in-flight call). The
-	// reply is dispatched to a short-lived goroutine; a bounded gate prevents an
-	// unbounded goroutine pile-up if a server floods the client with requests.
 	replyGate chan struct{}
 
-	done chan struct{} // closed when the read loop exits
+	done chan struct{}
 }
 
 type rpcResult struct {
@@ -50,7 +40,6 @@ type rpcResult struct {
 	err    error
 }
 
-// rpcError is the JSON-RPC error object.
 type rpcError struct {
 	Code    int             `json:"code"`
 	Message string          `json:"message"`
@@ -59,10 +48,6 @@ type rpcError struct {
 
 func (e *rpcError) Error() string { return fmt.Sprintf("lsp rpc error %d: %s", e.Code, e.Message) }
 
-// startClient spawns the language server (argv, no shell) in cwd and starts the
-// read loop. onNotify receives every server-pushed notification (e.g.
-// textDocument/publishDiagnostics). It is called from the read-loop goroutine,
-// so it must not block.
 func startClient(ctx context.Context, argv []string, cwd string, onNotify func(method string, params json.RawMessage)) (*client, error) {
 	if len(argv) == 0 {
 		return nil, errors.New("lsp: empty server command")
@@ -81,7 +66,7 @@ func startClient(ctx context.Context, argv []string, cwd string, onNotify func(m
 	if err != nil {
 		return nil, err
 	}
-	cmd.Stderr = io.Discard // server diagnostics-channel logs are noise here
+	cmd.Stderr = io.Discard
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("lsp: start %q: %w", exe, err)
 	}
@@ -90,9 +75,6 @@ func startClient(ctx context.Context, argv []string, cwd string, onNotify func(m
 	return c, nil
 }
 
-// newClientConn drives the JSON-RPC protocol over an already-open stream pair.
-// startClient wraps it around a subprocess; tests wrap it around an in-memory
-// pipe, so the framing/correlation logic is exercised without spawning.
 func newClientConn(stdin io.WriteCloser, stdout io.Reader, onNotify func(method string, params json.RawMessage)) *client {
 	c := &client{
 		stdin:     stdin,
@@ -105,7 +87,6 @@ func newClientConn(stdin io.WriteCloser, stdout io.Reader, onNotify func(method 
 	return c
 }
 
-// call sends a request and waits for its response, honoring ctx cancellation.
 func (c *client) call(ctx context.Context, method string, params any) (json.RawMessage, error) {
 	id := c.nextID.Add(1)
 	ch := make(chan rpcResult, 1)
@@ -138,7 +119,6 @@ func (c *client) call(ctx context.Context, method string, params any) (json.RawM
 	}
 }
 
-// notify sends a notification (no id, no response).
 func (c *client) notify(method string, params any) error {
 	return c.writeFrame(rpcRequest{JSONRPC: "2.0", Method: method, Params: params})
 }
@@ -164,8 +144,6 @@ func (c *client) writeFrame(v any) error {
 	return err
 }
 
-// incoming is a superset envelope: a response has id+result/error; a
-// notification has method (no id); a server→client request has method+id.
 type incoming struct {
 	ID     *json.RawMessage `json:"id"`
 	Method string           `json:"method"`
@@ -183,9 +161,6 @@ func (c *client) readLoop(stdout io.Reader) {
 		if err != nil {
 			return
 		}
-		// Per-message shield : a panic in deliver/replyNull/onNotify (a server
-		// callback, a malformed frame) must not kill the LSP read loop nor the
-		// daemon. A bad message is logged and the loop reads the next frame.
 		safego.Run("lsp.readLoop", func() {
 			var msg incoming
 			if err := json.Unmarshal(frame, &msg); err != nil {
@@ -195,11 +170,6 @@ func (c *client) readLoop(stdout io.Reader) {
 			case msg.ID != nil && (msg.Result != nil || msg.Error != nil):
 				c.deliver(msg)
 			case msg.ID != nil && msg.Method != "":
-				// Server-initiated request. We expose no capabilities that need a
-				// real answer, so reply null to avoid the server blocking on us.
-				// The write is dispatched to a goroutine so a slow / full stdin
-				// pipe can never freeze the read loop (which would dead-lock every
-				// outstanding call awaiting its response).
 				idCopy := append(json.RawMessage(nil), *msg.ID...)
 				select {
 				case c.replyGate <- struct{}{}:
@@ -208,9 +178,6 @@ func (c *client) readLoop(stdout io.Reader) {
 						c.replyNull(idCopy)
 					})
 				default:
-					// Backlog ceiling reached: server is flooding us with requests
-					// faster than we can answer. Drop this reply — the server will
-					// time out on its own; the loop stays responsive.
 				}
 			case msg.Method != "":
 				if c.onNotify != nil {
@@ -258,24 +225,13 @@ func (c *client) failPending(err error) {
 	c.mu.Unlock()
 }
 
-// close best-effort shuts the server down (shutdown/exit), then kills it.
-// Every step is bounded by ctx so a misbehaving server can never wedge the
-// daemon shutdown — a stuck shutdown call, a wedged Wait(), or a frozen read
-// loop are all detached and the function returns within the deadline.
 func (c *client) close(ctx context.Context) {
-	// Cap the entire teardown at 3s when the caller did not bring a deadline,
-	// so callers that just pass context.Background() (the common shutdown path)
-	// still get bounded behavior.
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, 3*time.Second)
 		defer cancel()
 	}
 
-	// Step 1: polite shutdown handshake on a side goroutine so that a wedged
-	// stdin write (server not reading) cannot freeze us — we wait at most up
-	// to ctx and move on. The goroutine self-terminates once we force-close
-	// the underlying stdin / kill the process below.
 	politeDone := make(chan struct{})
 	go func() {
 		defer close(politeDone)
@@ -287,16 +243,11 @@ func (c *client) close(ctx context.Context) {
 	case <-ctx.Done():
 	}
 
-	// Step 2: force-cleanup. Closing stdin unblocks any in-flight write in the
-	// polite goroutine; killing the process tears down the OS pipe so the read
-	// loop drains.
 	_ = c.stdin.Close()
 	if c.cmd != nil && c.cmd.Process != nil {
 		_ = c.cmd.Process.Kill()
 	}
 
-	// Step 3: bounded waits for the subprocess and the read loop. Both run in
-	// detached goroutines so a stuck Wait()/read cannot block this function.
 	if c.cmd != nil {
 		waitDone := make(chan struct{})
 		go func() {
@@ -314,8 +265,6 @@ func (c *client) close(ctx context.Context) {
 	}
 }
 
-// readFrame reads one LSP-framed message: header lines terminated by a blank
-// line, then exactly Content-Length bytes.
 func readFrame(r *bufio.Reader) ([]byte, error) {
 	n := -1
 	for {

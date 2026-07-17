@@ -7,11 +7,6 @@ import (
 	"time"
 )
 
-// newFirstMsgBus builds a real write-behind Bus on a temp dir. A SHORT
-// flush interval is used deliberately : it maximises the chance the
-// flusher races a freshly-enqueued event onto disk before AppendDurable
-// cold-loads the session — the exact condition that used to duplicate
-// the first message.
 func newFirstMsgBus(t *testing.T) *Bus {
 	t.Helper()
 	paths := NewPaths(t.TempDir())
@@ -44,18 +39,12 @@ func newFirstMsgBus(t *testing.T) *Bus {
 	return bus
 }
 
-// TestBus_NoDuplicateProjection appends N messages and asserts the
-// projected state has EXACTLY N messages with strictly-increasing,
-// unique seqs. The old write-behind/cold-load race duplicated the first
-// message (seq 1 projected twice).
 func TestBus_NoDuplicateProjection(t *testing.T) {
 	bus := newFirstMsgBus(t)
 	const sid = "sess-firstmsg"
 	const n = 8
 	ctx := context.Background()
 	for i := 1; i <= n; i++ {
-		// A tiny pause lets the flusher commit the prior event to disk,
-		// recreating the race window for the FIRST event reliably.
 		time.Sleep(3 * time.Millisecond)
 		if _, err := bus.AppendDurable(ctx, Event{
 			Type:      EventUserMessage,
@@ -92,15 +81,10 @@ func TestBus_NoDuplicateProjection(t *testing.T) {
 	}
 }
 
-// TestBus_FirstMessageOnceUnderTightLoop hammers the first-event window :
-// a brand-new session, single append, immediate read. The very first
-// message must appear exactly once.
 func TestBus_FirstMessageOnceUnderTightLoop(t *testing.T) {
 	for trial := 0; trial < 20; trial++ {
 		bus := newFirstMsgBus(t)
 		sid := fmt.Sprintf("sess-tight-%d", trial)
-		// Let the flusher idle so the first enqueue is likely to flush
-		// during the cold-load window.
 		if _, err := bus.AppendDurable(context.Background(), Event{
 			Type: EventUserMessage, SessionID: sid,
 			Message: &MessagePayload{Role: "user", Content: "first"},

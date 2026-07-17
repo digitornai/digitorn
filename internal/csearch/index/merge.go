@@ -1,34 +1,4 @@
-// Copyright 2011 The Go Authors.  All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
-
 package index
-
-// Merging indexes.
-//
-// To merge two indexes A and B (newer) into a combined index C:
-//
-// Load the path list from B and determine for each path the docid ranges
-// that it will replace in A.
-//
-// Read A's and B's name lists together, merging them into C's name list.
-// Discard the identified ranges from A during the merge.  Also during the merge,
-// record the mapping from A's docids to C's docids, and also the mapping from
-// B's docids to C's docids.  Both mappings can be summarized in a table like
-//
-//	10-14 map to 20-24
-//	15-24 is deleted
-//	25-34 maps to 40-49
-//
-// The number of ranges will be at most the combined number of paths.
-// Also during the merge, write the name index to a temporary file as usual.
-//
-// Now merge the posting lists (this is why they begin with the trigram).
-// During the merge, translate the docid numbers to the new C docid space.
-// Also during the merge, write the posting list index to a temporary file as usual.
-// 
-// Copy the name index and posting list index into C's index and write the trailer.
-// Rename C's index onto the new index.
 
 import (
 	"encoding/binary"

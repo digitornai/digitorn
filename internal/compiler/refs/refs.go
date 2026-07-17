@@ -1,5 +1,3 @@
-// Package refs validates every named reference in an AppDefinition against
-// the built-in catalog and reports unknown identifiers with did-you-mean.
 package refs
 
 import (
@@ -95,8 +93,6 @@ func (c *checker) checkHook(h schema.Hook, base string) {
 		c.emit(diagnostic.CodeUnknownHookEvent, c.pos(base+".on"),
 			fmt.Sprintf("unknown hook event %q", h.On), s)
 	}
-	// Lint : a VALID but not-yet-routed event compiles, yet the runtime
-	// never emits it — warn so the hook isn't silently dead.
 	for _, ev := range []schema.HookEvent{h.On, h.Event} {
 		if ev == "" {
 			continue
@@ -198,9 +194,6 @@ func (c *checker) checkRuntime() {
 		}
 	}
 	for i, mw := range c.def.Runtime.Middleware {
-		// "custom" is the reserved plugin-transport keyword (resolved at
-		// runtime via the gRPC worker), not a catalog middleware ; its
-		// module/kind config is validated by validate.CheckAppMiddleware.
 		if mw.Name == "custom" {
 			continue
 		}
@@ -264,8 +257,6 @@ func (c *checker) checkFlow() {
 	}
 }
 
-// isFlowTarget reports whether a route/branch target is valid: a declared node
-// or the literal "end" sentinel that terminates a path (per docs/language/07-flows).
 func (c *checker) isFlowTarget(id string) bool {
 	return id == "end" || c.hasFlowNode(id)
 }

@@ -36,9 +36,6 @@ type HistoryMessage struct {
 	Ts          string        `json:"ts"`
 	ToolCalls   []any         `json:"tool_calls,omitempty"`
 	Attachments []BlobRef     `json:"attachments,omitempty"`
-	// Parts carries the full multi-part shape (text/image/video/…) so the
-	// denormalized history fallback can render generated media the same way
-	// the live + event-replay paths do.
 	Parts []MessagePart `json:"parts,omitempty"`
 }
 
@@ -58,10 +55,6 @@ type EventsResponse struct {
 	Total  int            `json:"total"`
 }
 
-// SocketEnvelope is the wire format for every Socket.IO event emitted to
-// clients on the `/events` namespace. The shape MUST stay byte-for-byte
-// compatible with the legacy Python daemon — dozens of web clients depend
-// on these field names.
 type SocketEnvelope struct {
 	EventID             string   `json:"event_id,omitempty"`
 	Type                string   `json:"type"`
@@ -77,24 +70,12 @@ type SocketEnvelope struct {
 	InstanceID          string   `json:"instance_id"`
 	DroppedPreBootstrap bool     `json:"_dropped_pre_bootstrap,omitempty"`
 
-	// AgentRunID / RootSessionID are set ONLY on the copy of a sub-agent event
-	// that the bridge fans out to its root session room. They let a client
-	// watching the top-level session attribute the event to the right sub-agent
-	// chip without parsing the sub-session id. Absent (omitempty) on every
-	// normal event — backward compatible with the legacy wire shape.
 	AgentRunID    string `json:"agent_run_id,omitempty"`
 	RootSessionID string `json:"root_session_id,omitempty"`
 	StepID        string `json:"step_id,omitempty"`
 
-	// CorrelationID ties a transient event to a parent it belongs to : a
-	// run_parallel child's tool_progress carries the parent run_parallel
-	// call_id here, so the client can update the right chip without parsing
-	// the synthetic child id. Absent (omitempty) on plain events.
 	CorrelationID string `json:"correlation_id,omitempty"`
 
-	// LiveOutputTokens mirrors Event.LiveOutputTokens — the running token
-	// estimate carried on a streaming delta so the client increments a live
-	// counter (CTX-7.5). Absent (0) on non-delta events.
 	LiveOutputTokens int `json:"live_output_tokens,omitempty"`
 }
 

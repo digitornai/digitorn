@@ -1,27 +1,3 @@
-// Package background implements the BackgroundManager contract
-// from internal/runtime/context/meta : a per-session table of
-// asynchronously running tool calls.
-//
-// Each task is launched as a goroutine that calls a wrapped
-// ToolDispatcher (so the security gates + audit row apply exactly
-// as for a foreground call). Status is updated atomically.
-// Cancellation propagates via per-task context.
-//
-// Concurrency model :
-//
-//   - One Manager per daemon ; safe for concurrent use across
-//     sessions (sync.Map sharded by session id).
-//   - Per-session task tables are mu-guarded slices so list/status
-//     iteration is consistent under concurrent launches.
-//   - Goroutines own the task's terminal status — they're the only
-//     writers after launch. Readers (Status/List) use a snapshot.
-//
-// Limits :
-//
-//   - MaxTasksPerSession caps the per-session task table to
-//     prevent runaway launches. Default 100.
-//   - Tasks older than RetainCompleted are reaped on next List call
-//     so a hot session doesn't accumulate stale entries forever.
 package background
 
 import (
@@ -43,103 +19,50 @@ import (
 	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
 )
 
-// ErrSignalINT and ErrSignalTERM are context causes set by Signal() to
-// transport the requested OS signal through the context to the bash module,
-// which reads context.Cause() to choose the right syscall instead of SIGKILL.
 var (
 	ErrSignalINT  = errors.New("background: SIGINT requested")
 	ErrSignalTERM = errors.New("background: SIGTERM requested")
 )
 
-// EventSink is the minimal slice of the session store the Manager needs
-// to publish background-task lifecycle events. Injected via AttachSink so
-// the manager stays decoupled from the concrete store (and tests can use
-// a fake). nil = no lifecycle events (the agent still gets the next-turn
-// auto-notification ; only the live client view is skipped).
 type EventSink interface {
 	AppendDurable(ctx context.Context, ev sessionstore.Event) (uint64, error)
 }
 
-// Waker proactively schedules an agent turn for a session. Injected via
-// AttachWaker so the manager stays decoupled from the daemon's turn
-// orchestration. When a task finishes the manager calls WakeSession so the
-// agent is notified instantly instead of only at its next user-driven turn.
-// nil = no proactive wake (the completion notification still waits in the
-// queue for the next turn). The implementation MUST be non-blocking and
-// serialize turns per session.
 type Waker interface {
 	WakeSession(appID, sessionID, userID string)
 }
 
-// Manager is the production in-process BackgroundManager. Construct
-// via New(); use AttachDispatcher to plug in the runtime's
-// ToolDispatcher (the same one foreground calls use, so audit and
-// security gates are identical).
 type Manager struct {
 	dispatcher runtime.ToolDispatcher
 
-	// sink publishes background-task lifecycle events. nil = no events.
 	sink EventSink
 
-	// waker proactively schedules an agent turn when a task finishes.
-	// nil = no proactive wake (notification waits for the next turn).
 	waker Waker
 
-	// WorkspaceTouched fires at every task terminal state. nil = no signal.
 	WorkspaceTouched func(sessionID string)
 
-	// DevServerDetected fires ONCE per task the first time a local dev-server URL
-	// (http://localhost:PORT …) appears in its live output — so the client can
-	// point the preview straight at it. nil = detection off (e.g. cloud daemon,
-	// where the client can't reach the daemon's localhost).
 	DevServerDetected func(sessionID, url string)
 
-	// MaxTasksPerSession caps the per-session table size. 0 = use
-	// DefaultMaxTasks. Production wires this from config.
 	MaxTasksPerSession int
 
-	// RetainCompleted bounds how long completed/errored/cancelled
-	// tasks stay in the table after they finish. 0 = use
-	// DefaultRetain. Production wires from config.
 	RetainCompleted time.Duration
 
-	// nowFn lets tests pin the clock.
 	nowFn func() time.Time
 
-	sessions sync.Map // map[string]*sessionTable
+	sessions sync.Map
 
-	// pending stores completed task notifications waiting to be
-	// injected into the next turn of their session. The runtime
-	// drains this at turn_start time per
-	// docs-site/language/04c-primitives.md "Auto-notification" :
-	//
-	//     [BACKGROUND TASK COMPLETED] task_id=... tool=... elapsed=...s
-	//
-	// Keyed by sessionID. Bounded indirectly by per-session task
-	// cap × retain ; the notification slice is drained on each
-	// DrainNotifications call.
 	notMu         sync.Mutex
 	notifications map[string][]CompletionNotification
 }
 
-// CompletionNotification is what the runtime injects as a system
-// message at the next turn start for each completed background
-// task.
 type CompletionNotification struct {
 	TaskID    string
 	ToolName  string
 	ElapsedMs int64
-	Status    string // "completed" | "errored" | "cancelled"
-	Output    string // captured stdout/stderr — the WHY behind a failure
+	Status    string
+	Output    string
 }
 
-// Message renders the notification in the doc-defined format :
-//
-//	[BACKGROUND TASK COMPLETED] task_id=a1b2c3d4 tool=database.sql elapsed=12.3s
-//
-// On errored / cancelled tasks the prefix is adjusted so the
-// agent treats failure differently. Per the doc, the elapsed is
-// rendered with one decimal in seconds.
 func (n CompletionNotification) Message() string {
 	prefix := "[BACKGROUND TASK COMPLETED]"
 	switch n.Status {
@@ -148,14 +71,10 @@ func (n CompletionNotification) Message() string {
 	case "cancelled":
 		prefix = "[BACKGROUND TASK CANCELLED]"
 	case "pattern_matched":
-		// Async pattern-wake: task is still running but the agent's wait condition
-		// has been met. The agent can resume its work immediately.
 		prefix = "[BACKGROUND TASK READY]"
 	}
 	msg := fmt.Sprintf("%s task_id=%s tool=%s elapsed=%.1fs",
 		prefix, n.TaskID, n.ToolName, float64(n.ElapsedMs)/1000)
-	// Always include output for pattern_matched and errors; suppress for clean
-	// completions to keep context tidy.
 	if out := strings.TrimSpace(n.Output); out != "" && n.Status != "completed" {
 		const max = 2000
 		if len(out) > max {
@@ -166,18 +85,12 @@ func (n CompletionNotification) Message() string {
 	return msg
 }
 
-// watchPattern polls the task's live log every 300 ms until the
-// notifyWhen pattern appears or the task finishes. On first match it
-// fires exactly once (sync.Once): enqueues a [BACKGROUND TASK READY]
-// notification and proactively wakes the agent session.
 func (m *Manager) watchPattern(t *task) {
 	ticker := time.NewTicker(300 * time.Millisecond)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-t.done:
-			// Task ended — do one final check in case the last bytes arrived
-			// between the last tick and close(t.done).
 			if strings.Contains(t.live.tail(), t.notifyWhen) {
 				m.firePatternNotification(t)
 			}
@@ -191,10 +104,6 @@ func (m *Manager) watchPattern(t *task) {
 	}
 }
 
-// firePatternNotification enqueues a pattern_matched CompletionNotification
-// and wakes the agent. sync.Once guarantees it fires at most once per task
-// even if the pattern appears many times or there is a race between the
-// ticker and the task-end check.
 func (m *Manager) firePatternNotification(t *task) {
 	t.notifyOnce.Do(func() {
 		elapsedMs := (time.Now().UnixNano() - t.startedAt*int64(time.Second)) / int64(time.Millisecond)
@@ -217,12 +126,8 @@ func (m *Manager) firePatternNotification(t *task) {
 	})
 }
 
-// localServerRe matches a dev-server URL a bash task prints on startup, e.g.
-// "Local: http://localhost:5173/" (Vite) or "http://127.0.0.1:3000" (Next).
 var localServerRe = regexp.MustCompile(`https?://(localhost|127\.0\.0\.1|0\.0\.0\.0):(\d{2,5})(/[^\s"'` + "`" + `\x1b]*)?`)
 
-// detectLocalServerURL returns the first loopback dev-server URL found in s, with
-// 0.0.0.0 rewritten to localhost (browsers can't fetch 0.0.0.0), or "" if none.
 func detectLocalServerURL(s string) string {
 	m := localServerRe.FindStringSubmatch(s)
 	if m == nil {
@@ -239,9 +144,6 @@ func detectLocalServerURL(s string) string {
 	return "http://" + host + ":" + m[2] + path
 }
 
-// watchDevServer polls a task's live output for a loopback dev-server URL and
-// fires DevServerDetected exactly once. Bounded: stops on task end or after two
-// minutes (a dev server prints its URL within seconds of starting).
 func (m *Manager) watchDevServer(t *task) {
 	ticker := time.NewTicker(400 * time.Millisecond)
 	defer ticker.Stop()
@@ -269,14 +171,11 @@ func (m *Manager) watchDevServer(t *task) {
 	}
 }
 
-// Defaults applied when fields are zero.
 const (
 	DefaultMaxTasks = 100
 	DefaultRetain   = 30 * time.Minute
 )
 
-// New constructs a Manager. Until AttachDispatcher is called,
-// Launch returns "dispatcher not attached".
 func New() *Manager {
 	return &Manager{
 		nowFn:         time.Now,
@@ -284,36 +183,23 @@ func New() *Manager {
 	}
 }
 
-// AttachDispatcher wires the runtime dispatcher that runs every
-// launched task. Must be called once at bootstrap before any
-// Launch fires.
 func (m *Manager) AttachDispatcher(d runtime.ToolDispatcher) {
 	m.dispatcher = d
 }
 
-// AttachSink wires the event sink the manager publishes lifecycle events
-// to. Optional ; nil leaves the live client view disabled (the agent
-// still gets the next-turn auto-notification). Call once at bootstrap.
 func (m *Manager) AttachSink(s EventSink) {
 	m.sink = s
 }
 
-// AttachWaker wires the proactive turn scheduler. Optional ; nil means a
-// finished task's notification simply waits for the next user-driven turn.
-// Call once at bootstrap.
 func (m *Manager) AttachWaker(w Waker) {
 	m.waker = w
 }
 
-// sessionTable is the per-session task registry.
 type sessionTable struct {
 	mu    sync.Mutex
 	tasks map[string]*task
 }
 
-// task is the in-memory state of one background task. Fields are
-// either set at construction or updated under mu by the running
-// goroutine.
 type task struct {
 	id        string
 	name      string
@@ -322,28 +208,20 @@ type task struct {
 	appID     string
 	userID    string
 	agentID   string
-	state     atomic.Value // string : "running" | "completed" | "errored" | "cancelled"
+	state     atomic.Value
 	startedAt int64
 	endedAt   atomic.Int64
-	result    atomic.Value // any
-	errMsg    atomic.Value // string
-	live      *liveLog     // streamed output tail, readable while still running
-	waiters   atomic.Int32 // # of in-flight Wait() callers (settle window)
-	cancel    context.CancelCauseFunc // nil cause = SIGKILL; ErrSignalINT/TERM = graceful
-	// stdinWriter is the write end of the subprocess stdin pipe. Non-nil only
-	// while the task is running; closed when the task ends. SendStdin() writes
-	// here to inject input into the running process (e.g. answers to prompts).
+	result    atomic.Value
+	errMsg    atomic.Value
+	live      *liveLog
+	waiters   atomic.Int32
+	cancel    context.CancelCauseFunc
 	stdinWriter *io.PipeWriter
 
-	// done is closed when the goroutine returns. Wait blocks on
-	// it (or ctx) ; multiple waiters allowed.
 	done chan struct{}
 
-	// notifyWhen, when non-empty, starts a watcher goroutine that fires
-	// exactly once (via notifyOnce) when the pattern appears in live output.
 	notifyWhen string
 	notifyOnce sync.Once
-	// devServerOnce guards the one-shot DevServerDetected callback per task.
 	devServerOnce sync.Once
 }
 
@@ -368,9 +246,6 @@ func (t *task) snapshot() meta.BackgroundStatus {
 	return s
 }
 
-// Launch starts a new task. Returns the task id on success ;
-// returns an error when the per-session cap is reached or the
-// dispatcher isn't attached.
 func (m *Manager) Launch(ctx context.Context, req meta.LaunchRequest) (string, error) {
 	if m.dispatcher == nil {
 		return "", errors.New("background: dispatcher not attached")
@@ -390,7 +265,6 @@ func (m *Manager) Launch(ctx context.Context, req meta.LaunchRequest) (string, e
 		max = DefaultMaxTasks
 	}
 	if len(tbl.tasks) >= max {
-		// Try a sweep first ; cheap and bounded.
 		m.reapLocked(tbl)
 		if len(tbl.tasks) >= max {
 			tbl.mu.Unlock()
@@ -398,11 +272,6 @@ func (m *Manager) Launch(ctx context.Context, req meta.LaunchRequest) (string, e
 		}
 	}
 	id := uuid.NewString()
-	// Inherit the launch ctx's VALUES — most importantly the session's workdir
-	// (PathPolicy), so a backgrounded `node app.js` runs in the session
-	// directory and not the daemon's cwd — but NOT its cancellation: the task
-	// outlives the turn that launched it (fire-and-forget) and carries its own
-	// cancel for the client stop endpoint.
 	taskCtx, cancel := context.WithCancelCause(context.WithoutCancel(ctx))
 	t := &task{
 		id:         id,
@@ -422,7 +291,6 @@ func (m *Manager) Launch(ctx context.Context, req meta.LaunchRequest) (string, e
 	tbl.tasks[id] = t
 	tbl.mu.Unlock()
 
-	// Publish "running" so the client sees the task appear instantly.
 	m.emit(t, "running", 0)
 
 	go m.runTask(taskCtx, t)
@@ -430,24 +298,14 @@ func (m *Manager) Launch(ctx context.Context, req meta.LaunchRequest) (string, e
 	return id, nil
 }
 
-// runTask is the per-task goroutine body.
 func (m *Manager) runTask(ctx context.Context, t *task) {
 	defer close(t.done)
-	// Start pattern watcher before the dispatch so it catches output from
-	// the very first bytes written to the live log.
 	if t.notifyWhen != "" {
 		go m.watchPattern(t)
 	}
-	// Detect a dev server the task starts (npm run dev …) so the client can point
-	// the preview at it. Off unless wired (cloud daemon leaves it nil).
 	if m.DevServerDetected != nil {
 		go m.watchDevServer(t)
 	}
-	// Last-resort panic guard. The dispatcher chokepoint already recovers, but
-	// a panic anywhere in this goroutine (a nil dispatcher, a future refactor)
-	// must NOT crash the daemon, and must not leave the task pinned "running"
-	// forever with no notification. If we recover and the normal terminal path
-	// didn't run, mark the task errored + notify so the agent learns it died.
 	defer func() {
 		if r := recover(); r != nil {
 			if s, _ := t.state.Load().(string); s == "running" {

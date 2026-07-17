@@ -6,10 +6,6 @@ import (
 	"testing"
 )
 
-// TestScale_PerSessionMemoryFootprint measures the real heap cost of an
-// in-memory SessionState at a few message counts, then extrapolates to
-// 10,000,000 sessions. This is the physical ceiling for how many sessions
-// one process can hold resident — independent of any logical cap.
 func TestScale_PerSessionMemoryFootprint(t *testing.T) {
 	const N = 20000
 	for _, msgs := range []int{0, 5, 50} {
@@ -28,8 +24,6 @@ func TestScale_PerSessionMemoryFootprint(t *testing.T) {
 				s.Messages = append(s.Messages, Message{
 					Seq:  uint64(j + 1),
 					Role: "assistant",
-					// Unique content forces a real allocation per message,
-					// mirroring real transcripts (no shared string literal).
 					Content: fmt.Sprintf("assistant reply %d in session %d — a typical line of model output", j, i),
 				})
 			}

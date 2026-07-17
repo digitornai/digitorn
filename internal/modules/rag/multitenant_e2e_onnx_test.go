@@ -14,11 +14,6 @@ import (
 	"github.com/digitornai/digitorn/internal/embeddings"
 )
 
-// End-to-end : N distinct apps index their own documents CONCURRENTLY with REAL
-// minilm embeddings into their own knowledge bases on REAL Qdrant, then each
-// app retrieves ONLY its own data. Proves the full pipeline holds up under many
-// concurrent tenants with correct per-app isolation — the "centaines d'apps"
-// case at full-pipeline scale (N kept runnable).
 func TestRAG_MultiTenant_Concurrent_E2E(t *testing.T) {
 	qurl := os.Getenv("QDRANT_URL")
 	if qurl == "" {
@@ -45,7 +40,6 @@ func TestRAG_MultiTenant_Concurrent_E2E(t *testing.T) {
 		_ = be.DeleteKB(context.Background(), kb(i))
 	}
 
-	// Concurrent indexing : each tenant writes a signature doc + filler.
 	start := time.Now()
 	var wg sync.WaitGroup
 	errs := make([]error, N)
@@ -76,7 +70,6 @@ func TestRAG_MultiTenant_Concurrent_E2E(t *testing.T) {
 	}
 	t.Logf("indexed %d tenants concurrently (%d docs) in %v", N, N*3, time.Since(start).Round(time.Millisecond))
 
-	// Each tenant retrieves ONLY its own record.
 	for i := 0; i < N; i++ {
 		hits, err := eng.Query(context.Background(), kb(i), "how do I recover my account and reach billing", 1)
 		if err != nil {

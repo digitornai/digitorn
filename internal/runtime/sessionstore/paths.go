@@ -30,16 +30,6 @@ func (p Paths) SessionDir(sid string) string {
 	return filepath.Join(p.Root, bucket, encodeSessionDir(sid))
 }
 
-// encodeSessionDir maps a session ID to a filesystem-safe directory-name
-// component. Normal session IDs (UUIDs, alphanumerics, '-' '_' '.' '#' '~')
-// pass through UNCHANGED, so existing on-disk sessions keep their directory —
-// no migration. IDs containing characters that are illegal in a path component
-// on some OS (most importantly ':' on Windows, used by sub-agent session IDs
-// like "<root>::agent::<id>#<hash>") are percent-escaped (%XX, uppercase hex).
-//
-// The encoding is reversible (decodeSessionDir) and injective, so distinct IDs
-// never collide on one directory. The shard bucket is still computed from the
-// RAW id, so routing is unchanged.
 func encodeSessionDir(sid string) string {
 	if isSafeDirName(sid) {
 		return sid
@@ -60,8 +50,6 @@ func encodeSessionDir(sid string) string {
 	return b.String()
 }
 
-// decodeSessionDir is the inverse of encodeSessionDir. A name with no '%'
-// passes through unchanged (the common case + every legacy directory).
 func decodeSessionDir(name string) string {
 	if !strings.Contains(name, "%") {
 		return name
@@ -83,8 +71,6 @@ func decodeSessionDir(name string) string {
 	return b.String()
 }
 
-// DecodeSessionDir is the exported inverse used by callers that recover a
-// session ID from an on-disk directory name (e.g. the session-list scan).
 func DecodeSessionDir(name string) string { return decodeSessionDir(name) }
 
 func isSafeDirName(s string) bool {
@@ -99,10 +85,6 @@ func isSafeDirName(s string) bool {
 	return true
 }
 
-// safeDirByte reports whether c is safe verbatim in a path component on every
-// supported OS. Deliberately conservative : letters, digits, and a small set
-// of punctuation known-safe on Windows/macOS/Linux. '%' is NOT safe (it's the
-// escape marker, so it must itself be escaped to keep decoding unambiguous).
 func safeDirByte(c byte) bool {
 	switch {
 	case c >= 'A' && c <= 'Z':

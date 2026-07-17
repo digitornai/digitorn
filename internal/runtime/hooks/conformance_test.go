@@ -19,7 +19,6 @@ var docConditions = []string{
 	"all_of", "any_of", "not",
 }
 
-// docActions — "Actions (15 built-in)" (13 general + 2 builder).
 var docActions = []string{
 	"compact_context", "inject_message",
 	"module_action", "module_action_inject",
@@ -121,7 +120,6 @@ func TestConformance_RuntimeHandlesEveryCondition(t *testing.T) {
 				c.typ, got, c.want)
 		}
 	}
-	// Every doc condition must have a case here.
 	for _, name := range docConditions {
 		if !seen[name] {
 			t.Errorf("doc condition %q has no runtime conformance case", name)

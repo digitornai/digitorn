@@ -10,12 +10,6 @@ import (
 	"github.com/digitornai/digitorn/internal/compiler/schema"
 )
 
-// This file is the EXPORTED management surface the daemon's /api/mcp routes call:
-// catalog browsing, registry search/browse, and pre-install requirements. It is
-// read-only and stateless (no managed-server store) — it reuses the same catalog,
-// registry and auth-detection logic the runtime resolver uses.
-
-// CatalogInfo summarizes one static-catalog server for the management API.
 type CatalogInfo struct {
 	ServerID       string            `json:"server_id"`
 	DisplayName    string            `json:"display_name"`
@@ -30,10 +24,9 @@ type CatalogInfo struct {
 	OAuthScopes    []string          `json:"oauth_scopes,omitempty"`
 	EnvMapping     map[string]string `json:"env_mapping,omitempty"`
 	RequiredFields []string          `json:"required_fields"`
-	// Hub-sourced trust signals (false/empty for the static fallback catalog).
-	Source   string `json:"source,omitempty"` // hub | static
+	Source   string `json:"source,omitempty"`
 	Verified bool   `json:"verified"`
-	Hosted   bool   `json:"hosted"` // Digitorn-hosted → zero-setup install
+	Hosted   bool   `json:"hosted"`
 	Icon     string `json:"icon,omitempty"`
 	Category string `json:"category,omitempty"`
 }
@@ -61,7 +54,6 @@ func catalogInfoOf(id string, e catalogEntry) CatalogInfo {
 	}
 }
 
-// CatalogList returns the full static catalog, sorted by id.
 func CatalogList() []CatalogInfo {
 	out := make([]CatalogInfo, 0, len(catalog))
 	for id, e := range catalog {
@@ -71,7 +63,6 @@ func CatalogList() []CatalogInfo {
 	return out
 }
 
-// CatalogGet returns one catalog entry (false when not a static-catalog server).
 func CatalogGet(id string) (CatalogInfo, bool) {
 	e, ok := catalog[id]
 	if !ok {
@@ -80,20 +71,16 @@ func CatalogGet(id string) (CatalogInfo, bool) {
 	return catalogInfoOf(id, e), true
 }
 
-// SearchResult is one hit from Search (catalog or registry).
 type SearchResult struct {
 	ServerID    string `json:"server_id"`
 	Name        string `json:"name"`
 	Description string `json:"description"`
-	Source      string `json:"source"` // catalog | registry
+	Source      string `json:"source"`
 	Runtime     string `json:"runtime,omitempty"`
 	Package     string `json:"package,omitempty"`
 	Transport   string `json:"transport,omitempty"`
 }
 
-// Search matches the query against the static catalog (substring on id/name/
-// description) and appends the best registry hit when not already a catalog
-// server. Empty / "*" lists the whole catalog.
 func Search(ctx context.Context, query string) []SearchResult {
 	q := strings.ToLower(strings.TrimSpace(query))
 	out := []SearchResult{}
@@ -123,8 +110,6 @@ func Search(ctx context.Context, query string) []SearchResult {
 	return out
 }
 
-// RegistryBrowse returns a page of the official MCP registry, mapped to search
-// results. cursor/limit page through it.
 func RegistryBrowse(ctx context.Context, query, cursor string, limit int) ([]SearchResult, string) {
 	if limit <= 0 || limit > 100 {
 		limit = 50
@@ -138,21 +123,19 @@ func RegistryBrowse(ctx context.Context, query, cursor string, limit int) ([]Sea
 	return out, next
 }
 
-// Requirement is one credential/config field a server needs before it works.
 type Requirement struct {
-	Key         string `json:"key"`      // the shorthand the user sets (e.g. "token")
-	EnvVar      string `json:"env_var"`  // the env var the server actually reads
+	Key         string `json:"key"`
+	EnvVar      string `json:"env_var"`
 	Description string `json:"description,omitempty"`
 	Required    bool   `json:"required"`
-	IsArg       bool   `json:"is_arg"` // positional arg rather than env var
+	IsArg       bool   `json:"is_arg"`
 }
 
-// ServerRequirements is the pre-install answer to "what does this server need?".
 type ServerRequirements struct {
 	ServerID      string        `json:"server_id"`
 	DisplayName   string        `json:"display_name"`
 	Description   string        `json:"description,omitempty"`
-	Source        string        `json:"source"` // catalog | registry
+	Source        string        `json:"source"`
 	Transport     string        `json:"transport"`
 	Runtime       string        `json:"runtime,omitempty"`
 	Package       string        `json:"package,omitempty"`
@@ -162,10 +145,6 @@ type ServerRequirements struct {
 	YAMLExample   string        `json:"yaml_example"`
 }
 
-// Requirements derives the credentials/env/OAuth a server needs, before any
-// install — from the static catalog if known, else from the registry (with env
-// names mapped to shorthands and OAuth auto-detected). Returns ok=false when the
-// id is in neither.
 func Requirements(ctx context.Context, id string) (ServerRequirements, bool) {
 	if e, ok := catalog[id]; ok {
 		return requirementsFromCatalog(id, e), true

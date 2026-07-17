@@ -9,10 +9,6 @@ import (
 	"github.com/digitornai/digitorn/internal/runtime/policy"
 )
 
-// ---- helpers -------------------------------------------------------
-
-// makeTool builds a policy.AvailableAction with the given fields.
-// All scenarios use this so tests stay compact.
 func makeTool(module, action, desc string, risk tool.RiskLevel, tags, aliases []string) policy.AvailableAction {
 	return policy.AvailableAction{
 		Module: module,
@@ -62,8 +58,6 @@ func defaultUniverse() []policy.AvailableAction {
 	}
 }
 
-// build is a compact builder constructor for tests : no security
-// restrictions, so the full universe is indexed.
 func build(t *testing.T, universe []policy.AvailableAction) *index.ToolIndex {
 	t.Helper()
 	caps := &schema.CapabilitiesConfig{
@@ -73,8 +67,6 @@ func build(t *testing.T, universe []policy.AvailableAction) *index.ToolIndex {
 	agent := &schema.Agent{ID: "main"}
 	return index.NewBuilder().Build(true, caps, agent, universe)
 }
-
-// ---- Type-level tests ----------------------------------------------
 
 func TestFQNListSorted(t *testing.T) {
 	idx := build(t, defaultUniverse())
@@ -94,7 +86,6 @@ func TestCategoryListSorted(t *testing.T) {
 			t.Fatalf("Categories not sorted : %v", cats)
 		}
 	}
-	// Should have one entry per distinct module.
 	want := []string{"filesystem", "http", "memory", "shell"}
 	if len(cats) != len(want) {
 		t.Fatalf("Categories = %v, want %v", cats, want)
@@ -116,11 +107,6 @@ func TestGetByFQN(t *testing.T) {
 	}
 }
 
-// ---- Schema-build filter tests (CB-1 + SG-3 wirage) ----------------
-
-// TestBuild_HonoursHiddenActions : the builder filters hidden_actions
-// through SG-3's BuildAgentToolset, so a hidden action never lands in
-// the index. Documented invariant of the schema-build defence layer.
 func TestBuild_HonoursHiddenActions(t *testing.T) {
 	caps := &schema.CapabilitiesConfig{
 		DefaultPolicy: schema.CapAuto,
@@ -138,7 +124,6 @@ func TestBuild_HonoursHiddenActions(t *testing.T) {
 	}
 }
 
-// TestBuild_HonoursDeny : same as above for deny.
 func TestBuild_HonoursDeny(t *testing.T) {
 	caps := &schema.CapabilitiesConfig{
 		DefaultPolicy: schema.CapAuto,
@@ -153,8 +138,6 @@ func TestBuild_HonoursDeny(t *testing.T) {
 	}
 }
 
-// TestBuild_HonoursMaxRisk : a high-risk action with max_risk=medium
-// is filtered out by gate 2.
 func TestBuild_HonoursMaxRisk(t *testing.T) {
 	caps := &schema.CapabilitiesConfig{
 		DefaultPolicy: schema.CapAuto,
@@ -172,8 +155,6 @@ func TestBuild_HonoursMaxRisk(t *testing.T) {
 	}
 }
 
-// TestBuild_HonoursAgentSubset : a sub-agent with restricted modules
-// only sees its allowed actions.
 func TestBuild_HonoursAgentSubset(t *testing.T) {
 	caps := &schema.CapabilitiesConfig{
 		DefaultPolicy: schema.CapAuto,
@@ -197,9 +178,6 @@ func TestBuild_HonoursAgentSubset(t *testing.T) {
 	}
 }
 
-// ---- Search tests --------------------------------------------------
-
-// TestSearch_ExactFQN : exact "filesystem.read" query lands at the top.
 func TestSearch_ExactFQN(t *testing.T) {
 	idx := build(t, defaultUniverse())
 	hits := idx.Search("filesystem.read", 5)
@@ -211,7 +189,6 @@ func TestSearch_ExactFQN(t *testing.T) {
 	}
 }
 
-// TestSearch_ActionName : "read" finds filesystem.read.
 func TestSearch_ActionName(t *testing.T) {
 	idx := build(t, defaultUniverse())
 	hits := idx.Search("read", 5)

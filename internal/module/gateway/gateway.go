@@ -1,13 +1,3 @@
-// Package gateway is the worker→daemon service bridge. A module hosted
-// in a worker subprocess gets only a LOCAL servicebus (its sibling
-// modules) — it cannot reach daemon-owned services like embeddings.
-// The gateway closes that gap : the daemon runs a small gRPC server
-// that worker-hosted modules dial to reach those services, authenticated
-// with the same worker handshake secret.
-//
-// Today it re-exposes the embeddings service (so the RAG module can embed
-// from its worker). The cross-module Caller and the LLM service are the
-// natural next additions ; the env contract + auth already generalise.
 package gateway
 
 import (

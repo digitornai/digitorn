@@ -65,7 +65,6 @@ func TestViewWithExactTotal_OverlaysAndRederives(t *testing.T) {
 	if got.Source != "tokenizer" || !got.Exact {
 		t.Errorf("source/exact = %q/%v, want tokenizer/true", got.Source, got.Exact)
 	}
-	// 6000 / 8000 = 0.75
 	if got.PressurePct != 75 || got.Remaining != 2000 {
 		t.Errorf("re-derive: pressure %d%% remaining %d, want 75%% / 2000", got.PressurePct, got.Remaining)
 	}

@@ -1,4 +1,3 @@
-// Package compiler turns a Digitorn YAML manifest into a validated AppDefinition.
 package compiler
 
 import (
@@ -27,13 +26,10 @@ type Compiler struct {
 	Strict          bool
 	ManifestSources []catalog.ManifestSource
 
-	mu      sync.Mutex // guards the lazy catalog cache (Compile is concurrency-safe)
+	mu      sync.Mutex
 	catalog *catalog.Catalog
 }
 
-// New creates a Compiler. If no manifest sources are configured by the time a
-// compilation runs, it auto-discovers a `manifests/` directory next to the CWD
-// and the path from the DIGITORN_MANIFESTS env var.
 func New() *Compiler { return &Compiler{} }
 
 func (c *Compiler) WithSources(sources ...catalog.ManifestSource) *Compiler {
@@ -44,21 +40,12 @@ func (c *Compiler) WithSources(sources ...catalog.ManifestSource) *Compiler {
 	return c
 }
 
-// InvalidateCatalog drops the cached catalog so the next compile rebuilds it
-// from the (now-current) registry. Called after worker-hosted modules register
-// their manifests at startup : those registrations otherwise race the first
-// compile, leaving worker modules wrongly reported "unknown module" for apps
-// installed afterward.
 func (c *Compiler) InvalidateCatalog() {
 	c.mu.Lock()
 	c.catalog = nil
 	c.mu.Unlock()
 }
 
-// loadCatalog returns the (lazily built, cached) catalog. The mutex makes it
-// safe to call Compile concurrently on one Compiler : the first caller builds,
-// the rest read the cache. Holding the lock across catalog.New collapses N
-// racing first-callers into a single build instead of N redundant ones.
 func (c *Compiler) loadCatalog() (*catalog.Catalog, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -102,7 +89,6 @@ type Result struct {
 
 func (r *Result) OK() bool { return r.Diagnostics != nil && !r.Diagnostics.HasErrors() }
 
-// Compile resolves path to a bundle (directory or app.yaml file) and compiles it.
 func (c *Compiler) Compile(path string) (*Result, error) {
 	b, err := bundle.Load(path)
 	if err != nil {
@@ -113,8 +99,6 @@ func (c *Compiler) Compile(path string) (*Result, error) {
 
 func (c *Compiler) CompileFile(path string) (*Result, error) { return c.Compile(path) }
 
-// Build produces a .dgc artifact from a compiled Result. Fails if the Result
-// has any errors.
 func (c *Compiler) Build(r *Result) (*codegen.Artifact, error) {
 	if r == nil || r.Definition == nil {
 		return nil, fmt.Errorf("compiler: cannot build artifact from nil result")
@@ -143,8 +127,6 @@ func (c *Compiler) compileBundle(b *bundle.Bundle) (*Result, error) {
 	meta := preScanAppMeta(pf.Document)
 	vars := preScanDevVariables(pf.Document)
 	engine := c.newEngine(b, meta, vars)
-	// Flow node ids are runtime namespaces : `{{<node>.output.x}}` templates in
-	// flow params/messages are filled by the flow runner, not the compiler.
 	engine.AddPassthrough(preScanFlowNodeIDs(pf.Document)...)
 	expr.ResolveInTree(b.Entry, pf.Document, engine, bag)
 
@@ -154,8 +136,8 @@ func (c *Compiler) compileBundle(b *bundle.Bundle) (*Result, error) {
 	foldLegacyAliases(def)
 	mergeIncludedAgents(b, def, bag)
 	mergeTemplatesFragment(b, def)
-	injectAutoCompact(def) // runtime.context.auto_compact → synthetic compaction hook
-	normalizeModuleAliases(def) // legacy module ids (workspace → filesystem) before any validation
+	injectAutoCompact(def)
+	normalizeModuleAliases(def)
 	cat, err := c.loadCatalog()
 	if err != nil {
 		return nil, err
@@ -178,8 +160,6 @@ func (c *Compiler) compileBundle(b *bundle.Bundle) (*Result, error) {
 	return &Result{File: b.Entry, Bundle: b, Definition: def, Diagnostics: bag}, nil
 }
 
-// captureModesOrder records the YAML insertion order of runtime.modes keys.
-// Go maps lose order ; the mode default-policy ("first declared") needs it.
 func captureModesOrder(doc *yaml.Node, def *schema.AppDefinition) {
 	if def == nil || def.Runtime == nil || len(def.Runtime.Modes) == 0 {
 		return
@@ -195,8 +175,6 @@ func captureModesOrder(doc *yaml.Node, def *schema.AppDefinition) {
 	def.Runtime.ModesOrder = order
 }
 
-// foldLegacyAliases rewrites top-level `modules:` / `capabilities:` into the
-// canonical `tools.modules` / `tools.capabilities` location.
 func foldLegacyAliases(def *schema.AppDefinition) {
 	if len(def.ModulesTop) == 0 && def.CapabilitiesTop == nil {
 		return
@@ -220,8 +198,6 @@ func foldLegacyAliases(def *schema.AppDefinition) {
 	def.ModulesTop = nil
 	def.CapabilitiesTop = nil
 
-	// Normalise hook event alias: when a user writes `on:` and the editor
-	// saves it as bare YAML 1.1, it round-trips back as boolean key `true:`.
 	for i, a := range def.Agents {
 		for j := range a.Hooks {
 			normaliseHookOn(&def.Agents[i].Hooks[j])
@@ -245,8 +221,6 @@ func normaliseHookOn(h *schema.Hook) {
 	}
 }
 
-// mergeTemplatesFragment loads a sibling `templates.yaml` (convention file,
-// mirroring the legacy daemon) into def.Templates when not declared inline.
 func mergeTemplatesFragment(b *bundle.Bundle, def *schema.AppDefinition) {
 	for _, name := range []string{"templates.yaml", "templates.yml"} {
 		data, err := os.ReadFile(filepath.Join(b.Root, name))
@@ -417,11 +391,8 @@ func appendHook(def *schema.AppDefinition, h schema.Hook) {
 func (c *Compiler) newEngine(b *bundle.Bundle, meta map[string]string, vars map[string]string) *expr.Engine {
 	e := expr.NewEngine()
 	if c.Strict {
-		// CI / release path : missing env vars fail compile-time.
 		e.Register("env", expr.StrictEnvResolver())
 	} else {
-		// Dev / lenient path : missing env vars passthrough so the
-		// runtime can resolve them (matches Python compiler).
 		e.Register("env", expr.EnvResolver())
 	}
 	e.Register("sys", expr.SysResolver())
@@ -462,8 +433,6 @@ func preScanAppMeta(doc *yaml.Node) map[string]string {
 	return out
 }
 
-// preScanFlowNodeIDs reads flow.nodes[].id before decode so the template engine
-// can treat them as runtime passthrough namespaces.
 func preScanFlowNodeIDs(doc *yaml.Node) []string {
 	if !parse.IsMapping(doc) {
 		return nil
@@ -472,7 +441,6 @@ func preScanFlowNodeIDs(doc *yaml.Node) []string {
 		if _, n, ok := parse.FindKey(doc, "flow"); ok {
 			return n
 		}
-		// Legacy: runtime.flow
 		if _, rt, ok := parse.FindKey(doc, "runtime"); ok && parse.IsMapping(rt) {
 			if _, n, ok := parse.FindKey(rt, "flow"); ok {
 				return n

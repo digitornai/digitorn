@@ -13,7 +13,6 @@ var (
 	lowRiskRe  = regexp.MustCompile(`(?:^|_)(?:get|list|search|read|describe|count|fetch|check|browse|view|show|info|status|ping|health|find|retrieve)(?:_|$)`)
 )
 
-// parseAPTool splits "ap_{piece}__{action}" into piece and action.
 func parseAPTool(name string) (piece, action string, ok bool) {
 	if !strings.HasPrefix(name, "ap_") {
 		return
@@ -37,7 +36,6 @@ func inferRisk(name string) (tool.RiskLevel, bool) {
 	return tool.RiskMedium, false
 }
 
-// pieceTagOf extracts the piece name from "ap_{piece}__{action}" for tagging.
 func pieceTagOf(toolName string) string {
 	piece, _, ok := parseAPTool(toolName)
 	if !ok {
@@ -46,8 +44,6 @@ func pieceTagOf(toolName string) string {
 	return piece
 }
 
-// schemaToParams converts an MCP inputSchema map to []tool.ParamSpec.
-// Mirrors the MCP module's implementation.
 func schemaToParams(schema map[string]any) []tool.ParamSpec {
 	if schema == nil {
 		return nil
@@ -71,7 +67,6 @@ func schemaToParams(schema map[string]any) []tool.ParamSpec {
 	for _, r := range s.Required {
 		req[r] = true
 	}
-	// Skip internal bridge params from the agent's view.
 	skip := map[string]bool{"_ap_auth": true, "_ap_session": true}
 	out := make([]tool.ParamSpec, 0, len(s.Properties))
 	for name, p := range s.Properties {

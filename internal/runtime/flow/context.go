@@ -8,11 +8,6 @@ import (
 	"github.com/digitornai/digitorn/internal/runtime/flow/flowexpr"
 )
 
-// nodeResult is the per-node data exposed in the flow context under the node's
-// id: agent nodes populate Output, tool nodes populate Result, and any
-// JSON object an agent emits is parsed into Fields for dotted access. Text is
-// the human-facing string a write-back node should send: for a JSON-wrapped
-// agent reply it's the unwrapped canonical text, else the raw output.
 type nodeResult struct {
 	Output string
 	Result string
@@ -20,14 +15,8 @@ type nodeResult struct {
 	Fields map[string]any
 }
 
-// replyTextKeys are the canonical keys an LLM wraps its human-facing answer in.
-// When an agent emits a JSON object carrying one, a bare {{node.output}} (and
-// {{last}}) resolves to that text — so a write-back node posts the reply, not
-// the raw JSON blob. Dotted access ({{node.output.field}}) still sees the object.
 var replyTextKeys = []string{"reply", "message", "text", "answer", "response", "content", "output", "body"}
 
-// unwrapReplyText returns the human-facing text from a parsed agent object, or ""
-// when the object carries no canonical string key (caller keeps the raw output).
 func unwrapReplyText(fields map[string]any) string {
 	if fields == nil {
 		return ""
@@ -42,11 +31,6 @@ func unwrapReplyText(fields map[string]any) string {
 	return ""
 }
 
-// fctx is the flow execution context the doc describes: `event.*`,
-// `<node_id>.output` / `.result`, `approvals.<node_id>`, plus the most-recent
-// agent's structured (JSON) output promoted to the root so bare identifiers
-// like `category` resolve. It implements flowexpr.Context and drives template
-// interpolation. Single-goroutine: parallel branches operate on clones.
 type fctx struct {
 	event        map[string]any
 	nodes        map[string]nodeResult
@@ -133,9 +117,6 @@ func (c *fctx) recordApproval(nodeID, choice string) {
 	c.lastID = nodeID
 }
 
-// recordError exposes the failure that triggered an on_error route under
-// `error.*`, so a notification / human-handoff node can name what broke:
-// {{error.message}}, {{error.node}}, {{error.type}}.
 func (c *fctx) recordError(nodeID, nodeType, msg string) {
 	c.lastError = map[string]any{"node": nodeID, "type": nodeType, "message": msg}
 }
@@ -154,7 +135,6 @@ func (c *fctx) lastText() string {
 	return r.Result
 }
 
-// Lookup implements flowexpr.Context with the documented namespace precedence.
 func (c *fctx) Lookup(path []string) (any, bool) {
 	if len(path) == 0 {
 		return nil, false
@@ -191,8 +171,6 @@ func (c *fctx) Lookup(path []string) (any, bool) {
 	return nil, false
 }
 
-// textOr returns the unwrapped human text for a bare {{node.output}}, falling
-// back to the raw output when the agent didn't wrap its reply in a JSON object.
 func (nr nodeResult) textOr(raw string) string {
 	if nr.Text != "" {
 		return nr.Text
@@ -225,9 +203,6 @@ func walk(m map[string]any, path []string) (any, bool) {
 	return cur, true
 }
 
-// parseJSONObject extracts a JSON object from an agent's reply, tolerating the
-// ways LLMs wrap it: a ```json fence, a ``` fence, or surrounding prose. It
-// locates the first balanced {...} span and unmarshals it.
 func parseJSONObject(s string) map[string]any {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -244,9 +219,6 @@ func parseJSONObject(s string) map[string]any {
 	return nil
 }
 
-// balancedObject returns the substring from the leading '{' to its matching
-// '}', honoring strings and escapes so braces inside string values don't fool
-// the depth counter. Returns "" if no balanced object is found.
 func balancedObject(s string) string {
 	depth := 0
 	inStr := false
@@ -281,8 +253,6 @@ func balancedObject(s string) string {
 
 var tmplRe = regexp.MustCompile(`\{\{([^}]+)\}\}`)
 
-// interpolate substitutes {{path}} placeholders using the flow context.
-// Unresolved placeholders become empty strings.
 func (c *fctx) interpolate(s string) string {
 	if !strings.Contains(s, "{{") {
 		return s
@@ -310,8 +280,6 @@ func (c *fctx) interpolate(s string) string {
 	})
 }
 
-// splitTemplateFilters splits "path | f1 | f2" into the base path and its
-// filter chain — the compiler-reserved pipe syntax, applied here at runtime.
 func splitTemplateFilters(key string) (string, []string) {
 	if !strings.Contains(key, "|") {
 		return key, nil

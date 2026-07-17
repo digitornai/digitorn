@@ -12,12 +12,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// PgStore is a Postgres-backed Cursor + Locker : sync state survives worker
-// restarts AND is shared across replicas, while pg_advisory locks give each
-// source a cluster-wide lease so two replicas never index it at once. This is
-// the production cursor for a horizontally-scaled deployment ; FileCursor only
-// covers a single host. One small table, upserted state, session advisory
-// locks held on a dedicated pooled connection for the sync's duration.
 type PgStore struct {
 	pool *pgxpool.Pool
 }

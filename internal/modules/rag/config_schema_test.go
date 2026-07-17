@@ -7,11 +7,6 @@ import (
 	"github.com/digitornai/digitorn/pkg/module"
 )
 
-// The reflected config schema must accept BOTH forms of embedding_model —
-// the id string ("minilm-l12") and the object ({id, dimensions, pooling}) —
-// exactly like EmbeddingModel.UnmarshalJSON does. Regression: the bare
-// reflection emitted an object-only schema, so the daemon compiler rejected
-// the string form used by every example ("expected object, got string").
 func TestEmbeddingModelSchemaAcceptsStringAndObject(t *testing.T) {
 	m := module.SchemaFromType(&Config{})
 	props, ok := m["properties"].(map[string]any)
@@ -47,7 +42,6 @@ func TestEmbeddingModelSchemaAcceptsStringAndObject(t *testing.T) {
 	}
 }
 
-// Both wire forms must keep decoding through UnmarshalJSON.
 func TestEmbeddingModelUnmarshalBothForms(t *testing.T) {
 	var s EmbeddingModel
 	if err := json.Unmarshal([]byte(`"minilm-l12"`), &s); err != nil || s.ID != "minilm-l12" {

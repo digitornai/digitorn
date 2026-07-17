@@ -10,9 +10,6 @@ import (
 	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
 )
 
-// buildTextHistory returns n messages alternating user / assistant with
-// interleaved tool_call + tool_result pairs, so the benchmark exercises
-// convertOne AND repairToolPairing on a realistic agent transcript.
 func buildTextHistory(n int) []sessionstore.Message {
 	msgs := make([]sessionstore.Message, 0, n)
 	for i := 1; i <= n; i++ {
@@ -50,8 +47,6 @@ func BenchmarkMessagesToLLM_TextOnly(b *testing.B) {
 	}
 }
 
-// countingLoader records every blob fetch — the number the incremental
-// converter (Finding #3) must drive toward zero on re-reads.
 type countingLoader struct{ n atomic.Int64 }
 
 func (c *countingLoader) load(context.Context, string) ([]byte, error) {
@@ -69,11 +64,6 @@ func buildImageHistory(numImages int) []sessionstore.Message {
 	return msgs
 }
 
-// TestMessagesToLLM_RefetchesBlobsEachCall pins the CURRENT behavior:
-// MessagesToLLM is stateless, so every call re-loads every blob. With k
-// LLM iterations in one turn that is k× redundant blob I/O — exactly what
-// the incremental converter will remove. Documenting it here gives the
-// optimization a known baseline to beat.
 func TestMessagesToLLM_RefetchesBlobsEachCall(t *testing.T) {
 	const numImages = 5
 	hist := buildImageHistory(numImages)

@@ -15,17 +15,6 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// ── Automations : the USER-SCOPED window onto the background service ─────────
-//
-// The background service's /ops API is an ADMIN surface (static bearer, no
-// per-user scoping) — it must never reach a browser. These routes are the
-// client-facing twin : the daemon authenticates the caller (JWT), enforces
-// OWNERSHIP on every read and write, and relays server-side with the ops
-// token. A user can only ever see, create, enable or disable THEIR schedules,
-// and only read runs born from THEIR triggers — the cross-user isolation the
-// rest of the daemon already guarantees, extended to automations.
-
-// opsSchedule is the slice of the bg /ops/schedules row the daemon consumes.
 type opsSchedule struct {
 	ID        string `json:"id"`
 	AppID     string `json:"app_id"`
@@ -39,7 +28,6 @@ type opsSchedule struct {
 	UpdatedAt string `json:"updated_at,omitempty"`
 }
 
-// opsRun is the slice of the bg /ops/runs row the daemon consumes.
 type opsRun struct {
 	ID           string `json:"id"`
 	TriggerID    string `json:"trigger_id"`
@@ -55,8 +43,6 @@ type opsRun struct {
 	DurationMs   int64  `json:"duration_ms"`
 }
 
-// ownSchedules filters the bg schedule list down to one user's rows. Pure —
-// the ownership chokepoint for every read path.
 func ownSchedules(all []opsSchedule, user string) []opsSchedule {
 	out := make([]opsSchedule, 0, len(all))
 	for _, s := range all {
@@ -67,9 +53,6 @@ func ownSchedules(all []opsSchedule, user string) []opsSchedule {
 	return out
 }
 
-// ownRuns keeps only the runs born from the given trigger ids (the user's
-// schedules + channel triggers they configured). Pure — the ownership
-// chokepoint for the runs read path.
 func ownRuns(all []opsRun, triggers map[string]bool) []opsRun {
 	out := make([]opsRun, 0, len(all))
 	for _, r := range all {
@@ -80,7 +63,6 @@ func ownRuns(all []opsRun, triggers map[string]bool) []opsRun {
 	return out
 }
 
-// opsTrigger is the slice of a bg /ops/triggers row the daemon consumes.
 type opsTrigger struct {
 	ID      string `json:"id"`
 	AppID   string `json:"app_id"`
@@ -88,10 +70,6 @@ type opsTrigger struct {
 	Adapter string `json:"adapter"`
 }
 
-// triggerIDsForApp returns every trigger id declared for one app. Channel
-// triggers store owner as a runtime template ({{event.payload.users_id}}), not
-// the configuring user's id — so app-scoped run listing keys off app_id, not
-// owner string equality.
 func triggerIDsForApp(all []opsTrigger, appID string) map[string]bool {
 	out := map[string]bool{}
 	for _, t := range all {
@@ -102,7 +80,6 @@ func triggerIDsForApp(all []opsTrigger, appID string) map[string]bool {
 	return out
 }
 
-// opsClient is the daemon's server-side client for the bg ops API.
 type opsClient struct {
 	base  string
 	token string
@@ -175,8 +152,6 @@ func (c *opsClient) triggers(ctx context.Context, appID string) ([]opsTrigger, e
 	return env.Triggers, nil
 }
 
-// userSchedule loads ONE schedule and enforces ownership : a schedule that is
-// missing OR belongs to someone else is the same 404 (existence is not leaked).
 func (c *opsClient) userSchedule(ctx context.Context, id, user string) (opsSchedule, error) {
 	all, err := c.schedules(ctx)
 	if err != nil {
@@ -187,10 +162,9 @@ func (c *opsClient) userSchedule(ctx context.Context, id, user string) (opsSched
 			return s, nil
 		}
 	}
-	return opsSchedule{}, errSessionNotFound // generic not-found, no ownership leak
+	return opsSchedule{}, errSessionNotFound
 }
 
-// GET /api/automations/schedules — the caller's schedules only.
 func (d *Daemon) listAutomationSchedules(w http.ResponseWriter, r *http.Request) {
 	c, err := d.opsClient()
 	if err != nil {
@@ -206,8 +180,6 @@ func (d *Daemon) listAutomationSchedules(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, map[string]any{"schedules": mine, "count": len(mine)})
 }
 
-// automationCreateRequest is what a client may set. Owner is NOT accepted from
-// the body — it is always the authenticated caller.
 type automationCreateRequest struct {
 	AppID       string `json:"app_id"`
 	SessionID   string `json:"session_id"`
@@ -223,7 +195,6 @@ type automationCreateRequest struct {
 	} `json:"attachments"`
 }
 
-// POST /api/automations/schedules — create a schedule owned by the caller.
 func (d *Daemon) createAutomationSchedule(w http.ResponseWriter, r *http.Request) {
 	c, err := d.opsClient()
 	if err != nil {
@@ -242,7 +213,7 @@ func (d *Daemon) createAutomationSchedule(w http.ResponseWriter, r *http.Request
 	body := map[string]any{
 		"app_id":     req.AppID,
 		"session_id": req.SessionID,
-		"owner":      userIDOf(r.Context()), // ALWAYS the caller — never client-supplied
+		"owner":      userIDOf(r.Context()),
 		"schedule":   req.Schedule,
 		"message":    req.Message,
 		"context":    req.Context,
@@ -260,7 +231,6 @@ func (d *Daemon) createAutomationSchedule(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusCreated, created)
 }
 
-// POST /api/automations/schedules/{id}/enable|disable — ownership-checked toggle.
 func (d *Daemon) toggleAutomationSchedule(enable bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		c, err := d.opsClient()
@@ -285,9 +255,6 @@ func (d *Daemon) toggleAutomationSchedule(enable bool) http.HandlerFunc {
 	}
 }
 
-// GET /api/automations/health?app= — one aggregated health snapshot for an
-// app's background dashboard: windowed metrics, failing-trigger alerts, the
-// DLQ and the armed triggers. One daemon round-trip for the whole Overview.
 func (d *Daemon) automationHealth(w http.ResponseWriter, r *http.Request) {
 	c, err := d.opsClient()
 	if err != nil {
@@ -347,9 +314,6 @@ func (d *Daemon) automationHealth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// POST /api/automations/triggers/{id}/enable|disable — toggle an app trigger
-// (channel/cron listener). The trigger must exist on the bg service; the live
-// listener is disarmed server-side on disable.
 func (d *Daemon) toggleAutomationTrigger(enable bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		c, err := d.opsClient()
@@ -376,7 +340,6 @@ func (d *Daemon) toggleAutomationTrigger(enable bool) http.HandlerFunc {
 	}
 }
 
-// POST /api/automations/jobs/{id}/replay — re-queue a dead-lettered job.
 func (d *Daemon) replayAutomationJob(w http.ResponseWriter, r *http.Request) {
 	c, err := d.opsClient()
 	if err != nil {
@@ -392,7 +355,6 @@ func (d *Daemon) replayAutomationJob(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
-// GET /api/automations/runs[?app=] — runs born from the caller's triggers only.
 func (d *Daemon) listAutomationRuns(w http.ResponseWriter, r *http.Request) {
 	c, err := d.opsClient()
 	if err != nil {

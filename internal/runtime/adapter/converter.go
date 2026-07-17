@@ -7,19 +7,6 @@ import (
 	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
 )
 
-// Converter is a stateful, incremental front-end to MessagesToLLM. Within
-// one turn the history grows by a few messages per LLM iteration, yet the
-// stateless MessagesToLLM re-converts — and re-loads every blob — on each
-// call. Converter caches the per-message conversion keyed by event Seq
-// (messages are immutable once appended), so each iteration only converts
-// the new tail and never re-fetches a blob it already loaded.
-//
-// Output equals MessagesToLLM(history) exactly: the cache stores precisely
-// convertOne(m), and the same repairToolPairing pass runs over the
-// assembled list on every call. Messages with Seq==0 carry no stable
-// identity and are converted fresh each time.
-//
-// Not safe for concurrent use; scope one Converter to one turn.
 type Converter struct {
 	opts  Options
 	cache map[uint64][]llm.ChatMessage

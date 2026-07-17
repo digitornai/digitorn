@@ -17,30 +17,16 @@ import (
 	"time"
 )
 
-// DefaultAuthIssuer is the canonical auth server URL. Overridable per-call
-// via OAuthConfig.Issuer or by the DIGITORN_AUTH_URL env var.
 const DefaultAuthIssuer = "https://auth.digitorn.ai"
 
-// DefaultProvider is the upstream identity provider the auth server bounces
-// the user to. Options : google | microsoft | azure.
 const DefaultProvider = "google"
 
-// OAuthConfig configures the login flow. All fields have defaults.
-//
-// The flow this implements is the digitorn-bridge (Python daemon) browser
-// bounce flow — NOT standard OAuth2 + PKCE. The auth server bounces the
-// user through Google/Microsoft/Azure then redirects the browser to a
-// localhost listener with the access/refresh tokens in the query string.
 type OAuthConfig struct {
 	Issuer   string
 	Provider string
 
-	// PromptUser is called with the authorize URL after the browser open
-	// is attempted. Lets the caller print a fallback message. Optional.
 	PromptUser func(authorizeURL string)
 
-	// Timeout caps the user's window to complete the browser dance. The
-	// local callback listener is closed when this elapses. Defaults to 3m.
 	Timeout time.Duration
 }
 

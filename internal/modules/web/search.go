@@ -24,6 +24,7 @@ const (
 	ddgEndpoint    = "https://html.duckduckgo.com/html/"
 	braveEndpoint  = "https://api.search.brave.com/res/v1/web/search"
 	tavilyEndpoint = "https://api.tavily.com/search"
+	exaEndpoint    = "https://api.exa.ai/search"
 	googleEndpoint = "https://www.googleapis.com/customsearch/v1"
 	searxngDefault = "http://localhost:8080"
 )
@@ -218,6 +219,8 @@ func (m *Module) runBackend(ctx context.Context, client *http.Client, cfg Config
 		return searchBrave(ctx, client, cfg, query, limit, opts)
 	case "tavily":
 		return searchTavily(ctx, client, cfg, query, limit, opts)
+	case "exa":
+		return searchExa(ctx, client, cfg, query, limit, opts)
 	case "google":
 		return searchGoogle(ctx, client, cfg, query, limit, opts)
 	default:
@@ -439,6 +442,54 @@ func searchTavily(ctx context.Context, client *http.Client, cfg Config, query st
 	return mapResults(len(payload.Results), limit, func(i int) searchResult {
 		r := payload.Results[i]
 		return searchResult{Title: r.Title, URL: r.URL, Snippet: truncateRunes(r.Content, 300), Content: truncateRunes(r.Content, maxInlineContentChars)}
+	}), nil
+}
+
+// searchExa queries Exa's neural/semantic search: results are ranked by meaning
+// (embeddings) rather than keyword overlap, and page text comes back inline —
+// the strongest backend for complex, conceptual research queries.
+func searchExa(ctx context.Context, client *http.Client, cfg Config, query string, limit int, opts searchOpts) ([]searchResult, error) {
+	key := cfg.APIKeys["exa"]
+	if key == "" {
+		return nil, fmt.Errorf("exa search requires api_keys.exa")
+	}
+	reqBody := map[string]any{
+		"query":      query,
+		"numResults": limit,
+		"contents":   map[string]any{"text": map[string]any{"maxCharacters": maxInlineContentChars}},
+	}
+	if d := map[string]string{
+		"day":   time.Now().AddDate(0, 0, -1).UTC().Format("2006-01-02"),
+		"week":  time.Now().AddDate(0, 0, -7).UTC().Format("2006-01-02"),
+		"month": time.Now().AddDate(0, -1, 0).UTC().Format("2006-01-02"),
+		"year":  time.Now().AddDate(-1, 0, 0).UTC().Format("2006-01-02"),
+	}[opts.timeRange]; d != "" {
+		reqBody["startPublishedDate"] = d
+	}
+	bodyReq, _ := json.Marshal(reqBody)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, exaEndpoint, strings.NewReader(string(bodyReq)))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-api-key", key)
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	var payload struct {
+		Results []struct {
+			Title string `json:"title"`
+			URL   string `json:"url"`
+			Text  string `json:"text"`
+		} `json:"results"`
+	}
+	if err := readJSON(resp, &payload); err != nil {
+		return nil, err
+	}
+	return mapResults(len(payload.Results), limit, func(i int) searchResult {
+		r := payload.Results[i]
+		return searchResult{Title: r.Title, URL: r.URL, Snippet: truncateRunes(r.Text, 300), Content: truncateRunes(r.Text, maxInlineContentChars)}
 	}), nil
 }
 

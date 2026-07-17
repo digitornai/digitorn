@@ -1,6 +1,3 @@
-// Package cron is the cron adapter: it fires an Event on a 5-field schedule
-// (minute hour day-of-month month day-of-week). The parser is self-contained
-// (no external dependency) and supports *, */step, a-b ranges and a,b lists.
 package cron
 
 import (
@@ -14,7 +11,6 @@ import (
 	"github.com/digitornai/digitorn/internal/background/adapter"
 )
 
-// Schedule is a parsed 5-field cron expression.
 type Schedule struct {
 	min, hour, dom, month, dow map[int]bool
 	domStar, dowStar           bool
@@ -26,7 +22,6 @@ type fieldDef struct {
 
 var fields = []fieldDef{{0, 59}, {0, 23}, {1, 31}, {1, 12}, {0, 6}}
 
-// Parse parses "m h dom month dow". dow 0 and 7 both mean Sunday.
 func Parse(expr string) (*Schedule, error) {
 	parts := strings.Fields(expr)
 	if len(parts) != 5 {
@@ -40,7 +35,6 @@ func Parse(expr string) (*Schedule, error) {
 		}
 		sets[i] = s
 	}
-	// dow 7 → 0 (Sunday).
 	if sets[4][7] {
 		sets[4][0] = true
 		delete(sets[4], 7)
@@ -93,8 +87,6 @@ func parseField(f string, lo, hi int) (map[int]bool, error) {
 	return out, nil
 }
 
-// Next returns the first matching minute strictly after `after`. Returns zero
-// time if nothing matches within ~4 years (a malformed-but-parsed schedule).
 func (s *Schedule) Next(after time.Time) time.Time {
 	t := after.Truncate(time.Minute).Add(time.Minute)
 	limit := t.AddDate(4, 0, 0)

@@ -49,11 +49,6 @@ type SocketIOBridge struct {
 
 	BrainFor func(appID string) schema.Brain
 
-	// PreviewValidator authorises an embedded-preview socket by its per-session
-	// `?t=` preview token (the sandboxed iframe has no usable JWT). When set and
-	// the JWT handshake fails, a valid preview token joins ONLY that session's
-	// room, read-only — same trust model as the preview/files routes. nil =
-	// preview sockets disabled.
 	PreviewValidator func(appID, sessionID, token string) bool
 
 	SessionWindowBrain func(snap sessionstore.SessionSnapshot) schema.Brain
@@ -82,8 +77,6 @@ type clientState struct {
 	sessionID    string
 	connectedAt  time.Time
 	capabilities []string
-	// previewSession is set for embedded-preview sockets authed by a preview
-	// token: the ONE session they may observe (auto-joined, read-only).
 	previewSession string
 }
 
@@ -180,11 +173,6 @@ func (b *SocketIOBridge) emitEnvelope(room string, ev *sessionstore.Event, env s
 }
 
 func (b *SocketIOBridge) handleAuth(ctx context.Context, token string, metadata map[string]any) error {
-	// Embedded preview: a `preview_token` in the handshake means "scope this
-	// socket to one session, read-only". It takes precedence over the JWT path
-	// (which, in dev mode, would otherwise accept an empty token as anonymous
-	// and shadow this). The sandboxed iframe has no usable JWT — this token is
-	// how it authenticates. Present-but-invalid is rejected, never downgraded.
 	if b.PreviewValidator != nil && metadata != nil {
 		if pt, _ := metadata["preview_token"].(string); pt != "" {
 			sess, _ := metadata["session_id"].(string)
@@ -241,8 +229,6 @@ func (b *SocketIOBridge) handleConnect(ctx context.Context, c ports.RealtimeClie
 	b.clients.Store(c.ID(), state)
 	b.connectsTotal.Add(1)
 
-	// Preview sockets: auto-join their one authorised session room so they get
-	// the live `workspace_changes` push without a `join_session` round-trip.
 	if previewSession != "" {
 		if err := c.Join("session:" + previewSession); err != nil {
 			b.log.Warn("bridge: preview join session failed",
@@ -331,9 +317,6 @@ func (b *SocketIOBridge) handleJoinSession(ctx context.Context, c ports.Realtime
 		return errors.New("join_session: session_id required")
 	}
 
-	// Preview sockets are locked to their one auto-joined session (read-only).
-	// They were joined at connect, so a matching join_session is a no-op; any
-	// other session is refused.
 	if st.previewSession != "" {
 		if sessionID != st.previewSession {
 			b.actionsRejected.Add(1)
@@ -659,9 +642,6 @@ func (b *SocketIOBridge) authorizeSession(ctx context.Context, userID, appID, se
 	owner := state.UserID
 	first := state.FirstSeq
 	state.RUnlock()
-	// Sub-agent sessions (ID contains "::agent::") may have FirstSeq=0 when they
-	// are freshly spawned and their events haven't been committed yet. Allow the
-	// join so the client can receive live events as the agent produces them.
 	isSubAgent := strings.Contains(sessionID, "::agent::")
 	if first == 0 && !isSubAgent {
 		return errors.New("unauthorized: session not found")

@@ -89,8 +89,6 @@ func TestRedactParams_CustomPatterns(t *testing.T) {
 }
 
 func TestRedactParams_ScalarArrayValuesUntouched(t *testing.T) {
-	// A slice of scalars is preserved verbatim : key-based redaction can only
-	// act on a keyed value, and a bare string element has no key to match.
 	in := map[string]any{
 		"items":    []any{"a", "b"},
 		"password": "p",
@@ -106,9 +104,6 @@ func TestRedactParams_ScalarArrayValuesUntouched(t *testing.T) {
 }
 
 func TestRedactParams_SecretInsideArrayRedacted(t *testing.T) {
-	// A sensitive key nested inside an array (a map element, or a deeper
-	// array) MUST be redacted — the old map-only recursion leaked it verbatim
-	// into the audit row.
 	in := map[string]any{
 		"creds": []any{
 			map[string]any{"name": "primary", "api_key": "sk-secret-1"},

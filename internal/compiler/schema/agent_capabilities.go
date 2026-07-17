@@ -6,8 +6,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// AgentCapabilities accepts either a list of skill names or an inline
-// capabilities config (grant/approve/deny/default_policy etc.).
 type AgentCapabilities struct {
 	Skills []string
 	Config *CapabilitiesConfig

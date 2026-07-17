@@ -94,9 +94,6 @@ func buildEnv(extraAllow []string) []string {
 			out[k] = v
 		}
 	}
-	// Make tool resolution independent of how the daemon was launched : merge the
-	// persisted PATH (Windows registry user+machine) so `python`/`node`/etc.
-	// resolve even when the inherited process PATH is thin. No-op off Windows.
 	for k, v := range out {
 		if strings.EqualFold(k, "path") {
 			out[k] = enrichPath(v)

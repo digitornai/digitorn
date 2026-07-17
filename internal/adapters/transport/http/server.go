@@ -1,4 +1,3 @@
-// Package http builds the Chi-based REST HTTP server.
 package http
 
 import (
@@ -15,7 +14,6 @@ import (
 	"github.com/go-chi/cors"
 )
 
-// Options configures the HTTP server.
 type Options struct {
 	Addr            string
 	ReadTimeout     time.Duration
@@ -24,7 +22,6 @@ type Options struct {
 	CORSOrigins     []string
 }
 
-// Server wraps net/http with a Chi router and idiomatic middleware.
 type Server struct {
 	srv    *nethttp.Server
 	router *chi.Mux
@@ -32,8 +29,6 @@ type Server struct {
 	logger *slog.Logger
 }
 
-// New creates a Server with default middleware: RequestID, Recoverer, Logger
-// (via slog), Timeout, and CORS.
 func New(opts Options, logger *slog.Logger) *Server {
 	if logger == nil {
 		logger = slog.Default()
@@ -95,7 +90,6 @@ func (s *Server) Start() error {
 	return nil
 }
 
-// Shutdown gracefully stops the server.
 func (s *Server) Shutdown(ctx context.Context) error {
 	shutdownCtx, cancel := context.WithTimeout(ctx, s.opts.ShutdownTimeout)
 	defer cancel()

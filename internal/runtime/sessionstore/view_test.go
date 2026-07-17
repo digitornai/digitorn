@@ -45,15 +45,11 @@ func TestEnvelope_ShapeHasAllLegacyFields(t *testing.T) {
 			t.Errorf("envelope JSON missing %q\nfull: %s", key, got)
 		}
 	}
-	// _dropped_pre_bootstrap should be omitted when false.
 	if strings.Contains(got, "_dropped_pre_bootstrap") {
 		t.Errorf("envelope must omit _dropped_pre_bootstrap when false; got: %s", got)
 	}
 }
 
-// TestEnvelope_CarriesCorrelationID : a run_parallel child's tool_progress
-// event must surface its parent call_id as correlation_id on the socket wire
-// (so the client can advance the parent chip), while a plain event omits it.
 func TestEnvelope_CarriesCorrelationID(t *testing.T) {
 	prog := Event{
 		Seq: 7, Type: EventToolProgress, SessionID: "s", TsUnixNano: time.Now().UnixNano(),
@@ -136,7 +132,6 @@ func TestEnvelope_TsIsISO8601(t *testing.T) {
 	if env.Ts != "2026-01-15T09:00:00Z" {
 		t.Errorf("ts = %q, want 2026-01-15T09:00:00Z", env.Ts)
 	}
-	// Parse roundtrip
 	if _, err := time.Parse(time.RFC3339Nano, env.Ts); err != nil {
 		t.Errorf("ts not parseable as RFC3339Nano: %v", err)
 	}

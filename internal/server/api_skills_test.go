@@ -69,7 +69,6 @@ func skillDo(t *testing.T, mux *chi.Mux, method, path, user, body string) (int, 
 func TestSkills_CRUD_Lifecycle(t *testing.T) {
 	mux := newSkillsHarness(t, true)
 
-	// list : empty user skills, but app skills + allow flag present.
 	code, body := skillDo(t, mux, "GET", "/api/apps/app-1/skills", "user-A", "")
 	if code != http.StatusOK {
 		t.Fatalf("list: %d %v", code, body)
@@ -81,7 +80,6 @@ func TestSkills_CRUD_Lifecycle(t *testing.T) {
 		t.Fatalf("app_skills=%v", body["app_skills"])
 	}
 
-	// create
 	code, body = skillDo(t, mux, "POST", "/api/apps/app-1/skills", "user-A",
 		`{"name":"Deploy","description":"ship it","instructions":"run the deploy"}`)
 	if code != http.StatusCreated {
@@ -93,20 +91,17 @@ func TestSkills_CRUD_Lifecycle(t *testing.T) {
 		t.Fatalf("created skill: %v", sk)
 	}
 
-	// update
 	code, body = skillDo(t, mux, "PATCH", "/api/apps/app-1/skills/"+id, "user-A",
 		`{"instructions":"run the new deploy"}`)
 	if code != http.StatusOK {
 		t.Fatalf("update: %d %v", code, body)
 	}
 
-	// list shows the one user skill now
 	_, body = skillDo(t, mux, "GET", "/api/apps/app-1/skills", "user-A", "")
 	if us, _ := body["user_skills"].([]any); len(us) != 1 {
 		t.Fatalf("user_skills=%v", body["user_skills"])
 	}
 
-	// delete
 	code, body = skillDo(t, mux, "DELETE", "/api/apps/app-1/skills/"+id, "user-A", "")
 	if code != http.StatusOK || body["deleted"] != true {
 		t.Fatalf("delete: %d %v", code, body)
@@ -116,18 +111,15 @@ func TestSkills_CRUD_Lifecycle(t *testing.T) {
 func TestSkills_Errors(t *testing.T) {
 	mux := newSkillsHarness(t, true)
 
-	// invalid slug → 422
 	if code, _ := skillDo(t, mux, "POST", "/api/apps/app-1/skills", "user-A",
 		`{"name":"Bad Name!","instructions":"x"}`); code != http.StatusUnprocessableEntity {
 		t.Fatalf("invalid name status=%d want 422", code)
 	}
-	// duplicate → 409
 	skillDo(t, mux, "POST", "/api/apps/app-1/skills", "user-A", `{"name":"dup","instructions":"x"}`)
 	if code, _ := skillDo(t, mux, "POST", "/api/apps/app-1/skills", "user-A",
 		`{"name":"dup","instructions":"y"}`); code != http.StatusConflict {
 		t.Fatalf("dup status=%d want 409", code)
 	}
-	// update/delete missing → 404
 	if code, _ := skillDo(t, mux, "PATCH", "/api/apps/app-1/skills/nope", "user-A", `{"description":"z"}`); code != http.StatusNotFound {
 		t.Fatalf("update missing status=%d want 404", code)
 	}
@@ -137,14 +129,12 @@ func TestSkills_Errors(t *testing.T) {
 }
 
 func TestSkills_AuthoringDisabled(t *testing.T) {
-	mux := newSkillsHarness(t, false) // allow_user_skills = false
+	mux := newSkillsHarness(t, false)
 
-	// create blocked with 403
 	if code, _ := skillDo(t, mux, "POST", "/api/apps/app-1/skills", "user-A",
 		`{"name":"x","instructions":"y"}`); code != http.StatusForbidden {
 		t.Fatalf("create disabled status=%d want 403", code)
 	}
-	// list still works (reports allow=false)
 	code, body := skillDo(t, mux, "GET", "/api/apps/app-1/skills", "user-A", "")
 	if code != http.StatusOK || body["allow_user_skills"] != false {
 		t.Fatalf("list disabled: %d %v", code, body)
@@ -155,7 +145,6 @@ func TestSkills_PerUserIsolation(t *testing.T) {
 	mux := newSkillsHarness(t, true)
 	skillDo(t, mux, "POST", "/api/apps/app-1/skills", "user-A", `{"name":"mine","instructions":"a"}`)
 
-	// user-B sees none of user-A's skills.
 	_, body := skillDo(t, mux, "GET", "/api/apps/app-1/skills", "user-B", "")
 	if us, _ := body["user_skills"].([]any); len(us) != 0 {
 		t.Fatalf("user-B sees %v", body["user_skills"])

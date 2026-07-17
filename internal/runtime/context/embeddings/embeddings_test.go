@@ -12,10 +12,6 @@ import (
 	"github.com/digitornai/digitorn/internal/runtime/policy"
 )
 
-// =====================================================================
-// Vector primitives
-// =====================================================================
-
 func TestCosine_Identical(t *testing.T) {
 	v := embeddings.Vector{1, 2, 3, 4}
 	if got := embeddings.Cosine(v, v); !approxEq(got, 1.0, 1e-3) {
@@ -71,10 +67,6 @@ func TestCosineNormalized_MatchesCosine_WhenInputsNormalized(t *testing.T) {
 	}
 }
 
-// =====================================================================
-// MockClient
-// =====================================================================
-
 func TestMock_DimensionAlways384(t *testing.T) {
 	client := embeddings.MockClient{}
 	vecs, err := client.Embed(context.Background(), []string{
@@ -104,7 +96,6 @@ func TestMock_Deterministic(t *testing.T) {
 func TestMock_DifferentInputs_DifferentOutputs(t *testing.T) {
 	client := embeddings.MockClient{}
 	vs, _ := client.Embed(context.Background(), []string{"foo", "bar"})
-	// Should be different (not perfect cosine 1.0).
 	sim := embeddings.CosineNormalized(vs[0], vs[1])
 	if sim > 0.99 {
 		t.Errorf("unrelated inputs too similar : cos=%v", sim)
@@ -115,8 +106,8 @@ func TestMock_SharedTokens_MoreSimilar(t *testing.T) {
 	client := embeddings.MockClient{}
 	vs, _ := client.Embed(context.Background(), []string{
 		"read file",
-		"read content",  // shares "read"
-		"shell command", // shares nothing
+		"read content",
+		"shell command",
 	})
 	simShared := embeddings.CosineNormalized(vs[0], vs[1])
 	simUnrelated := embeddings.CosineNormalized(vs[0], vs[2])
@@ -125,10 +116,6 @@ func TestMock_SharedTokens_MoreSimilar(t *testing.T) {
 			simShared, simUnrelated)
 	}
 }
-
-// =====================================================================
-// SemanticIndex
-// =====================================================================
 
 func TestSemanticIndex_Build_AndSearch(t *testing.T) {
 	client := embeddings.MockClient{}
@@ -145,7 +132,6 @@ func TestSemanticIndex_Build_AndSearch(t *testing.T) {
 		t.Fatalf("Size = %d, want 3", si.Size())
 	}
 
-	// Query : "read file" should rank filesystem.read at the top.
 	vecs, _ := client.Embed(context.Background(), []string{"read file"})
 	hits := si.Search(vecs[0], 3)
 	if len(hits) == 0 {
@@ -177,10 +163,6 @@ func TestSemanticIndex_EmptyCorpus(t *testing.T) {
 		t.Errorf("empty corpus size = %d, want 0", si.Size())
 	}
 }
-
-// =====================================================================
-// Hybrid scoring : index.Search with Semantic attached
-// =====================================================================
 
 func buildIndex(t *testing.T) *index.ToolIndex {
 	t.Helper()

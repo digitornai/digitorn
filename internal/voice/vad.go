@@ -2,27 +2,19 @@ package voice
 
 import "math"
 
-// VAD is voice-activity detection / endpointing. Push reports whether the frame
-// contains speech and whether an utterance just ended (trailing silence after
-// speech). The orchestrator uses `speech` for barge-in and `endpoint` to commit a
-// turn. Pluggable so a provider-grade VAD can replace the default.
 type VAD interface {
 	Push(Frame) (speech bool, endpoint bool)
 	Reset()
 }
 
-// EnergyVAD is a simple RMS-energy endpointer: a frame is speech when its energy
-// crosses Threshold; an utterance ends after SilenceMs of trailing silence. Good
-// enough for the core; swap for WebRTC-VAD / a provider VAD when tuning latency.
 type EnergyVAD struct {
-	Threshold float64 // RMS threshold (PCM16 scale, ~500–1500 typical)
-	SilenceMs int     // trailing silence to declare end-of-utterance
+	Threshold float64
+	SilenceMs int
 
 	wasSpeech bool
 	silenceMs int
 }
 
-// NewEnergyVAD builds a VAD with sane voice defaults.
 func NewEnergyVAD() *EnergyVAD { return &EnergyVAD{Threshold: 700, SilenceMs: 400} }
 
 func (v *EnergyVAD) Reset() {
@@ -44,7 +36,7 @@ func (v *EnergyVAD) Push(f Frame) (bool, bool) {
 	if v.silenceMs >= v.SilenceMs {
 		v.wasSpeech = false
 		v.silenceMs = 0
-		return false, true // endpoint
+		return false, true
 	}
 	return false, false
 }

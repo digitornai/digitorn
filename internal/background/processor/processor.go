@@ -1,9 +1,3 @@
-// Package processor is the composed runner.Processor of the background service:
-// it takes a durable job carrying a raw inbound Event, runs the channel
-// activation pipeline (BG-4) against the job's trigger config, invokes the
-// daemon (BG-3), and — for reply:auto — sends the agent's answer back out on the
-// originating adapter. The pipeline runs HERE, after the durable claim, so the
-// event is persisted before any processing (the crash-survival contract).
 package processor
 
 import (
@@ -24,9 +18,6 @@ import (
 	"github.com/digitornai/digitorn/internal/background/store"
 )
 
-// TriggerSpec is what an armed trigger persists (as trigger.ConfigJSON): the
-// target app + the resolved channel activation + the module-level knobs the
-// pipeline needs. The processor loads it per job to run the pipeline.
 type TriggerSpec struct {
 	AppID        string                    `json:"app_id"`
 	Provider     string                    `json:"provider"`
@@ -45,39 +36,25 @@ func (s TriggerSpec) moduleConfig() channels.ModuleConfig {
 	return channels.ModuleConfig{DefaultAgent: s.DefaultAgent, SecretFilterEnabled: &sf}
 }
 
-// maxAttempts bounds retries so a permanently-broken job (bad prepare, dead
-// route) eventually fails terminally instead of looping forever.
 const maxAttempts = 24
 
-// replyTimeout bounds how long a reply:auto job waits for the agent's answer.
 const replyTimeout = 90 * time.Second
 
-// streamTimeout bounds a reply:stream relay (a possibly long, multi-step agentic
-// task). Larger than replyTimeout since the user watches the loop unfold.
 const streamTimeout = 300 * time.Second
 
-// approvalPollEvery is how often the approval pump checks for a parked decision.
-// Fast enough to feel live; the daemon's approval timeout (default 300s) is the
-// outer bound, so a missed poll is never fatal.
 const approvalPollEvery = 1500 * time.Millisecond
 
-// maxButtonChoices caps how many ask_user choices we render as buttons (Discord
-// allows ≤5 per action row, ≤5 rows). Beyond this we degrade to web/CLI rather
-// than truncate the user's options.
 const maxButtonChoices = 25
 
-// ChannelProcessor implements runner.Processor.
 type ChannelProcessor struct {
 	store        *store.Store
 	client       *daemonclient.Client
 	registry     *adapter.Registry
-	invoker      channels.PrepareInvoker // optional (prepare steps)
+	invoker      channels.PrepareInvoker
 	log          *slog.Logger
-	approvalPoll time.Duration // how often the approval pump checks /state (default approvalPollEvery)
+	approvalPoll time.Duration
 }
 
-// New builds the processor. registry may be nil if no reply:auto is used;
-// invoker may be nil if no trigger uses prepare steps.
 func New(st *store.Store, client *daemonclient.Client, registry *adapter.Registry, invoker channels.PrepareInvoker, log *slog.Logger) *ChannelProcessor {
 	if log == nil {
 		log = slog.Default()
@@ -85,10 +62,6 @@ func New(st *store.Store, client *daemonclient.Client, registry *adapter.Registr
 	return &ChannelProcessor{store: st, client: client, registry: registry, invoker: invoker, log: log, approvalPoll: approvalPollEvery}
 }
 
-// Process runs one durable job end-to-end. A best-effort execution report (one
-// bg_runs row) is recorded for EVERY attempt via the deferred recordRun — the ops
-// surface reads it. The record is off the durable hot path: a failed write is
-// logged, never fails the job.
 func (p *ChannelProcessor) Process(ctx context.Context, job store.Job) (err error) {
 	started := time.Now()
 	rr := runInfo{jobID: job.ID, appID: job.AppID, triggerID: job.TriggerID, provider: job.Provider, attempt: job.Attempts}
@@ -100,7 +73,7 @@ func (p *ChannelProcessor) Process(ctx context.Context, job store.Job) (err erro
 
 	var ev adapter.Event
 	if e := json.Unmarshal([]byte(job.PayloadJSON), &ev); e != nil {
-		return fmt.Errorf("decode event: %w", e) // terminal: malformed
+		return fmt.Errorf("decode event: %w", e)
 	}
 	spec, err := p.loadSpec(ctx, job)
 	if err != nil {
@@ -108,7 +81,6 @@ func (p *ChannelProcessor) Process(ctx context.Context, job store.Job) (err erro
 	}
 	rr.provider, rr.adapter = ev.Provider, ev.Adapter
 
-	// Pipeline (BG-4). Payload is sanitized before it reaches templating.
 	cev := channels.Event{
 		EventID:  job.ID,
 		Provider: ev.Provider,
@@ -120,19 +92,14 @@ func (p *ChannelProcessor) Process(ctx context.Context, job store.Job) (err erro
 	}
 	act, err := channels.Process(ctx, cev, spec.Activation, spec.moduleConfig(), p.invoker)
 	if err != nil {
-		// Pipeline failures (e.g. a prepare module hiccup) are transient: retry
-		// with backoff, bounded by maxAttempts above.
 		return runner.Retry(err, backoff(job.Attempts))
 	}
 	if act.Filtered {
 		rr.filtered = true
 		p.log.Info("background: event filtered", "provider", ev.Provider, "reason", act.FilterReason)
-		return nil // dropped, durably complete
+		return nil
 	}
 
-	// Raw proactive push : a configured destination + no agentic reply requested →
-	// send the rendered message straight to the channel, no session, no LLM (a cheap
-	// scheduled announcement). The durable job already persisted the trigger event.
 	if act.Deliver != nil && act.Reply != channels.ReplyAuto {
 		rr.pushed = true
 		rr.replyChars, rr.replyPreview = len(act.Message), runPreview(act.Message)
@@ -141,42 +108,19 @@ func (p *ChannelProcessor) Process(ctx context.Context, job store.Job) (err erro
 		return nil
 	}
 
-	// Invoke the daemon (BG-3).
 	ls := act.ToLaunchSpec(spec.AppID)
-	// Inbound media: download each attachment (via the adapter's media auth) and
-	// upload it to the daemon's blob store; the BlobRefs ride the launching message
-	// so the model sees the image/doc (vision). Generic over any MediaFetcher adapter.
 	if len(ev.Attachments) > 0 {
 		ls.Attachments = p.resolveAttachments(ctx, ev, ls.AppID)
 	}
-	// Schedule-carried INPUT attachments (e.g. a CV) ride EVERY fire : they are
-	// already content-addressed blobs in the app store, so the ref is forwarded
-	// verbatim (no re-upload) and the daemon resolves it for the model.
 	ls.Attachments = append(ls.Attachments, inputAttachments(spec.Activation.Attachments)...)
-	// Output reports : hand the agent a fresh, dated, downloadable folder for THIS
-	// fire and tell it to write any file/report there. Injected into the per-fire
-	// message (not Context, which is create-only) so it reaches the agent on every
-	// fire of a persistent session. The agent writes via its own workdir-confined
-	// tools; download is the existing /workspace routes — daemon untouched.
 	if spec.Activation.Reports {
 		ls.Message = withReportFolder(ls.Message, time.Now())
 	}
-	// A live turn (final answer OR streamed loop) keeps the processor alive while the
-	// turn runs, so typing + approval prompts work for both.
 	if ls.WaitForReply || ls.StreamReply {
 		ls.ReplyTimeout = replyTimeout
-		// Keep a presence hint alive on the channel while the (possibly multi-step,
-		// tool-using) turn runs, so the user sees the agent "thinking" instead of
-		// silence. Generic: any adapter implementing Typer benefits.
 		if stop := p.keepTyping(ctx, ev); stop != nil {
 			defer stop()
 		}
-		// Human-in-the-loop in the channel: while the turn runs it may park on a
-		// gated tool (approve) or an ask_user question; surface those as native
-		// controls (buttons / modal) and resolve the user's answer back to the
-		// daemon. Generic: any adapter implementing Prompter benefits. The session
-		// id is derived exactly as Launch derives it, so the pump targets the right
-		// session even before it's created.
 		sid := ls.SessionID
 		if sid == "" {
 			sid = "bg-" + job.ID

@@ -7,11 +7,6 @@ import (
 	"time"
 )
 
-// TestCancel_KillsRunningChild proves a long-running EXTERNAL child started by
-// the shell dies promptly when the context is cancelled — the exact mechanism a
-// background `sleep`/dev-server relies on to be cancellable. We cancel after
-// 200ms a command that would otherwise block 30s; if the child were orphaned the
-// Run call would hang until the test deadline.
 func TestCancel_KillsRunningChild(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
@@ -21,8 +16,6 @@ func TestCancel_KillsRunningChild(t *testing.T) {
 
 	var out, errb bytes.Buffer
 	start := time.Now()
-	// `sleep` resolves to busybox (no-bash host) or the host's sleep; either way
-	// it's a real external process whose lifetime the shell must own.
 	code, err := Run(ctx, `sleep 30`, t.TempDir(), nil, nil, &out, &errb)
 	elapsed := time.Since(start)
 
@@ -35,9 +28,6 @@ func TestCancel_KillsRunningChild(t *testing.T) {
 	t.Logf("cancelled child in %s (code=%d)", elapsed, code)
 }
 
-// TestCancel_StopsPureLoop proves the interpreter itself (no external process)
-// observes cancellation between iterations — a busy bash loop is interruptible,
-// not just external commands.
 func TestCancel_StopsPureLoop(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {

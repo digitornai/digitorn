@@ -66,9 +66,6 @@ func tuples(msgs []Message) []msgTuple {
 	return out
 }
 
-// TestAppendDurableBatch_EquivalentToSerial is the core equivalence proof:
-// persisting N events as a batch yields the SAME in-memory state and the
-// SAME bytes on disk as persisting them one-by-one via AppendDurable.
 func TestAppendDurableBatch_EquivalentToSerial(t *testing.T) {
 	bus, paths, cleanup := setupDurableBusT(t)
 	defer cleanup()
@@ -93,7 +90,6 @@ func TestAppendDurableBatch_EquivalentToSerial(t *testing.T) {
 		t.Fatalf("seqs len = %d, want %d", len(seqs), N)
 	}
 
-	// In-memory state must match.
 	sSerial, _ := bus.State("serial")
 	sBatch, _ := bus.State("batch")
 	if !reflect.DeepEqual(tuples(sSerial.Snapshot().Messages), tuples(sBatch.Snapshot().Messages)) {
@@ -101,7 +97,6 @@ func TestAppendDurableBatch_EquivalentToSerial(t *testing.T) {
 			tuples(sSerial.Snapshot().Messages), tuples(sBatch.Snapshot().Messages))
 	}
 
-	// On-disk state must match after a fresh cold load.
 	lSerial, err := Load(paths, "serial", LoadOptions{Mode: JSONLStrict})
 	if err != nil {
 		t.Fatalf("load serial: %v", err)
@@ -116,8 +111,6 @@ func TestAppendDurableBatch_EquivalentToSerial(t *testing.T) {
 	}
 }
 
-// TestAppendDurableBatch_AssignsConsecutiveSeqs pins the contract that the
-// batch assigns contiguous seqs 1..N in order.
 func TestAppendDurableBatch_AssignsConsecutiveSeqs(t *testing.T) {
 	bus, _, cleanup := setupDurableBusT(t)
 	defer cleanup()
@@ -137,9 +130,6 @@ func TestAppendDurableBatch_AssignsConsecutiveSeqs(t *testing.T) {
 	}
 }
 
-// TestAppendDurableBatch_SurvivesReload is the durability proof: once the
-// batch call returns nil with Fsync=true, every event must be recoverable
-// from disk — the same kill -9 guarantee AppendDurable gives, per event.
 func TestAppendDurableBatch_SurvivesReload(t *testing.T) {
 	bus, paths, cleanup := setupDurableBusT(t)
 	ctx := context.Background()
@@ -154,7 +144,6 @@ func TestAppendDurableBatch_SurvivesReload(t *testing.T) {
 		t.Fatalf("batch: %v", err)
 	}
 
-	// Stop everything (mimics shutdown), then cold-load from disk only.
 	cleanup()
 
 	res, err := ReadJSONL(paths.EventsFile("recover"), JSONLStrict, "")

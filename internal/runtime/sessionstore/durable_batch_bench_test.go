@@ -7,9 +7,6 @@ import (
 	"time"
 )
 
-// setupDurableBus builds a Bus whose flusher fsyncs every batch, so
-// AppendDurable pays the real on-disk durability cost. Baseline for the
-// group-commit optimization (Finding #1).
 func setupDurableBus(b *testing.B) (*Bus, func()) {
 	b.Helper()
 	paths := NewPaths(b.TempDir())
@@ -56,11 +53,6 @@ func toolResultEvent(i int) Event {
 	}
 }
 
-// BenchmarkPersistToolResults_SerialDurable persists N tool results into
-// ONE session via sequential AppendDurable — the exact shape of
-// engine.persistToolResults. Each durable append blocks on its own fsync,
-// so wall-clock scales ~linearly with N. Group-commit (Finding #1) must
-// collapse this toward constant in N.
 func BenchmarkPersistToolResults_SerialDurable(b *testing.B) {
 	for _, n := range []int{1, 4, 8, 16} {
 		b.Run(fmt.Sprintf("tools=%d", n), func(b *testing.B) {
@@ -83,9 +75,6 @@ func BenchmarkPersistToolResults_SerialDurable(b *testing.B) {
 	}
 }
 
-// BenchmarkPersistToolResults_BatchDurable is the group-commit form: the N
-// tool results of one round persist in a single AppendDurableBatch, riding
-// one fsync. Compare ns/op against SerialDurable at the same tool count.
 func BenchmarkPersistToolResults_BatchDurable(b *testing.B) {
 	for _, n := range []int{1, 4, 8, 16} {
 		b.Run(fmt.Sprintf("tools=%d", n), func(b *testing.B) {

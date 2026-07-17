@@ -17,10 +17,6 @@ import (
 	"github.com/digitornai/digitorn/internal/indexer"
 )
 
-// End-to-end : index a REAL MongoDB collection through the shared dbaccess
-// socle (query = a JSON find spec) → embed with REAL minilm → store in REAL
-// Qdrant → a natural-language query retrieves the right document. Proves the
-// NoSQL → RAG path on the same machinery as SQL.
 func TestRAG_MongoIndex_E2E(t *testing.T) {
 	dsn := os.Getenv("DBACCESS_MONGO_DSN")
 	if dsn == "" {

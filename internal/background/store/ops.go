@@ -8,11 +8,6 @@ import (
 	"gorm.io/gorm"
 )
 
-// ── Run recording (execution report) ─────────────────────────────────────────
-
-// RecordRun durably inserts one execution-report row. Best-effort: the processor
-// calls it AFTER a job attempt, off the durable hot path, so a failed insert is
-// logged and ignored (it can never fail the job itself).
 func (s *Store) RecordRun(ctx context.Context, r Run) error {
 	if r.ID == "" {
 		r.ID = uuid.NewString()
@@ -23,9 +18,6 @@ func (s *Store) RecordRun(ctx context.Context, r Run) error {
 	return s.db.WithContext(ctx).Create(&r).Error
 }
 
-// ── Listing / filtering (observability) ──────────────────────────────────────
-
-// clampPage normalises a page request: limit ∈ [1,500] (default 50), offset ≥ 0.
 func clampPage(limit, offset int) (int, int) {
 	if limit <= 0 {
 		limit = 50
@@ -39,7 +31,6 @@ func clampPage(limit, offset int) (int, int) {
 	return limit, offset
 }
 
-// JobFilter narrows a job-history query. Empty fields are wildcards.
 type JobFilter struct {
 	AppID     string
 	TriggerID string
@@ -48,7 +39,6 @@ type JobFilter struct {
 	Offset    int
 }
 
-// ListJobs returns matching jobs, newest activity first (UpdatedAt desc), paged.
 func (s *Store) ListJobs(ctx context.Context, f JobFilter) ([]Job, error) {
 	limit, offset := clampPage(f.Limit, f.Offset)
 	q := s.db.WithContext(ctx).Model(&Job{})
@@ -65,7 +55,6 @@ func (s *Store) ListJobs(ctx context.Context, f JobFilter) ([]Job, error) {
 	return out, q.Order("updated_at desc").Limit(limit).Offset(offset).Find(&out).Error
 }
 
-// RunFilter narrows an execution-report query. Empty fields are wildcards.
 type RunFilter struct {
 	AppID     string
 	TriggerID string
@@ -75,7 +64,6 @@ type RunFilter struct {
 	Offset    int
 }
 
-// ListRuns returns matching execution reports, newest first (StartedAt desc), paged.
 func (s *Store) ListRuns(ctx context.Context, f RunFilter) ([]Run, error) {
 	limit, offset := clampPage(f.Limit, f.Offset)
 	q := s.db.WithContext(ctx).Model(&Run{})
@@ -95,9 +83,6 @@ func (s *Store) ListRuns(ctx context.Context, f RunFilter) ([]Run, error) {
 	return out, q.Order("started_at desc").Limit(limit).Offset(offset).Find(&out).Error
 }
 
-// AllTriggers lists triggers for the ops surface. appID == "" → all apps;
-// enabledOnly == false → include disabled ones (so an operator sees the full set,
-// not only the live ones). Newest first.
 func (s *Store) AllTriggers(ctx context.Context, appID string, enabledOnly bool) ([]Trigger, error) {
 	q := s.db.WithContext(ctx).Model(&Trigger{})
 	if appID != "" {
@@ -110,11 +95,6 @@ func (s *Store) AllTriggers(ctx context.Context, appID string, enabledOnly bool)
 	return out, q.Order("created_at desc").Find(&out).Error
 }
 
-// PurgeApp deletes every trigger, job and run belonging to an app — called when
-// the app is uninstalled so no armed listener keeps firing and no run history
-// lingers orphaned. Live adapters must be disarmed by the caller BEFORE this
-// (the store is pure persistence and holds no adapter handles). Runs in one
-// transaction; returns how many triggers, jobs and runs were removed.
 func (s *Store) PurgeApp(ctx context.Context, appID string) (triggers, jobs, runs int64, err error) {
 	if appID == "" {
 		return 0, 0, 0, nil
@@ -140,8 +120,6 @@ func (s *Store) PurgeApp(ctx context.Context, appID string) (triggers, jobs, run
 	return triggers, jobs, runs, err
 }
 
-// ListSchedules returns the user-programmed session wake-ups (Kind="schedule"),
-// optionally narrowed to an app. Newest first.
 func (s *Store) ListSchedules(ctx context.Context, appID string) ([]Trigger, error) {
 	q := s.db.WithContext(ctx).Model(&Trigger{}).Where("kind = ?", "schedule")
 	if appID != "" {
@@ -151,7 +129,6 @@ func (s *Store) ListSchedules(ctx context.Context, appID string) ([]Trigger, err
 	return out, q.Order("created_at desc").Find(&out).Error
 }
 
-// TriggerStat is a per-trigger execution summary for the ops report.
 type TriggerStat struct {
 	TriggerID string           `json:"trigger_id"`
 	Total     int64            `json:"total"`
@@ -159,10 +136,6 @@ type TriggerStat struct {
 	LastRun   *time.Time       `json:"last_run,omitempty"`
 }
 
-// TriggerStats aggregates a trigger's run outcomes + last run time. The counts
-// come from a GROUP BY; the last-run time is read via the typed model (a SQL
-// max() over a datetime column comes back as text and won't scan into time.Time
-// on SQLite, so we read the latest row instead).
 func (s *Store) TriggerStats(ctx context.Context, triggerID string) (TriggerStat, error) {
 	var rows []struct {
 		Outcome string
@@ -191,12 +164,6 @@ func (s *Store) TriggerStats(ctx context.Context, triggerID string) (TriggerStat
 	return st, nil
 }
 
-// ── Control (piloting) ───────────────────────────────────────────────────────
-
-// SetTriggerEnabled flips a trigger's live enabled state. This is a RUNTIME
-// override: on restart, config discovery re-arms from YAML and is authoritative,
-// so a runtime disable does not survive a restart unless the YAML also changes.
-// Returns false if no such trigger exists.
 func (s *Store) SetTriggerEnabled(ctx context.Context, id string, enabled bool) (bool, error) {
 	res := s.db.WithContext(ctx).Model(&Trigger{}).Where("id = ?", id).Update("enabled", enabled)
 	if res.Error != nil {

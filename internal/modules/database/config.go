@@ -10,9 +10,6 @@ import (
 	"github.com/digitornai/digitorn/internal/dbaccess"
 )
 
-// Config is the per-app database module configuration : a set of named
-// connections (opened + pooled by the service, so the agent usually only needs
-// `query`) plus the gate for agent-supplied raw DSNs.
 type Config struct {
 	Databases   []DBConn `json:"databases" jsonschema:"title=Databases,description=Named connections this app can query."`
 	AllowRawDSN bool     `json:"allow_raw_dsn" jsonschema:"title=Allow raw DSN,description=Let agents open ad-hoc connections with a raw DSN."`
@@ -82,8 +79,6 @@ func (c Config) find(name string) (DBConn, bool) {
 	return DBConn{}, false
 }
 
-// toConnConfig resolves the DSN (dsn_ref → env, never exposing creds to the
-// agent) and maps the YAML security + schema decoration onto the dbaccess types.
 func (d DBConn) toConnConfig() (dbaccess.ConnConfig, error) {
 	dsn := strings.TrimSpace(d.DSN)
 	if d.DSNRef != "" {

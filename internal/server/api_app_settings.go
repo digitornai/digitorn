@@ -10,9 +10,6 @@ import (
 	"github.com/digitornai/digitorn/internal/modulesettings"
 )
 
-// secretSentinel is returned in place of a stored secret value: the UI shows
-// "set" and echoes it back unchanged on save (the daemon then keeps the old
-// value). A real secret is NEVER sent to the client.
 const secretSentinel = "••• set"
 
 type moduleSettingsEntry struct {
@@ -22,10 +19,6 @@ type moduleSettingsEntry struct {
 	Value       any            `json:"value"`
 }
 
-// appModuleSettings lists, for each module an app declares, its config JSON
-// Schema (from the module manifest) + the current effective value (the YAML
-// `config:` block, secrets redacted). Phase A: value = the bundle defaults; the
-// per-user BYOK deltas overlay lands in Phase B.
 func (d *Daemon) appModuleSettings(w http.ResponseWriter, r *http.Request) {
 	appID := chi.URLParam(r, "app_id")
 	ra, err := d.appMgr.Get(r.Context(), appID)
@@ -39,10 +32,8 @@ func (d *Daemon) appModuleSettings(w http.ResponseWriter, r *http.Request) {
 	for moduleID, block := range ra.Definition.Tools.Modules {
 		man, ok := d.modules.Manifest(moduleID)
 		if !ok || len(man.ConfigSchema) == 0 {
-			continue // module declares no config schema → nothing to surface
+			continue
 		}
-		// Effective value = YAML defaults deep-merged with the user's saved
-		// deltas (cloned, so the live app config is never mutated), redacted.
 		var deltas map[string]any
 		if d.moduleSettings != nil {
 			deltas = d.moduleSettings.Deltas(r.Context(), userID, appID, moduleID)
@@ -59,11 +50,6 @@ func (d *Daemon) appModuleSettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"modules": out, "count": len(out)})
 }
 
-// setAppModuleConfig saves the calling user's config deltas for one module
-// (BYOK per-user layer). The submitted value is the full effective config from
-// the form; we restore unchanged secrets (sentinel) from the previous value,
-// then store only the sparse diff vs the YAML defaults (sealed). Takes effect
-// on the user's next tool call when the app's BYOK flag is on.
 func (d *Daemon) setAppModuleConfig(w http.ResponseWriter, r *http.Request) {
 	if d.moduleSettings == nil {
 		writeError(w, http.StatusServiceUnavailable, "unavailable", "module settings unavailable (server key missing)")
@@ -95,13 +81,10 @@ func (d *Daemon) setAppModuleConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	schema := man.ConfigSchema
 
-	// Restore unchanged secrets: a password field echoed back as the sentinel
-	// keeps its previous effective value (delta or default), never the sentinel.
-	bundle := modulesettings.DeepMerge(block.Config, nil) // a clean clone of the defaults
+	bundle := modulesettings.DeepMerge(block.Config, nil)
 	prev := modulesettings.DeepMerge(bundle, d.moduleSettings.Deltas(r.Context(), userID, appID, moduleID))
 	restoreSecrets(submitted, schema, prev)
 
-	// Persist only the sparse diff vs the YAML defaults.
 	deltas := modulesettings.Diff(submitted, bundle)
 	if err := d.moduleSettings.Set(r.Context(), userID, appID, moduleID, deltas); err != nil {
 		writeError(w, http.StatusInternalServerError, "save_failed", err.Error())
@@ -111,9 +94,6 @@ func (d *Daemon) setAppModuleConfig(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"value": redactSecrets(merged, schema)})
 }
 
-// restoreSecrets replaces, in `submitted` (mutated in place), every password
-// field whose value is the sentinel with the corresponding value from `prev`,
-// so an unchanged secret is never written as the sentinel.
 func restoreSecrets(submitted any, schema map[string]any, prev any) {
 	if schema == nil {
 		return
@@ -156,8 +136,6 @@ func restoreSecrets(submitted any, schema map[string]any, prev any) {
 	}
 }
 
-// deepCopyJSON clones a config map so redaction never mutates the live app
-// definition held in memory.
 func deepCopyJSON(v map[string]any) any {
 	if v == nil {
 		return map[string]any{}
@@ -173,9 +151,6 @@ func deepCopyJSON(v map[string]any) any {
 	return out
 }
 
-// redactSecrets walks a value alongside its JSON Schema and replaces every
-// non-empty string whose schema marks `format: password` with the sentinel.
-// Handles nested objects (properties) and arrays (items).
 func redactSecrets(v any, schema map[string]any) any {
 	if v == nil || schema == nil {
 		return v

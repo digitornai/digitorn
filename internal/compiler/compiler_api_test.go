@@ -11,9 +11,6 @@ import (
 	"github.com/digitornai/digitorn/internal/compiler/codegen"
 )
 
-// TestCompilerAPI_BuildDeterministic verifies that compiling the same
-// fixture twice produces byte-identical artifacts. This is critical for
-// reproducible builds and content-addressable caching.
 func TestCompilerAPI_BuildDeterministic(t *testing.T) {
 	for _, fix := range []string{"minimal_chat", "full_featured"} {
 		fix := fix
@@ -40,15 +37,9 @@ func TestCompilerAPI_BuildDeterministic(t *testing.T) {
 				t.Fatalf("build #2: %v", err)
 			}
 
-			// CompiledAt is the only intentionally-non-deterministic field
-			// (it's the build clock). For the byte-determinism check we
-			// pin it to a fixed value in both artifacts ; the payload +
-			// VersionHash + headers below it are what we actually want to
-			// validate as content-addressable.
 			a1.Header.CompiledAt = 0
 			a2.Header.CompiledAt = 0
 
-			// Encode both artifacts and compare.
 			b1, err := codegen.EncodeBytes(a1)
 			if err != nil {
 				t.Fatalf("encode #1: %v", err)
@@ -67,9 +58,6 @@ func TestCompilerAPI_BuildDeterministic(t *testing.T) {
 	}
 }
 
-// TestCompilerAPI_BuildRefusesWithErrors verifies that Build refuses to
-// produce an artifact when the result has any error. This is a critical
-// safety property : the daemon should never load an invalid manifest.
 func TestCompilerAPI_BuildRefusesWithErrors(t *testing.T) {
 	fixPath := filepath.Join("testdata", "invalid", "duplicate_agent_id")
 	c := newCompilerForFixtures(t)
@@ -89,7 +77,6 @@ func TestCompilerAPI_BuildRefusesWithErrors(t *testing.T) {
 	}
 }
 
-// TestCompilerAPI_BuildRefusesNilResult verifies defensive handling.
 func TestCompilerAPI_BuildRefusesNilResult(t *testing.T) {
 	c := compiler.New()
 	if _, err := c.Build(nil); err == nil {
@@ -97,8 +84,6 @@ func TestCompilerAPI_BuildRefusesNilResult(t *testing.T) {
 	}
 }
 
-// TestCompilerAPI_CompileNonexistentPath verifies a clean error on
-// missing files (not a panic or hang).
 func TestCompilerAPI_CompileNonexistentPath(t *testing.T) {
 	c := compiler.New()
 	res, err := c.Compile(filepath.Join("testdata", "this", "does", "not", "exist"))
@@ -107,9 +92,6 @@ func TestCompilerAPI_CompileNonexistentPath(t *testing.T) {
 	}
 }
 
-// TestCompilerAPI_ConcurrentCompile verifies that one Compiler instance
-// can serve many goroutines compiling different bundles in parallel
-// without races (catalog is shared but should be read-only after load).
 func TestCompilerAPI_ConcurrentCompile(t *testing.T) {
 	c := newCompilerForFixtures(t)
 	fixtures := []string{

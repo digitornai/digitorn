@@ -1,6 +1,3 @@
-// Package webhook is the webhook adapter: inbound HTTP deliveries become Events
-// (HMAC / API-key verified, size- and content-type-bounded, payload sanitized)
-// and replies (reply:auto) are POSTed back to a callback URL with an SSRF guard.
 package webhook
 
 import (
@@ -24,7 +21,7 @@ import (
 )
 
 const (
-	defaultMaxBytes  = 1 << 20 // 1 MB
+	defaultMaxBytes  = 1 << 20
 	defaultSigHeader = "X-Signature-256"
 )
 
@@ -34,23 +31,19 @@ var allowedContentTypes = map[string]struct{}{
 	"text/plain":                        {},
 }
 
-// Provider is one inbound webhook endpoint.
 type Provider struct {
 	Name         string
-	Path         string // inbound path (e.g. /hook/github)
-	Auth         string // "signature" | "api_key" | "none"
-	Secret       string // HMAC-SHA256 secret (signature auth)
-	SigHeader    string // signature header (default X-Signature-256)
-	APIKey       string // expected api key (api_key auth)
-	APIKeyHeader string // api-key header (default X-API-Key)
-	MaxBytes     int64  // payload cap (default 1 MB)
-	CallbackURL  string // reply:auto outbound target
-	// AllowPrivate lets THIS provider's replies target private/loopback hosts —
-	// for intranet ticketing systems whose callback lives on RFC-1918 space.
+	Path         string
+	Auth         string
+	Secret       string
+	SigHeader    string
+	APIKey       string
+	APIKeyHeader string
+	MaxBytes     int64
+	CallbackURL  string
 	AllowPrivate bool
 }
 
-// Adapter handles a set of webhook providers.
 type Adapter struct {
 	byPath map[string]Provider
 	hc     *http.Client
@@ -58,11 +51,9 @@ type Adapter struct {
 	mu   sync.RWMutex
 	sink adapter.Sink
 
-	// AllowPrivate disables the outbound SSRF guard (tests only).
 	AllowPrivate bool
 }
 
-// New builds the adapter from providers (keyed by path).
 func New(providers []Provider) *Adapter {
 	byPath := make(map[string]Provider, len(providers))
 	for _, p := range providers {
@@ -96,7 +87,6 @@ func (a *Adapter) Arm(p Provider) error {
 
 func (a *Adapter) Name() string { return "webhook" }
 
-// Start stores the sink; serving is done by the service mounting Handler().
 func (a *Adapter) Start(ctx context.Context, sink adapter.Sink) error {
 	a.mu.Lock()
 	a.sink = sink
@@ -111,7 +101,6 @@ func (a *Adapter) currentSink() adapter.Sink {
 	return a.sink
 }
 
-// Handler is the inbound HTTP handler the service mounts.
 func (a *Adapter) Handler() http.Handler { return http.HandlerFunc(a.serve) }
 
 func (a *Adapter) serve(w http.ResponseWriter, r *http.Request) {
@@ -153,7 +142,7 @@ func (a *Adapter) serve(w http.ResponseWriter, r *http.Request) {
 
 	payload := map[string]any{}
 	if len(body) > 0 {
-		_ = json.Unmarshal(body, &payload) // non-JSON bodies still deliver (empty payload + raw)
+		_ = json.Unmarshal(body, &payload)
 	}
 	ev := adapter.Event{
 		Provider: p.Name,
@@ -199,7 +188,6 @@ func (a *Adapter) authOK(p Provider, r *http.Request, body []byte) bool {
 	}
 }
 
-// Send POSTs the reply text to the event's callback URL (SSRF-guarded).
 func (a *Adapter) Send(ctx context.Context, ref map[string]any, text string) error {
 	raw, _ := ref["url"].(string)
 	if raw == "" {
@@ -227,8 +215,6 @@ func (a *Adapter) Send(ctx context.Context, ref map[string]any, text string) err
 	return nil
 }
 
-// safeURL blocks SSRF: only http/https, and (unless AllowPrivate) no private,
-// loopback, link-local, unspecified, or cloud-metadata destinations.
 func (a *Adapter) safeURL(raw string, allowPrivate bool) error {
 	u, err := url.Parse(raw)
 	if err != nil {
@@ -263,8 +249,6 @@ func contentType(h string) string {
 	return strings.ToLower(strings.TrimSpace(h))
 }
 
-// deliveryID uses a provider-supplied delivery header when present (the natural
-// idempotency key), else a content hash.
 func deliveryID(r *http.Request, body []byte) string {
 	for _, h := range []string{"X-Delivery-Id", "X-GitHub-Delivery", "X-Request-Id", "Idempotency-Key"} {
 		if v := r.Header.Get(h); v != "" {

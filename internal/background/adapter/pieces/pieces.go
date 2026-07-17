@@ -1,7 +1,3 @@
-// Package pieces is the Activepieces polling trigger adapter. Each armed
-// trigger calls /trigger/poll on the bridge trigger server at its configured
-// interval, persists the storeState (Activepieces cursor) between polls, and
-// emits one Event per returned event via the shared Sink.
 package pieces
 
 import (
@@ -19,13 +15,11 @@ import (
 	"github.com/digitornai/digitorn/internal/background/adapter"
 )
 
-// CursorStore persists the Activepieces storeState between polls.
 type CursorStore interface {
 	Cursor(ctx context.Context, key string) string
 	SetCursor(ctx context.Context, key, value string) error
 }
 
-// Provider is one armed Pieces trigger.
 type Provider struct {
 	Name       string
 	TriggerURL string
@@ -37,7 +31,6 @@ type Provider struct {
 	Interval   time.Duration
 }
 
-// Adapter polls a set of Pieces triggers with their own storeState-aware loop.
 type Adapter struct {
 	mu        sync.Mutex
 	providers []Provider
@@ -72,7 +65,6 @@ func (a *Adapter) Start(ctx context.Context, sink adapter.Sink) error {
 	return nil
 }
 
-// Arm adds a provider and starts polling it live without restarting the service.
 func (a *Adapter) Arm(p Provider) {
 	a.mu.Lock()
 	ctx, sink := a.ctx, a.sink
@@ -88,7 +80,7 @@ func (a *Adapter) loop(ctx context.Context, p Provider, sink adapter.Sink) {
 	if interval <= 0 {
 		interval = 60 * time.Second
 	}
-	a.poll(ctx, p, sink) // immediate first poll
+	a.poll(ctx, p, sink)
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
@@ -115,7 +107,6 @@ type pollResponse struct {
 }
 
 func (a *Adapter) poll(ctx context.Context, p Provider, sink adapter.Sink) {
-	// Load persisted storeState from cursor store.
 	storeState := map[string]any{}
 	if cur := a.cursors.Cursor(ctx, p.CursorKey); cur != "" {
 		_ = json.Unmarshal([]byte(cur), &storeState)
@@ -157,14 +148,12 @@ func (a *Adapter) poll(ctx context.Context, p Provider, sink adapter.Sink) {
 		return
 	}
 
-	// Persist new storeState (cursor) regardless of events.
 	if len(pr.StoreState) > 0 {
 		if data, err := json.Marshal(pr.StoreState); err == nil {
 			_ = a.cursors.SetCursor(ctx, p.CursorKey, string(data))
 		}
 	}
 
-	// On first run, initialize cursor but don't emit events (avoid replay).
 	if firstRun {
 		return
 	}
@@ -239,7 +228,6 @@ func eventID(ev map[string]any, piece, trigger string, pos int) string {
 	return fmt.Sprintf("%s:%s:pos%d:%s", piece, trigger, pos, h)
 }
 
-// TriggerURL returns the default bridge trigger server URL for the given port.
 func TriggerURL(port int) string {
 	return strings.TrimRight(fmt.Sprintf("http://127.0.0.1:%d", port), "/")
 }

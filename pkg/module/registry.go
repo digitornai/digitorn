@@ -10,13 +10,8 @@ import (
 	domainmodule "github.com/digitornai/digitorn/internal/domain/module"
 )
 
-// Factory builds a fresh module instance. Registering a factory (not an
-// instance) lets the registry create per-app instances and recover from a
-// crashed module.
 type Factory func() domainmodule.Module
 
-// Bus is the minimal surface a Registry needs from a service bus to publish
-// modules once they become ACTIVE. The daemon's ServiceBus satisfies it.
 type Bus interface {
 	Register(m domainmodule.Module) error
 	Unregister(id string) error
@@ -44,8 +39,6 @@ func NewRegistry() *Registry {
 	}
 }
 
-// WithBus sets the bus modules are registered with when they transition to
-// ACTIVE. Returns r to support fluent wiring.
 func (r *Registry) WithBus(b Bus) *Registry {
 	r.mu.Lock()
 	r.bus = b
@@ -53,8 +46,6 @@ func (r *Registry) WithBus(b Bus) *Registry {
 	return r
 }
 
-// Register adds a module factory. Modules whose SupportedPlatforms exclude
-// the current OS are silently skipped.
 func (r *Registry) Register(f Factory) error {
 	if f == nil {
 		return fmt.Errorf("registry: nil factory")
@@ -78,21 +69,18 @@ func (r *Registry) Register(f Factory) error {
 	return nil
 }
 
-// MustRegister panics on error — designed for use from package init().
 func (r *Registry) MustRegister(f Factory) {
 	if err := r.Register(f); err != nil {
 		panic(err)
 	}
 }
 
-// Configure stores the per-module config that Init() will receive on Start.
 func (r *Registry) Configure(id string, cfg map[string]any) {
 	r.mu.Lock()
 	r.configs[id] = cfg
 	r.mu.Unlock()
 }
 
-// Get returns the module for id, instantiating it lazily on first access.
 func (r *Registry) Get(id string) (domainmodule.Module, error) {
 	r.mu.RLock()
 	if m, ok := r.instances[id]; ok {
@@ -120,7 +108,6 @@ func (r *Registry) Get(id string) (domainmodule.Module, error) {
 	return m, nil
 }
 
-// Create builds a fresh, uncached instance — useful for non-singleton modules.
 func (r *Registry) Create(id string) (domainmodule.Module, error) {
 	r.mu.RLock()
 	f, ok := r.factories[id]
@@ -167,15 +154,12 @@ func (r *Registry) Manifest(id string) (domainmodule.Manifest, bool) {
 	return m, ok
 }
 
-// State returns the current lifecycle state of a registered module.
 func (r *Registry) State(id string) State {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.states[id]
 }
 
-// Start brings one module up: instantiate (if needed), Init, Start, attach to
-// the bus. Records the new state on every transition.
 func (r *Registry) Start(ctx context.Context, id string) error {
 	m, err := r.Get(id)
 	if err != nil {
@@ -201,7 +185,6 @@ func (r *Registry) Start(ctx context.Context, id string) error {
 	return nil
 }
 
-// StartAll starts every registered module, collecting errors per module.
 func (r *Registry) StartAll(ctx context.Context) []error {
 	var errs []error
 	for _, id := range r.IDs() {
@@ -212,11 +195,6 @@ func (r *Registry) StartAll(ctx context.Context) []error {
 	return errs
 }
 
-// StartExcept starts every registered module EXCEPT those whose ID is
-// in the exclude list. Used by the daemon's bootstrap to skip modules
-// that are hosted by worker subprocesses : their daemon-side instance
-// stays dormant (factory registered but never instantiated), only the
-// ProxyModule lives in the servicebus.
 func (r *Registry) StartExcept(ctx context.Context, exclude []string) []error {
 	excl := make(map[string]struct{}, len(exclude))
 	for _, id := range exclude {
@@ -234,8 +212,6 @@ func (r *Registry) StartExcept(ctx context.Context, exclude []string) []error {
 	return errs
 }
 
-// Pause flips an ACTIVE module to PAUSED via the optional Pauser interface.
-// Modules that don't implement Pauser are silently skipped.
 func (r *Registry) Pause(ctx context.Context, id string) error {
 	r.mu.RLock()
 	m, ok := r.instances[id]
@@ -254,7 +230,6 @@ func (r *Registry) Pause(ctx context.Context, id string) error {
 	return nil
 }
 
-// Resume flips a PAUSED module back to ACTIVE.
 func (r *Registry) Resume(ctx context.Context, id string) error {
 	r.mu.RLock()
 	m, ok := r.instances[id]
@@ -273,8 +248,6 @@ func (r *Registry) Resume(ctx context.Context, id string) error {
 	return nil
 }
 
-// UpdateConfig dispatches a hot config reload to a module that implements
-// the Reloader interface; otherwise no-op.
 func (r *Registry) UpdateConfig(ctx context.Context, id string, cfg map[string]any) error {
 	r.mu.Lock()
 	r.configs[id] = cfg
@@ -295,7 +268,6 @@ func (r *Registry) UpdateConfig(ctx context.Context, id string, cfg map[string]a
 	return nil
 }
 
-// Stop tears one module down and detaches it from the bus.
 func (r *Registry) Stop(ctx context.Context, id string) error {
 	r.mu.RLock()
 	m, ok := r.instances[id]
@@ -315,7 +287,6 @@ func (r *Registry) Stop(ctx context.Context, id string) error {
 	return nil
 }
 
-// StopAll stops every active module.
 func (r *Registry) StopAll(ctx context.Context) []error {
 	r.mu.RLock()
 	ids := make([]string, 0, len(r.instances))
@@ -358,8 +329,6 @@ func (r *Registry) snapshotBus() Bus {
 	return r.bus
 }
 
-// Default is the process-wide registry. Modules use Register() / MustRegister()
-// in their package init() to advertise themselves.
 var Default = NewRegistry()
 
 func Register(f Factory) error { return Default.Register(f) }

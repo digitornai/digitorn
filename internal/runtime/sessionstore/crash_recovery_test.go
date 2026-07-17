@@ -12,23 +12,12 @@ import (
 	"time"
 )
 
-// H3 — Crash recovery tests at the BYTE level. These tests go further
-// than the in-process "simulate crash by re-loading" pattern : they
-// physically corrupt the on-disk artifacts in ways that mimic what a
-// real kill -9 produces (truncated last fsync, partial page write).
-
-// TestRecovery_TruncatedLastJSONLLine_BestEffort simulates a kill -9
-// between a partial fsync and the end of an event line. Bytes are
-// truncated mid-line. Best-effort load must skip the partial line and
-// recover the rest.
 func TestRecovery_TruncatedLastJSONLLine_BestEffort(t *testing.T) {
 	tmp := t.TempDir()
 	paths := NewPaths(tmp)
 	sid := "sess-trunc"
 	setupSession(t, paths, sid, 5)
 
-	// Truncate the last 8 bytes of the JSONL — leaves the final event
-	// half-written without the trailing newline.
 	path := paths.EventsFile(sid)
 	info, err := os.Stat(path)
 	if err != nil {
@@ -56,10 +45,6 @@ func TestRecovery_TruncatedLastJSONLLine_BestEffort(t *testing.T) {
 	}
 }
 
-// TestRecovery_TruncatedLastJSONLLine_Strict ensures strict mode
-// refuses to load a partially-written file. The daemon should pick
-// best-effort or surface the error to the operator — never silently
-// fabricate a state.
 func TestRecovery_TruncatedLastJSONLLine_Strict(t *testing.T) {
 	tmp := t.TempDir()
 	paths := NewPaths(tmp)
@@ -77,10 +62,6 @@ func TestRecovery_TruncatedLastJSONLLine_Strict(t *testing.T) {
 	}
 }
 
-// TestRecovery_CorruptedSnapshot_HashMismatch flips a byte in the
-// middle of a snapshot file. VerifySnapshot must detect it and refuse
-// to use the snapshot — the loader should then fall back to replaying
-// the JSONL.
 func TestRecovery_CorruptedSnapshot_HashMismatch(t *testing.T) {
 	tmp := t.TempDir()
 	paths := NewPaths(tmp)
@@ -97,7 +78,6 @@ func TestRecovery_CorruptedSnapshot_HashMismatch(t *testing.T) {
 		t.Fatal("nothing compacted")
 	}
 
-	// Find the snapshot file and flip one byte in the middle.
 	snapPath := filepath.Join(paths.SessionDir(sid), "snapshot.json")
 	data, err := os.ReadFile(snapPath)
 	if err != nil {
@@ -112,7 +92,6 @@ func TestRecovery_CorruptedSnapshot_HashMismatch(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The original hash must reject the corrupted bytes.
 	if err := VerifySnapshot(corrupted, res.SnapshotSHA256); err == nil {
 		t.Fatal("VerifySnapshot did NOT detect corrupted bytes")
 	} else if !strings.Contains(err.Error(), "hash") && !strings.Contains(err.Error(), "mismatch") {
@@ -120,10 +99,6 @@ func TestRecovery_CorruptedSnapshot_HashMismatch(t *testing.T) {
 	}
 }
 
-// TestRecovery_CorruptedMetaJSON_RebuildsFromJSONL verifies the meta.json
-// can be invalid JSON entirely — the loader scans the JSONL and rebuilds
-// a coherent meta. (Existing TestCompact_RebuildsInconsistentMeta only
-// covers STALE meta — here we test SYNTACTICALLY broken meta.)
 func TestRecovery_CorruptedMetaJSON_RebuildsFromJSONL(t *testing.T) {
 	tmp := t.TempDir()
 	paths := NewPaths(tmp)
@@ -146,7 +121,6 @@ func TestRecovery_CorruptedMetaJSON_RebuildsFromJSONL(t *testing.T) {
 		t.Fatalf("rebuilt state.last_seq: %d", loaded.State.LastSeq)
 	}
 
-	// The new meta file should now be readable.
 	meta, err := ReadMeta(metaPath)
 	if err != nil {
 		t.Fatalf("read rebuilt meta: %v", err)
@@ -156,10 +130,6 @@ func TestRecovery_CorruptedMetaJSON_RebuildsFromJSONL(t *testing.T) {
 	}
 }
 
-// TestRecovery_EmptySessionDir_LoadsCleanly covers the boot path where a
-// session directory exists but no events were ever flushed (daemon was
-// killed between session creation and first append). Loader must return
-// an empty state without erroring.
 func TestRecovery_EmptySessionDir_LoadsCleanly(t *testing.T) {
 	tmp := t.TempDir()
 	paths := NewPaths(tmp)
@@ -180,8 +150,6 @@ func TestRecovery_EmptySessionDir_LoadsCleanly(t *testing.T) {
 	}
 }
 
-// TestRecovery_ZeroByteEventsFile_NoCrash : if the events file exists but
-// is 0 bytes (touched but never written), Load must handle it cleanly.
 func TestRecovery_ZeroByteEventsFile_NoCrash(t *testing.T) {
 	tmp := t.TempDir()
 	paths := NewPaths(tmp)
@@ -202,15 +170,6 @@ func TestRecovery_ZeroByteEventsFile_NoCrash(t *testing.T) {
 	}
 }
 
-// TestRecovery_ConcurrentAppendDuringCompaction stresses the race
-// between an active flusher write path and a Compact() call. Goal :
-// every event must end up either in the snapshot's projected state OR
-// in the tail JSONL — never lost, never duplicated.
-//
-// Setup : 1 session, 1 shard, 1 writer pushing 200 events while a
-// compactor fires concurrently after the first 50. At the end, total
-// events on disk (snapshot state count + tail JSONL lines) must equal
-// the writer's count.
 func TestRecovery_ConcurrentAppendDuringCompaction(t *testing.T) {
 	tmp := t.TempDir()
 	paths := NewPaths(tmp)
@@ -261,15 +220,12 @@ func TestRecovery_ConcurrentAppendDuringCompaction(t *testing.T) {
 				return
 			}
 			appended.Add(1)
-			// Light pacing so the compactor can interleave.
 			if i%20 == 0 {
 				time.Sleep(time.Millisecond)
 			}
 		}
 	}()
 
-	// Wait until ~50 events landed, then fire a compaction concurrent
-	// with the rest of the writes.
 	for appended.Load() < 50 {
 		time.Sleep(time.Millisecond)
 	}
@@ -295,7 +251,6 @@ func TestRecovery_ConcurrentAppendDuringCompaction(t *testing.T) {
 		t.Fatalf("appended %d / %d", appended.Load(), total)
 	}
 
-	// Drain flusher and verify integrity via Load.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := flusher.Flush(ctx); err != nil {
@@ -306,22 +261,17 @@ func TestRecovery_ConcurrentAppendDuringCompaction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	// LastSeq must be >= total (compact_done event also bumps seq).
 	if loaded.State.LastSeq < uint64(total) {
 		t.Fatalf("last_seq %d < expected %d", loaded.State.LastSeq, total)
 	}
 }
 
-// TestRecovery_QuarantineWrittenForCorruptedLines ensures that
-// best-effort recovery quarantines the corrupted bytes for forensic
-// analysis rather than discarding them silently.
 func TestRecovery_QuarantineWrittenForCorruptedLines(t *testing.T) {
 	tmp := t.TempDir()
 	paths := NewPaths(tmp)
 	sid := "sess-quarantine"
 	setupSession(t, paths, sid, 4)
 
-	// Inject 2 corrupt lines.
 	f, err := os.OpenFile(paths.EventsFile(sid), os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		t.Fatal(err)
@@ -348,9 +298,6 @@ func TestRecovery_QuarantineWrittenForCorruptedLines(t *testing.T) {
 	}
 }
 
-// TestRecovery_ManyEmptyLinesInJSONL : blank lines (Windows editors
-// sometimes inject CR/LF artifacts) must be silently skipped without
-// being counted as bad lines.
 func TestRecovery_ManyEmptyLinesInJSONL(t *testing.T) {
 	tmp := t.TempDir()
 	paths := NewPaths(tmp)
@@ -373,10 +320,6 @@ func TestRecovery_ManyEmptyLinesInJSONL(t *testing.T) {
 	}
 }
 
-// TestRecovery_SnapshotPlusTailJSONLConsistency exercises the typical
-// post-compaction state : snapshot.json holds projected state up to
-// cutoff_seq, events.jsonl has only events ABOVE cutoff. Load must
-// merge them correctly.
 func TestRecovery_SnapshotPlusTailJSONLConsistency(t *testing.T) {
 	tmp := t.TempDir()
 	paths := NewPaths(tmp)
@@ -394,11 +337,10 @@ func TestRecovery_SnapshotPlusTailJSONLConsistency(t *testing.T) {
 		t.Fatal("no cutoff")
 	}
 
-	// Append 5 more events AFTER the compaction.
 	more := make([]Event, 5)
 	for i := range more {
 		more[i] = Event{
-			Seq:        cutoff + uint64(i) + 2, // +2 to skip compact_done seq
+			Seq:        cutoff + uint64(i) + 2,
 			Type:       EventUserMessage,
 			SessionID:  sid,
 			TsUnixNano: time.Now().UnixNano(),
@@ -419,8 +361,6 @@ func TestRecovery_SnapshotPlusTailJSONLConsistency(t *testing.T) {
 	}
 }
 
-// TestRecovery_ParallelLoadsOfSameSession ensures Load() is safe to call
-// from many goroutines simultaneously without races.
 func TestRecovery_ParallelLoadsOfSameSession(t *testing.T) {
 	tmp := t.TempDir()
 	paths := NewPaths(tmp)
@@ -445,5 +385,4 @@ func TestRecovery_ParallelLoadsOfSameSession(t *testing.T) {
 	wg.Wait()
 }
 
-// Stub used by tests to ensure encoding/json is referenced (compactness).
 var _ = json.Marshal

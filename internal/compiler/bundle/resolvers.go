@@ -34,8 +34,6 @@ func BehaviorResolver(b *Bundle) expr.Resolver {
 	})
 }
 
-// AssetResolver joins all path segments back with '.' so {{asset.logo.png}}
-// targets the file `logo.png`.
 func AssetResolver(b *Bundle, appID string) expr.Resolver {
 	return expr.ResolverFunc(func(path []string) (string, error) {
 		if len(path) == 0 {

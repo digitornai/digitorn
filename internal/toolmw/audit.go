@@ -10,8 +10,6 @@ import (
 	"github.com/digitornai/digitorn/internal/domain/tool"
 )
 
-// audit logs every tool call with timing and outcome, and keeps lock-free
-// counters for a future /metrics surface.
 type audit struct {
 	logParams bool
 	logResult bool
@@ -81,8 +79,6 @@ func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
-	// Back up to a rune boundary so an audit value is never cut mid-rune
-	// (a raw s[:n] can emit invalid UTF-8 into the audit row / JSON).
 	for n > 0 && !utf8.RuneStart(s[n]) {
 		n--
 	}

@@ -7,13 +7,9 @@ import (
 	"path/filepath"
 )
 
-// Decompose applies an app-written composed document back onto the fragments,
-// diffing by id: only changed items rewrite their fragment, removed items
-// delete theirs, new items get one. Returns the touched fragment paths
-// (relative to dir). An unchanged composed (echo of our own compose) is a no-op.
 func Decompose(m Manifest, composed []byte, dir string, j *Journal) (changed []string, err error) {
 	if j.ComposedHash != "" && hashRaw(composed) == j.ComposedHash {
-		return nil, nil // echo of our own compose — anti-loop
+		return nil, nil
 	}
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal(composed, &top); err != nil {
@@ -41,7 +37,7 @@ func Decompose(m Manifest, composed []byte, dir string, j *Journal) (changed []s
 		seen := map[string]bool{}
 		for _, it := range items {
 			if isGeneratedID(m, it.id) {
-				continue // resolver-generated element — never a hand-authored fragment
+				continue
 			}
 			jk := c.Name + "/" + it.id
 			if name := j.Files[jk]; name != "" {
@@ -96,8 +92,6 @@ func Decompose(m Manifest, composed []byte, dir string, j *Journal) (changed []s
 	return changed, nil
 }
 
-// RecordComposed refreshes the journal after a successful Compose so the
-// composed-file watcher recognises our own write as an echo.
 func RecordComposed(j *Journal, composed []byte, m Manifest, dir string) {
 	j.ComposedHash = hashRaw(composed)
 	for _, c := range m.Collections {

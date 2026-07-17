@@ -6,8 +6,6 @@ import (
 	"unicode/utf8"
 )
 
-// LSP wire types (the diagnostics subset). Positions are 0-based per the spec.
-
 type lspPosition struct {
 	Line      int `json:"line"`
 	Character int `json:"character"`
@@ -32,13 +30,11 @@ type publishDiagnosticsParams struct {
 	Diagnostics []lspDiagnostic `json:"diagnostics"`
 }
 
-// Diagnostic is the agent-facing shape: 1-based line/column and a textual
-// severity, so it reads like a compiler message.
 type Diagnostic struct {
 	File     string `json:"file"`
-	Line     int    `json:"line"`     // 1-based
-	Column   int    `json:"column"`   // 1-based
-	Severity string `json:"severity"` // error | warning | info | hint
+	Line     int    `json:"line"`
+	Column   int    `json:"column"`
+	Severity string `json:"severity"`
 	Code     string `json:"code,omitempty"`
 	Source   string `json:"source,omitempty"`
 	Message  string `json:"message"`
@@ -55,11 +51,10 @@ func severityName(s int) string {
 	case 4:
 		return "hint"
 	default:
-		return "error" // unknown/unset → treat as error (fail-loud, never silently downgrade)
+		return "error"
 	}
 }
 
-// toDiagnostics converts raw LSP diagnostics for one file into the agent shape.
 func toDiagnostics(file string, raw []lspDiagnostic) []Diagnostic {
 	out := make([]Diagnostic, 0, len(raw))
 	for _, d := range raw {
@@ -67,7 +62,7 @@ func toDiagnostics(file string, raw []lspDiagnostic) []Diagnostic {
 		if len(d.Code) > 0 && string(d.Code) != "null" {
 			code = string(d.Code)
 			if u, err := jsonString(d.Code); err == nil {
-				code = u // unquote string codes; numeric codes stay as-is
+				code = u
 			}
 		}
 		out = append(out, Diagnostic{
@@ -89,16 +84,6 @@ func jsonString(raw json.RawMessage) (string, error) {
 	return s, err
 }
 
-// toDiagnosticsBytes is the production conversion: it normalizes diagnostic
-// columns to BYTES regardless of the position encoding the server uses.
-//
-//   - server speaks "utf-8" → columns are already byte offsets; no conversion.
-//   - server speaks "utf-16" (LSP default) → columns are UTF-16 code units; we
-//     walk the file content to map them to byte offsets so a diagnostic past an
-//     emoji or a surrogate pair points at the right byte, not a few units off.
-//
-// When content is empty (we never received it for this file), we fall back to
-// the raw value — better an approximate column than no diagnostic at all.
 func toDiagnosticsBytes(file string, raw []lspDiagnostic, content, encoding string) []Diagnostic {
 	out := toDiagnostics(file, raw)
 	if encoding == "utf-8" || content == "" {
@@ -119,10 +104,6 @@ func toDiagnosticsBytes(file string, raw []lspDiagnostic, content, encoding stri
 	return out
 }
 
-// utf16ColumnToByteColumn maps a UTF-16 code-unit offset within one line to a
-// byte offset within the same line. Required because LSP's default position
-// encoding measures Character in UTF-16 code units (a surrogate pair = 2 units
-// = 4 bytes), but downstream consumers want bytes.
 func utf16ColumnToByteColumn(line string, utf16Col int) int {
 	if utf16Col <= 0 {
 		return 0
@@ -135,7 +116,7 @@ func utf16ColumnToByteColumn(line string, utf16Col int) int {
 		}
 		size := 1
 		if r > 0xFFFF {
-			size = 2 // outside the BMP → surrogate pair in UTF-16
+			size = 2
 		}
 		utf16Count += size
 		byteOffset += utf8.RuneLen(r)

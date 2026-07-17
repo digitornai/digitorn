@@ -6,10 +6,6 @@ import (
 	"testing"
 )
 
-// Real Qdrant proof. Run with a live server :
-//
-//	docker run -p 6333:6333 -p 6334:6334 qdrant/qdrant
-//	QDRANT_URL=localhost:6334 go test ./internal/modules/rag/ -run TestQdrant_Integration -v
 func TestQdrant_Integration(t *testing.T) {
 	url := os.Getenv("QDRANT_URL")
 	if url == "" {
@@ -23,7 +19,7 @@ func TestQdrant_Integration(t *testing.T) {
 
 	ctx := context.Background()
 	const kb = "digitorn_rag_itest"
-	_ = be.DeleteKB(ctx, kb) // clean slate
+	_ = be.DeleteKB(ctx, kb)
 
 	if err := be.EnsureKB(ctx, kb, 4); err != nil {
 		t.Fatalf("ensure: %v", err)

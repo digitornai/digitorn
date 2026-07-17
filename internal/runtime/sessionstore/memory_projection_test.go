@@ -11,7 +11,7 @@ func TestProjection_FactDedup(t *testing.T) {
 		Apply(s, &Event{Type: EventMemoryFactAdded, SessionID: "s1", Memory: &MemoryPayload{Fact: fact}})
 	}
 	add("Test command: go test ./...")
-	add("test command: GO TEST ./...") // case/space variant → dedup
+	add("test command: GO TEST ./...")
 	add("  Test command: go test ./...  ")
 	add("Bug is in auth/validate.go:42")
 
@@ -31,7 +31,6 @@ func TestProjection_FactCap(t *testing.T) {
 	if len(snap.Facts) != maxKeyFacts {
 		t.Fatalf("cap failed: got %d facts, want %d", len(snap.Facts), maxKeyFacts)
 	}
-	// Oldest evicted, newest kept (FIFO).
 	if snap.Facts[0] != fmt.Sprintf("fact number %d", 50) {
 		t.Errorf("oldest fact not evicted: first=%q", snap.Facts[0])
 	}

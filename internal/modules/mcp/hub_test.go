@@ -29,7 +29,6 @@ func TestResolveInstallHub_SplitsSecrets(t *testing.T) {
 	if res.Command != "npx" {
 		t.Fatalf("command=%q", res.Command)
 	}
-	// The credential value must land in secrets (sealed later), NOT plain env.
 	if res.Secrets["GITHUB_PERSONAL_ACCESS_TOKEN"] != "ghp_x" {
 		t.Fatalf("secret not mapped: %#v", res.Secrets)
 	}
@@ -59,7 +58,7 @@ func TestResolveInstallHub_Hosted(t *testing.T) {
 		HostedURL:        &hosted,
 		DigitornProvided: map[string]string{"Authorization": "Bearer dgtn-managed"},
 	}
-	res, ok := ResolveInstallHub(context.Background(), e, nil) // no user creds
+	res, ok := ResolveInstallHub(context.Background(), e, nil)
 	if !ok {
 		t.Fatal("hosted resolve failed")
 	}
@@ -69,7 +68,6 @@ func TestResolveInstallHub_Hosted(t *testing.T) {
 	if res.AuthType != "hosted" {
 		t.Fatalf("auth_type=%q want hosted", res.AuthType)
 	}
-	// digitorn_provided becomes the (sealed) secret → request header at dial time.
 	if res.Secrets["Authorization"] != "Bearer dgtn-managed" {
 		t.Fatalf("digitorn_provided not carried: %#v", res.Secrets)
 	}

@@ -5,14 +5,6 @@ import (
 	"testing"
 )
 
-// Per-server "toutes pièces" resolution suite. Each catalog server gets its own
-// deterministic test (no network, no npx) that pins the config→launch contract:
-// command, args, arg-append vs env-mapping, transport, timeout and override
-// merging. Live handshake + tool calls for the same servers live in the
-// mcpintegration suite (catalog_live_integration_test.go).
-
-// filesystem — npx stdio, no secret; the `path` shorthand is appended as a
-// positional directory argument (the server takes one or more allowed roots).
 func TestServer_Filesystem(t *testing.T) {
 	const pkg = "@modelcontextprotocol/server-filesystem"
 

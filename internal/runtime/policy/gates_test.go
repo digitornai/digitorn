@@ -8,10 +8,6 @@ import (
 	"github.com/digitornai/digitorn/internal/runtime/policy"
 )
 
-// ---- helpers --------------------------------------------------------
-
-// mk builds an Invocation with sensible defaults. Each test overrides
-// the few fields it cares about — keeps the test bodies short.
 func mk(caller policy.CallerKind, module, action string) policy.Invocation {
 	return policy.Invocation{
 		Caller:    caller,
@@ -24,22 +20,15 @@ func mk(caller policy.CallerKind, module, action string) policy.Invocation {
 	}
 }
 
-// ctx builds a PolicyContext with the given capabilities. The
-// app-active flag defaults to true ; pass appActive=false to test
-// gate 0 negative path.
 func ctx(appActive bool, caps *schema.CapabilitiesConfig, spec *tool.Spec) policy.PolicyContext {
 	return policy.PolicyContext{
 		AppActive:    appActive,
 		Capabilities: caps,
-		AgentModules: nil, // no restriction unless test sets it
+		AgentModules: nil,
 		ToolSpec:     spec,
 	}
 }
 
-// ---- Gate 0 — inactive ---------------------------------------------
-
-// TestGate0_AppActive_Allow : when the app is active, gate 0 must
-// allow — universally, regardless of caller.
 func TestGate0_AppActive_Allow(t *testing.T) {
 	for _, c := range []policy.CallerKind{
 		policy.CallerLLM, policy.CallerHook, policy.CallerSetup,
@@ -55,9 +44,6 @@ func TestGate0_AppActive_Allow(t *testing.T) {
 	}
 }
 
-// TestGate0_AppInactive_DenyForAllCallers : when the app is inactive,
-// gate 0 denies for ALL callers. The doc calls it "universal" :
-// admin bypass is a feature of the gate runner, not of gate 0 itself.
 func TestGate0_AppInactive_DenyForAllCallers(t *testing.T) {
 	for _, c := range []policy.CallerKind{
 		policy.CallerLLM, policy.CallerHook, policy.CallerSetup,
@@ -76,14 +62,9 @@ func TestGate0_AppInactive_DenyForAllCallers(t *testing.T) {
 	}
 }
 
-// ---- Gate 1a — module ----------------------------------------------
-
-// TestGate1a_NonLLMCaller_Bypass : hook/setup/channel callers bypass
-// gate 1a. Documented in security-04-hidden-vs-deny.md (analogous
-// "callable from setup pipelines, hooks, channels" column).
 func TestGate1a_NonLLMCaller_Bypass(t *testing.T) {
 	pc := ctx(true, nil, nil)
-	pc.AgentModules = map[string]agentModuleAccessHelper{} // empty = nothing allowed for LLM
+	pc.AgentModules = map[string]agentModuleAccessHelper{}
 	for _, c := range []policy.CallerKind{
 		policy.CallerHook, policy.CallerSetup, policy.CallerChannel, policy.CallerInternal,
 	} {
@@ -94,8 +75,6 @@ func TestGate1a_NonLLMCaller_Bypass(t *testing.T) {
 	}
 }
 
-// TestGate1a_LLMCaller_NoRestriction_Allow : when the agent has no
-// modules subset (AgentModules=nil), the LLM gets full access.
 func TestGate1a_LLMCaller_NoRestriction_Allow(t *testing.T) {
 	d := policy.Gate1aModule(mk(policy.CallerLLM, "filesystem", "read"), ctx(true, nil, nil))
 	if d.Kind != policy.DecisionAllow {
@@ -103,8 +82,6 @@ func TestGate1a_LLMCaller_NoRestriction_Allow(t *testing.T) {
 	}
 }
 
-// TestGate1a_LLMCaller_ModuleNotInSubset_Deny : sub-agent isolation —
-// the LLM cannot reach a module not in its modules subset.
 func TestGate1a_LLMCaller_ModuleNotInSubset_Deny(t *testing.T) {
 	pc := ctx(true, nil, nil)
 	pc.AgentModules = map[string]agentModuleAccessHelper{
@@ -119,8 +96,6 @@ func TestGate1a_LLMCaller_ModuleNotInSubset_Deny(t *testing.T) {
 	}
 }
 
-// TestGate1a_LLMCaller_ActionNotInSubset_Deny : when the agent has
-// the module but only a subset of actions, an unlisted action denies.
 func TestGate1a_LLMCaller_ActionNotInSubset_Deny(t *testing.T) {
 	pc := ctx(true, nil, nil)
 	pc.AgentModules = map[string]agentModuleAccessHelper{
@@ -132,7 +107,6 @@ func TestGate1a_LLMCaller_ActionNotInSubset_Deny(t *testing.T) {
 	}
 }
 
-// TestGate1a_LLMCaller_ActionInSubset_Allow : the listed action allows.
 func TestGate1a_LLMCaller_ActionInSubset_Allow(t *testing.T) {
 	pc := ctx(true, nil, nil)
 	pc.AgentModules = map[string]agentModuleAccessHelper{
@@ -144,8 +118,6 @@ func TestGate1a_LLMCaller_ActionInSubset_Allow(t *testing.T) {
 	}
 }
 
-// TestGate1a_LLMCaller_AllActionsModule_Allow : when the agent
-// declares the module with no action subset, every action passes.
 func TestGate1a_LLMCaller_AllActionsModule_Allow(t *testing.T) {
 	pc := ctx(true, nil, nil)
 	pc.AgentModules = map[string]agentModuleAccessHelper{
@@ -157,11 +129,6 @@ func TestGate1a_LLMCaller_AllActionsModule_Allow(t *testing.T) {
 	}
 }
 
-// ---- Gate 1b — hidden ----------------------------------------------
-
-// TestGate1b_NonLLMCaller_Bypass : the whole point of hidden vs deny.
-// Hooks/setup/channels can call hidden actions ; the LLM cannot see
-// them. Documented in security-04-hidden-vs-deny.md table.
 func TestGate1b_NonLLMCaller_Bypass(t *testing.T) {
 	caps := &schema.CapabilitiesConfig{
 		HiddenActions: []schema.CapabilityGrant{
@@ -179,8 +146,6 @@ func TestGate1b_NonLLMCaller_Bypass(t *testing.T) {
 	}
 }
 
-// TestGate1b_LLMCaller_ActionHidden_Deny : the canonical case from
-// security-04-hidden-vs-deny.md hidden-bot.yaml.
 func TestGate1b_LLMCaller_ActionHidden_Deny(t *testing.T) {
 	caps := &schema.CapabilitiesConfig{
 		HiddenActions: []schema.CapabilityGrant{
@@ -196,8 +161,6 @@ func TestGate1b_LLMCaller_ActionHidden_Deny(t *testing.T) {
 	}
 }
 
-// TestGate1b_LLMCaller_ModuleHidden_Deny : whole-module hide via
-// HiddenModules.
 func TestGate1b_LLMCaller_ModuleHidden_Deny(t *testing.T) {
 	caps := &schema.CapabilitiesConfig{
 		HiddenModules: []string{"shell"},
@@ -208,9 +171,6 @@ func TestGate1b_LLMCaller_ModuleHidden_Deny(t *testing.T) {
 	}
 }
 
-// TestGate1b_LLMCaller_EmptyToolsList_HidesAll : convention from
-// the doc — an entry with empty actions list means "all actions of
-// this module". Mirrors deny/grant semantics.
 func TestGate1b_LLMCaller_EmptyToolsList_HidesAll(t *testing.T) {
 	caps := &schema.CapabilitiesConfig{
 		HiddenActions: []schema.CapabilityGrant{
@@ -223,8 +183,6 @@ func TestGate1b_LLMCaller_EmptyToolsList_HidesAll(t *testing.T) {
 	}
 }
 
-// TestGate1b_LLMCaller_NotHidden_Allow : an action not listed
-// anywhere passes the gate.
 func TestGate1b_LLMCaller_NotHidden_Allow(t *testing.T) {
 	caps := &schema.CapabilitiesConfig{
 		HiddenActions: []schema.CapabilityGrant{
@@ -237,9 +195,6 @@ func TestGate1b_LLMCaller_NotHidden_Allow(t *testing.T) {
 	}
 }
 
-// TestGate1b_LLMCaller_NilCapabilities_Allow : a nil Capabilities
-// pointer must not panic. Allow when there's no config to hide
-// anything.
 func TestGate1b_LLMCaller_NilCapabilities_Allow(t *testing.T) {
 	d := policy.Gate1bHidden(mk(policy.CallerLLM, "x", "y"), ctx(true, nil, nil))
 	if d.Kind != policy.DecisionAllow {
@@ -247,14 +202,10 @@ func TestGate1b_LLMCaller_NilCapabilities_Allow(t *testing.T) {
 	}
 }
 
-// ---- Gate 2 — risk_level -------------------------------------------
-
 func spec(name string, level tool.RiskLevel) *tool.Spec {
 	return &tool.Spec{Name: name, RiskLevel: level}
 }
 
-// TestGate2_NonLLMCaller_Bypass : hooks aren't bound by the risk
-// ceiling. They can call high-risk actions deliberately.
 func TestGate2_NonLLMCaller_Bypass(t *testing.T) {
 	caps := &schema.CapabilitiesConfig{MaxRiskLevel: schema.RiskLevel(tool.RiskMedium)}
 	s := spec("bash", tool.RiskHigh)
@@ -269,8 +220,6 @@ func TestGate2_NonLLMCaller_Bypass(t *testing.T) {
 	}
 }
 
-// TestGate2_LLMCaller_ActionAtCeiling_Allow : risk_level equal to
-// max_risk_level passes. Strict inequality only on excess.
 func TestGate2_LLMCaller_ActionAtCeiling_Allow(t *testing.T) {
 	caps := &schema.CapabilitiesConfig{MaxRiskLevel: schema.RiskLevel(tool.RiskMedium)}
 	s := spec("write", tool.RiskMedium)
@@ -280,8 +229,6 @@ func TestGate2_LLMCaller_ActionAtCeiling_Allow(t *testing.T) {
 	}
 }
 
-// TestGate2_LLMCaller_ActionBelowCeiling_Allow : low risk action
-// under a medium ceiling passes.
 func TestGate2_LLMCaller_ActionBelowCeiling_Allow(t *testing.T) {
 	caps := &schema.CapabilitiesConfig{MaxRiskLevel: schema.RiskLevel(tool.RiskMedium)}
 	s := spec("read", tool.RiskLow)
@@ -291,9 +238,6 @@ func TestGate2_LLMCaller_ActionBelowCeiling_Allow(t *testing.T) {
 	}
 }
 
-// TestGate2_LLMCaller_ActionAboveCeiling_Deny : the documented
-// canonical case (security-02-gates.md gate 2 live demo with
-// gates-bot.yaml : Bash=high, max_risk_level=medium → filtered).
 func TestGate2_LLMCaller_ActionAboveCeiling_Deny(t *testing.T) {
 	caps := &schema.CapabilitiesConfig{MaxRiskLevel: schema.RiskLevel(tool.RiskMedium)}
 	s := spec("bash", tool.RiskHigh)
@@ -306,11 +250,8 @@ func TestGate2_LLMCaller_ActionAboveCeiling_Deny(t *testing.T) {
 	}
 }
 
-// TestGate2_LLMCaller_DefaultCeiling_IsMedium : when max_risk_level
-// is unset in YAML, the doc says default is medium. A high-risk
-// action with no explicit ceiling must still be denied.
 func TestGate2_LLMCaller_DefaultCeiling_IsMedium(t *testing.T) {
-	caps := &schema.CapabilitiesConfig{} // no MaxRiskLevel set
+	caps := &schema.CapabilitiesConfig{}
 	s := spec("bash", tool.RiskHigh)
 	d := policy.Gate2Risk(mk(policy.CallerLLM, "shell", "bash"), ctx(true, caps, s))
 	if d.Kind != policy.DecisionDeny {

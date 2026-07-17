@@ -21,8 +21,6 @@ type mcpConn interface {
 	close() error
 }
 
-// liveServer is a lock-free snapshot of a server's materializable capabilities,
-// used by LiveTools to build the agent-facing tool specs.
 type liveServer struct {
 	id           string
 	tools        []*mcpsdk.Tool
@@ -73,9 +71,6 @@ func (e *serverEntry) snapshot() serverSnapshot {
 	}
 }
 
-// pool owns the live connections. connMu serialises connect/disconnect/reconnect;
-// mu guards the entry map and fields so a tool call snapshots a connection
-// without holding a lock during the (possibly long) call.
 type pool struct {
 	connMu     sync.Mutex
 	mu         sync.RWMutex
@@ -121,8 +116,6 @@ func (p *pool) putEntry(ent *serverEntry) {
 	p.mu.Unlock()
 }
 
-// connect opens (or re-opens) a connection and caches its capabilities. A failed
-// dial still stores an error entry so the server stays listable.
 func (p *pool) connect(ctx context.Context, id string, spec connectSpec) (serverSnapshot, error) {
 	p.connMu.Lock()
 	defer p.connMu.Unlock()
@@ -170,9 +163,6 @@ func (p *pool) disconnect(_ context.Context, id string) serverSnapshot {
 	return serverSnapshot{ID: id, Status: statusDisconnected}
 }
 
-// reconnect re-dials with bounded backoff, keeping the old connection until a
-// new one is established then swapping it in; on total failure the old entry is
-// preserved and marked errored.
 func (p *pool) reconnect(ctx context.Context, id string) (serverSnapshot, error) {
 	p.connMu.Lock()
 	defer p.connMu.Unlock()
@@ -193,9 +183,6 @@ func (p *pool) reconnect(ctx context.Context, id string) (serverSnapshot, error)
 		c, err := p.dialFn(ctx, spec)
 		if err != nil {
 			lastErr = err
-			// A permanent failure (bad auth, 404, missing command) will NEVER
-			// recover by retrying — stop now instead of burning the whole backoff
-			// budget and re-failing every health cycle.
 			if te, ok := err.(*MCPTransportError); ok && !te.Retryable {
 				break
 			}
@@ -228,8 +215,6 @@ func (p *pool) backoff(attempt int) time.Duration {
 	return d + jitter
 }
 
-// callTool snapshots the connection under a read lock then releases it before the
-// call — a tool call must never hold a pool lock.
 func (p *pool) callTool(ctx context.Context, id, tool string, args any) (*mcpsdk.CallToolResult, error) {
 	p.mu.RLock()
 	ent := p.entries[id]
@@ -289,8 +274,6 @@ func (p *pool) resourcesOf(id string) []*mcpsdk.Resource {
 	return nil
 }
 
-// live snapshots every server worth indexing — connected, or degraded but still
-// holding cached tools so a transient drop doesn't drop the tools.
 func (p *pool) live() []liveServer {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -311,9 +294,6 @@ func (p *pool) get(id string) (*serverEntry, bool) {
 	return ent, ent != nil
 }
 
-// evictOldestUserConn closes the oldest per-user connection (key contains sep)
-// when at/over the cap, bounding concurrent per-user stdio subprocesses. Called
-// before opening a new one, so the count stays <= max.
 func (p *pool) evictOldestUserConn(sep string, max int) {
 	p.connMu.Lock()
 	defer p.connMu.Unlock()
@@ -352,8 +332,6 @@ func (p *pool) servers() []serverSnapshot {
 	return out
 }
 
-// healthCheck pings every connection, updates its status, and returns the ids
-// that failed (so the caller can drive reconnection).
 func (p *pool) healthCheck(ctx context.Context) []string {
 	p.mu.RLock()
 	ids := make([]string, 0, len(p.entries))

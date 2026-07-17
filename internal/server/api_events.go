@@ -106,6 +106,31 @@ func (d *Daemon) subscribeToEventBus() {
 	})
 }
 
+// subscribeBrowserFrames forwards the web module's live-view events from the
+// EventBus onto the client's realtime session room (same direct-emit path as
+// web_preview:attached). Ephemeral, session-scoped, never journaled.
+func (d *Daemon) subscribeBrowserFrames() {
+	if d.eventBus == nil || d.rt == nil {
+		return
+	}
+	for _, topic := range []string{"web.browser.frame", "web.browser.live"} {
+		name := topic
+		_, _ = d.eventBus.Subscribe(name, func(ctx context.Context, evt ports.Event) error {
+			sid, _ := evt.Metadata["session_id"].(string)
+			if sid == "" {
+				return nil // no routing key → nothing to scope the stream to
+			}
+			payload := map[string]any{"session_id": sid}
+			if data, ok := evt.Data.(map[string]any); ok {
+				for k, v := range data {
+					payload[k] = v
+				}
+			}
+			return d.rt.Emit(context.Background(), bridgeNamespace, "session:"+sid, name, payload)
+		})
+	}
+}
+
 // eventsResponse is the JSON shape returned by GET /api/events/recent.
 type eventsResponse struct {
 	Events []ports.Event `json:"events"`

@@ -15,21 +15,18 @@ func TestAppendMissingSourceFacts(t *testing.T) {
 	dropped := []sessionstore.Message{
 		srcMsg("user", "Remember: codeword ORCHID-9, port 8080, file ./data/orchid.db, rate 47 rpm."),
 		srcMsg("assistant", "OK."),
-		srcMsg("system", "PRIOR RECAP: irrelevant-token ZZZ-99"), // must be ignored (not source)
+		srcMsg("system", "PRIOR RECAP: irrelevant-token ZZZ-99"),
 	}
 
-	// A summary that dropped 8080 and orchid.db must get them appended back.
 	got := appendMissingSourceFacts("KEY FACTS: ORCHID-9, rate 47.", dropped)
 	for _, want := range []string{"8080", "orchid.db"} {
 		if !strings.Contains(strings.ToLower(got), want) {
 			t.Errorf("backstop did not recover %q; got:\n%s", want, got)
 		}
 	}
-	// The ignored system (prior recap) token must NOT be force-injected.
 	if strings.Contains(got, "ZZZ-99") {
 		t.Errorf("backstop wrongly pulled a token from the prior recap: %s", got)
 	}
-	// A complete summary is returned unchanged (no spurious append).
 	full := "KEY FACTS: ORCHID-9, port 8080, ./data/orchid.db, 47 rpm."
 	if out := appendMissingSourceFacts(full, dropped); out != full {
 		t.Errorf("complete summary must be unchanged, got:\n%s", out)
@@ -54,9 +51,9 @@ MISSION: build ORCHID-9 component by component.`
 		{"drops the number", `KEY FACTS:
 - Codename: ORCHID-9
 - Storage: ` + "`./data/orchid.db`" + ` (SQLite), Postgres rejected
-- I/O: async EventLoop, Parquet exporter`, true}, // 47 gone
-		{"drops the codename", `KEY FACTS: storage orchid.db (SQLite), Postgres rejected, 47 rpm, EventLoop, Parquet`, true}, // ORCHID-9 gone
-		{"drops SQLite", `KEY FACTS: ORCHID-9, orchid.db, 47 rpm, EventLoop, Parquet`, true}, // SQLite gone
+- I/O: async EventLoop, Parquet exporter`, true},
+		{"drops the codename", `KEY FACTS: storage orchid.db (SQLite), Postgres rejected, 47 rpm, EventLoop, Parquet`, true},
+		{"drops SQLite", `KEY FACTS: ORCHID-9, orchid.db, 47 rpm, EventLoop, Parquet`, true},
 		{"collapsed stub", `**ORCHID-9**`, true},
 		{"reordered + reworded but complete", `KEY FACTS: Parquet exporter via EventLoop; 47 req/min cap; orchid.db (SQLite, not Postgres); project ORCHID-9.`, false},
 	}
@@ -96,7 +93,6 @@ func TestExtractNewKeyFacts(t *testing.T) {
 func TestStripKeyFactsSection(t *testing.T) {
 	recap := "Context checkpoint — resume.\n\n<recap>\nKEY FACTS:\n- Codename: ORCHID-9\n- Rate limit: 47 rpm\n\nMISSION: build ORCHID-9 component by component.\nOPEN ITEMS: exporter next.\n</recap>\n\nResume the mission."
 	got := StripKeyFactsSection(recap)
-	// Facts removed, narrative kept.
 	if strings.Contains(got, "ORCHID-9\n- Rate") || strings.Contains(got, "47 rpm") {
 		t.Errorf("KEY FACTS not stripped:\n%s", got)
 	}
@@ -105,7 +101,6 @@ func TestStripKeyFactsSection(t *testing.T) {
 			t.Errorf("narrative %q lost when stripping facts:\n%s", want, got)
 		}
 	}
-	// No KEY FACTS section → unchanged.
 	plain := "Context checkpoint.\n\n<recap>\nMISSION: do the thing.\n</recap>"
 	if out := StripKeyFactsSection(plain); out != plain {
 		t.Errorf("recap without KEY FACTS must be unchanged, got:\n%s", out)

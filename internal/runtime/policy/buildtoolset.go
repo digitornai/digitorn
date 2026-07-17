@@ -5,69 +5,19 @@ import (
 	"github.com/digitornai/digitorn/internal/domain/tool"
 )
 
-// BuildAgentToolset is the documented PRIMARY defence layer of the
-// security model. From security-02-gates.md :
-//
-//	"This is more secure than runtime rejection. A schema filter
-//	 denies the model the choice in the first place."
-//
-// It walks the universe of (module, action) pairs available to the
-// app, runs gates 0/1a/1b/2/3/4 against each with Caller=LLM, and
-// returns only the ones the LLM is allowed to see.
-//
-// Decisions are mapped to inclusion :
-//
-//   - Allow          → included
-//   - NeedsApproval  → included (the LLM may attempt the call ; the
-//     approval pause is triggered at runtime by
-//     gate 4 in SG-4)
-//   - Deny           → excluded
-//
-// The function is pure : no I/O, no logging. The caller (SG-4 wirage
-// in engine.runPhases) is responsible for emitting an
-// EventSecurityDecision per filtered-out action (SG-6) and for
-// converting the resulting list into llm.ToolSpec for the chat
-// request.
-//
-// AvailableAction is one input row : a (module, action, spec) tuple.
-// SG-4 will populate this slice by walking the module dispatcher's
-// catalog once per app version.
 type AvailableAction struct {
 	Module string
 	Action string
 	Spec   *tool.Spec
-	// DiscoveryOnly marks a tool as discoverable (search/get_tool) but never
-	// injected as a direct JSON schema. Use for large catalogs (pieces, MCP)
-	// when the app grants wildcard access — schemas would exceed the budget.
-	// Tools with explicit grants are indexed normally and subject to auto-switch.
 	DiscoveryOnly bool
 }
 
-// BuildAgentToolset returns the subset of `actions` the agent is
-// allowed to see in its LLM tool list. Order is preserved : the
-// dispatcher catalog ordering is the LLM's tool ordering.
-//
-// Inputs :
-//
-//   - appActive    : appmgr.App.Enabled, drives gate 0
-//   - caps         : the app-level tools.capabilities block. nil =
-//     dev/test mode (no enforcement, every action
-//     is included).
-//   - agent        : the specific agent we're building the toolset
-//     for. The agent's modules subset (gate 1a) and
-//     permissions (gate 3) come from here.
-//   - actions      : all known (module, action, spec) tuples — the
-//     universe to filter from.
-//
-// Returns a NEW slice ; the input is not mutated.
 func BuildAgentToolset(
 	appActive bool,
 	caps *schema.CapabilitiesConfig,
 	agent *schema.Agent,
 	actions []AvailableAction,
 ) []AvailableAction {
-	// Cache the resolved agent-modules lookup once per call. The
-	// per-action gate1a then runs in O(1) instead of O(len(modules)).
 	var agentModules map[string]AgentModuleAccess
 	if agent != nil {
 		agentModules = ResolveAgentModules(agent.Modules)
@@ -94,16 +44,6 @@ func BuildAgentToolset(
 	return out
 }
 
-// passesAllGates runs the pure gates (0, 1a, 1b, 2, 3, 4, 5) in
-// documented order and returns true when NO gate returned Deny. It runs
-// every gate (it does not stop on NeedsApproval), so an over-classified
-// tool is filtered even when its policy is "approve". NeedsApproval at
-// gate 4 is treated as "passes" — the LLM keeps the tool in its index,
-// the approval pause fires at runtime. Gate 6 (rate_limit) is stateful
-// and never runs here — it is a runtime-only concern.
-//
-// Order is fixed by the doc (security-02-gates.md "The sequence"
-// diagram) ; do NOT reorder these calls.
 func passesAllGates(inv Invocation, pc PolicyContext) bool {
 	for _, g := range gateChain {
 		d := g(inv, pc)
@@ -114,15 +54,6 @@ func passesAllGates(inv Invocation, pc PolicyContext) bool {
 	return true
 }
 
-// gateChain is the documented gate order, in the slice the schema-build
-// filter (passesAllGates) and the runtime evaluator (RunGates) both walk.
-// Defined at package scope so the slice isn't reallocated per action.
-//
-// Gate 5 (data classification) is PURE and lives here, so it filters
-// over-classified tools at schema-build AND blocks them at runtime, just
-// like gate 2. Gate 6 (rate_limit) is STATEFUL and runtime-only — it is
-// NOT in this chain ; RunGates applies it separately so building the tool
-// list never consumes rate budget.
 var gateChain = []func(Invocation, PolicyContext) Decision{
 	Gate0Inactive,
 	Gate1aModule,
@@ -134,23 +65,6 @@ var gateChain = []func(Invocation, PolicyContext) Decision{
 	Gate5Classification,
 }
 
-// ResolveAgentModules converts the YAML-shaped schema.AgentModules
-// into the lookup map gate1a expects. Three documented YAML shapes
-// produce the same in-memory form :
-//
-//   - modules: [filesystem, shell]
-//     → both modules with AllActions=true
-//   - modules: [{filesystem: [read, glob, grep]}]
-//     → filesystem with Actions={read,glob,grep}
-//   - modules: {filesystem: [read], shell: [bash]}
-//     → both modules with their action subsets
-//
-// Returns nil when the agent declares no modules — that means "no
-// restriction at the agent level", and gate1a will accept any module
-// the app capabilities allow.
-//
-// Exported so SG-4 (and tests) can build a PolicyContext without
-// going through the whole BuildAgentToolset machinery.
 func ResolveAgentModules(mods schema.AgentModules) map[string]AgentModuleAccess {
 	if len(mods) == 0 {
 		return nil
@@ -158,11 +72,10 @@ func ResolveAgentModules(mods schema.AgentModules) map[string]AgentModuleAccess 
 	out := make(map[string]AgentModuleAccess, len(mods))
 	for _, ref := range mods {
 		if ref.ID == "" {
-			continue // defensive : shouldn't happen post-parse
+			continue
 		}
 		access := out[ref.ID]
 		if len(ref.Tools) == 0 {
-			// Bare module name in YAML = all actions.
 			access.AllActions = true
 		} else {
 			if access.Actions == nil {

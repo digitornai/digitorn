@@ -10,13 +10,6 @@ import (
 	kafka "github.com/segmentio/kafka-go"
 )
 
-// Live Kafka : produce to a topic, the connector consumes the stream and
-// upserts/deletes documents. Needs a broker.
-//
-//	docker run -d --name redpanda -p 9092:9092 redpandadata/redpanda redpanda start \
-//	  --smp 1 --memory 512M --overprovisioned --node-id 0 --check=false \
-//	  --kafka-addr PLAINTEXT://0.0.0.0:9092 --advertise-kafka-addr PLAINTEXT://localhost:9092
-//	KAFKA_BROKERS=localhost:9092 go test ./internal/indexer/ -run TestKafkaConnector_Live -v
 func TestKafkaConnector_Live(t *testing.T) {
 	brokers := os.Getenv("KAFKA_BROKERS")
 	if brokers == "" {
@@ -28,7 +21,6 @@ func TestKafkaConnector_Live(t *testing.T) {
 
 	w := &kafka.Writer{Addr: kafka.TCP(bl...), Topic: topic, AllowAutoTopicCreation: true, Balancer: &kafka.LeastBytes{}}
 	defer w.Close()
-	// produce once up front to auto-create the topic before the group joins
 	if err := w.WriteMessages(ctx, kafka.Message{Key: []byte("seed"), Value: []byte(`{"sku":"seed","name":"seed"}`)}); err != nil {
 		t.Fatalf("produce seed: %v", err)
 	}
@@ -42,7 +34,7 @@ func TestKafkaConnector_Live(t *testing.T) {
 	go func() { _ = conn.Watch(wctx, spec, sink, NewMemCursor()) }()
 	defer cancel()
 
-	time.Sleep(4 * time.Second) // consumer-group join
+	time.Sleep(4 * time.Second)
 
 	if err := w.WriteMessages(ctx, kafka.Message{Key: []byte("A1"), Value: []byte(`{"sku":"A1","name":"alpha widget"}`)}); err != nil {
 		t.Fatalf("produce: %v", err)
@@ -52,7 +44,6 @@ func TestKafkaConnector_Live(t *testing.T) {
 	}
 	t.Logf("kafka upsert received: %q", sink.text("A1"))
 
-	// tombstone (key = id) → delete
 	if err := w.WriteMessages(ctx, kafka.Message{Key: []byte("A1"), Value: nil}); err != nil {
 		t.Fatalf("produce tombstone: %v", err)
 	}

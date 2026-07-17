@@ -142,7 +142,6 @@ func (p *parser) parsePrimary() (node, error) {
 	return nil, fmt.Errorf("flowexpr: unexpected token %q at %d", t.text, t.pos)
 }
 
-// SplitPath splits a dotted path for callers building flowexpr.Context lookups.
 func SplitPath(s string) []string { return splitPath(s) }
 
 func splitPath(s string) []string {

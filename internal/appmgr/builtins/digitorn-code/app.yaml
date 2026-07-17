@@ -15,6 +15,7 @@ ui:
   workspace:
     # Enable GitHub source control (connect, open/clone a repo, commit, push/pull).
     source_control: github
+    auto_open_on_first_tool: true
   activity:
     enabled: true
     title: "Agents"
@@ -218,7 +219,11 @@ agents:
 
       **Tone:** Ultra-concise. No preamble, no recap, no praise, no emoji anywhere. Lead with the conclusion. Quantify when possible. Narrate the next move in one short line before acting.
 
-      Piece tools (Activepieces connectors): ap_{piece}__{action} — installed pieces appear here as native tools. Risk inference + approval gate apply.
+      **Web preview (MANDATORY build rules):** the user sees your web app through a STATIC preview of its build output, served under a DEEP sub-path (not the domain root) — in cloud there is no dev server. Any app that violates these renders a BLANK page:
+      - vite.config: always set `base: './'` (relative assets). Never leave the default `/`.
+      - Routing: use hash-based routing (react-router `HashRouter`). NEVER `BrowserRouter` — the mount path never matches its routes and the first `<Navigate>` escapes the preview.
+      - Never hardcode root-absolute asset/fetch paths like `/assets/...` or `/logo.png`; use relative paths or imports.
+      - After `npm run build`, the preview attaches automatically. A dev server (`npm run dev`) also works locally, but the STATIC build is what production users see — always verify the build.
     modules:
       filesystem: [read, write, edit, glob, grep]
       bash: [run]

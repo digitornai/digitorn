@@ -17,30 +17,18 @@ import (
 	"github.com/digitornai/digitorn/internal/background/store"
 )
 
-// Inbound is the optional inbound side (the adapter manager): it serves channel
-// HTTP routes and runs the adapters. Kept as an interface so the service stays
-// decoupled from the concrete processor/adapter packages.
 type Inbound interface {
 	Start(ctx context.Context) error
-	Handler() http.Handler // may return nil when no HTTP adapter is registered
+	Handler() http.Handler
 }
 
-// Setup is what the caller's build func returns: the job processor (built from
-// the freshly-opened store) and, optionally, the inbound side + a Rearm hook for
-// runtime trigger programming (POST /ops/triggers). Rearm needs access to the
-// adapters, which only the caller has, so it is injected here.
 type Setup struct {
 	Processor runner.Processor
 	Inbound   Inbound
 	Rearm     func(context.Context, CreateTriggerRequest) (store.Trigger, error)
-	// Disarm stops a trigger's live listener (its cron goroutine / webhook route)
-	// so a runtime disable actually stops it firing, not just flips the DB flag.
-	// nil → disable is DB-only (re-applied from YAML on restart).
-	Disarm func(context.Context, store.Trigger) error
+	Disarm    func(context.Context, store.Trigger) error
 }
 
-// Service is the assembled background service: durable store + worker pool + an
-// HTTP control surface (+ optional inbound adapters), with graceful shutdown.
 type Service struct {
 	cfg     Config
 	log     *slog.Logger
@@ -54,10 +42,6 @@ type Service struct {
 	disarm  func(context.Context, store.Trigger) error
 }
 
-// New opens the DB (SQLite or Postgres, by config), migrates, lets the caller
-// build the processor + inbound from the store, and assembles the pool. The
-// build func receives the store so a store-dependent processor (the channel
-// processor, which loads trigger configs) can be constructed.
 func New(cfg Config, build func(*store.Store) (Setup, error), log *slog.Logger) (*Service, error) {
 	if log == nil {
 		log = slog.Default()
@@ -100,8 +84,6 @@ func New(cfg Config, build func(*store.Store) (Setup, error), log *slog.Logger) 
 	return s, nil
 }
 
-// openDB opens GORM directly (no daemon coupling): SQLite for a local daemon
-// (single writer → MaxOpenConns(1)), Postgres for cloud. Returns a close func.
 func openDB(cfg Config) (*gorm.DB, func() error, error) {
 	var dial gorm.Dialector
 	switch cfg.DBDriver {

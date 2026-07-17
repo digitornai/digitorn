@@ -15,12 +15,10 @@ import (
 	"github.com/digitornai/digitorn/internal/background/store"
 )
 
-// CreateTriggerRequest is the body of POST /ops/triggers.
-// The Rearm hook persists and arms the trigger live (no restart needed).
 type CreateTriggerRequest struct {
 	AppID    string `json:"app_id"`
 	Provider string `json:"provider"`
-	Adapter  string `json:"adapter"` // "cron", "pieces", "rss", "webhook", …
+	Adapter  string `json:"adapter"`
 	Schedule string `json:"schedule"`
 	Agent    string `json:"agent"`
 	Message  string `json:"message"`
@@ -30,38 +28,18 @@ type CreateTriggerRequest struct {
 	Context  string `json:"context"`
 	Kind     string `json:"kind"`
 	Reports  bool   `json:"reports"`
-	// RefreshToken is the owner's auth refresh token, handed off so the service
-	// can mint fresh per-user access tokens for this app's background turns
-	// (the LLM gateway requires a real user JWT). Stored, never logged.
 	RefreshToken string `json:"refresh_token,omitempty"`
-	// Config carries adapter-specific config stored in ConfigJSON.
-	// For pieces: {piece, trigger, auth, props, interval, trigger_url}.
 	Config      map[string]any             `json:"config,omitempty"`
 	Activation  *channels.ActivationConfig `json:"activation,omitempty"`
 	Attachments []channels.AttachmentRef   `json:"attachments"`
 }
 
-// OpsConfig configures the ops/admin API. Token, when set, is required as a
-// Bearer credential on every /ops route (read AND control) — for a cloud
-// deployment where the service port is reachable. Empty → no auth (the default
-// for a localhost-bound local daemon, matching the existing /stats surface).
-//
-// Rearm, when set, programs a trigger at runtime (POST /ops/triggers): it builds
-// the durable trigger AND arms the live adapter. nil → POST /ops/triggers returns
-// 501 (the wiring that can reach the adapters wasn't provided).
 type OpsConfig struct {
 	Token  string
 	Rearm  func(context.Context, CreateTriggerRequest) (store.Trigger, error)
 	Disarm func(context.Context, store.Trigger) error
 }
 
-// opsRoutes builds the ops/admin HTTP surface over the durable store. It is
-// READ + CONTROL only and purely additive: it exposes and pilots what discovery
-// already armed (triggers, jobs, runs). It never changes YAML semantics — a
-// runtime enable/disable is a live override that config discovery re-applies
-// (authoritatively) from YAML on the next restart.
-//
-// Mounted under /ops (the caller StripPrefixes), so patterns here are relative.
 func opsRoutes(st *store.Store, cfg OpsConfig) http.Handler {
 	h := &opsAPI{st: st, rearm: cfg.Rearm, disarm: cfg.Disarm}
 	mux := http.NewServeMux()
@@ -75,20 +53,14 @@ func opsRoutes(st *store.Store, cfg OpsConfig) http.Handler {
 	mux.HandleFunc("GET /jobs/{id}", h.getJob)
 	mux.HandleFunc("POST /jobs/{id}/replay", h.replayJob)
 	mux.HandleFunc("GET /runs", h.listRuns)
-	// Health surface: windowed metrics (success rate, durations, backlog), the
-	// dead-letter queue (terminally-failed jobs), and trigger alerts (channels
-	// failing repeatedly). Read-only; back the Overview + alerting.
 	mux.HandleFunc("GET /metrics", h.metrics)
 	mux.HandleFunc("GET /dlq", h.deadLetter)
 	mux.HandleFunc("GET /alerts", h.alerts)
-	// Session wake-ups (user-programmed schedules): bind a session to wake on a
-	// schedule with an injected payload. Backed by the same cron-arm machinery.
 	mux.HandleFunc("POST /schedules", h.createSchedule)
 	mux.HandleFunc("GET /schedules", h.listSchedules)
 	return withOpsAuth(cfg.Token, mux)
 }
 
-// withOpsAuth gates every ops route on a Bearer token when one is configured.
 func withOpsAuth(token string, next http.Handler) http.Handler {
 	if token == "" {
 		return next
@@ -109,16 +81,10 @@ type opsAPI struct {
 	disarm func(context.Context, store.Trigger) error
 }
 
-// channelOpsAdapters are persistent-listener adapters whose message comes from
-// each inbound event, so a trigger push carries no top-level message.
 var channelOpsAdapters = map[string]bool{
 	"discord": true, "telegram": true, "webhook": true, "rss": true, "whatsapp": true,
 }
 
-// ── Triggers ─────────────────────────────────────────────────────────────────
-
-// createTrigger programs a trigger (cron) at runtime: it persists the trigger AND
-// arms the live adapter, via the injected Rearm hook. 501 when no hook is wired.
 func (a *opsAPI) createTrigger(w http.ResponseWriter, r *http.Request) {
 	if a.rearm == nil {
 		writeOps(w, http.StatusNotImplemented, map[string]any{"error": "runtime trigger arming is not enabled on this service"})
@@ -132,10 +98,6 @@ func (a *opsAPI) createTrigger(w http.ResponseWriter, r *http.Request) {
 	if req.Adapter == "" {
 		req.Adapter = "cron"
 	}
-	// app_id + provider are always required. A top-level `message` is only needed
-	// for adapters that fire with no inbound payload (a schedule). Channel
-	// adapters (discord/telegram/…) get their message from each event, so they
-	// carry no top-level message — don't reject them.
 	if req.AppID == "" || req.Provider == "" {
 		writeOps(w, 400, map[string]any{"error": "app_id and provider are required"})
 		return
@@ -155,10 +117,6 @@ func (a *opsAPI) createTrigger(w http.ResponseWriter, r *http.Request) {
 	writeOps(w, http.StatusCreated, v)
 }
 
-// purgeApp handles DELETE /triggers?app=<id> : called when an app is uninstalled.
-// It disarms every live adapter for the app (so nothing keeps polling/listening
-// in-process) and then deletes the app's triggers, jobs and runs from the store.
-// Idempotent — an app with nothing armed returns 200 with zero counts.
 func (a *opsAPI) purgeApp(w http.ResponseWriter, r *http.Request) {
 	app := r.URL.Query().Get("app")
 	if app == "" {
@@ -168,8 +126,6 @@ func (a *opsAPI) purgeApp(w http.ResponseWriter, r *http.Request) {
 		writeOps(w, 400, map[string]any{"error": "app (or app_id) query param is required"})
 		return
 	}
-	// Disarm live adapters first — the store purge only removes durable rows; the
-	// running poller/listener goroutines are held by the runtime, not the store.
 	disarmed := 0
 	if a.disarm != nil {
 		if trigs, err := a.st.AllTriggers(r.Context(), app, false); err == nil {
@@ -191,10 +147,6 @@ func (a *opsAPI) purgeApp(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// createSchedule programs a session wake-up: at the cron time, the bound session
-// is re-launched (POST /messages) with the payload, AS Owner, with Context
-// injected — the agent runs with its accumulated context + the payload. Backed by
-// the same runtime cron-arm; Kind="schedule" so it lists on the schedule surface.
 func (a *opsAPI) createSchedule(w http.ResponseWriter, r *http.Request) {
 	if a.rearm == nil {
 		writeOps(w, http.StatusNotImplemented, map[string]any{"error": "runtime scheduling is not enabled on this service"})
@@ -304,8 +256,6 @@ func (a *opsAPI) enableTrigger(enabled bool) http.HandlerFunc {
 	}
 }
 
-// ── Jobs ─────────────────────────────────────────────────────────────────────
-
 func (a *opsAPI) listJobs(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	limit, _ := strconv.Atoi(q.Get("limit"))
@@ -338,7 +288,7 @@ func (a *opsAPI) getJob(w http.ResponseWriter, r *http.Request) {
 	}
 	runs, _ := a.st.ListRuns(r.Context(), store.RunFilter{JobID: id, Limit: 100})
 	v := jobView(j)
-	v["runs"] = runViews(runs) // the full per-attempt execution report
+	v["runs"] = runViews(runs)
 	writeOps(w, 200, v)
 }
 
@@ -354,15 +304,10 @@ func (a *opsAPI) replayJob(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// ── Runs ─────────────────────────────────────────────────────────────────────
-
 func (a *opsAPI) listRuns(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	limit, _ := strconv.Atoi(q.Get("limit"))
 	offset, _ := strconv.Atoi(q.Get("offset"))
-	// Accept both `app_id` (the daemon proxy's canonical name) and the short
-	// `app` alias — they previously disagreed, so the filter silently no-op'd
-	// and every app saw the whole run table.
 	appID := q.Get("app_id")
 	if appID == "" {
 		appID = q.Get("app")
@@ -378,10 +323,6 @@ func (a *opsAPI) listRuns(w http.ResponseWriter, r *http.Request) {
 	writeOps(w, 200, map[string]any{"runs": runViews(runs), "count": len(runs)})
 }
 
-// ── Health (metrics / DLQ / alerts) ──────────────────────────────────────────
-
-// windowSince parses a ?window duration (e.g. "24h", "1h", "7d-ish as 168h")
-// into a start time. Defaults to 24h; caps at 30d so a query can't scan forever.
 func windowSince(q string) (time.Time, string) {
 	d := 24 * time.Hour
 	if q != "" {
@@ -443,8 +384,6 @@ func (a *opsAPI) alerts(w http.ResponseWriter, r *http.Request) {
 	writeOps(w, 200, map[string]any{"alerts": alerts, "count": len(alerts), "streak": streak})
 }
 
-// ── Views ────────────────────────────────────────────────────────────────────
-
 func triggerView(t store.Trigger) map[string]any {
 	v := map[string]any{
 		"id": t.ID, "app_id": t.AppID, "provider": t.Provider, "adapter": t.Adapter,
@@ -464,9 +403,6 @@ func triggerView(t store.Trigger) map[string]any {
 	return v
 }
 
-// scheduleView renders a session wake-up for the ops surface: the bound session,
-// owner, payload excerpt, schedule and next_run — extracted from the stored
-// trigger config (a TriggerSpec whose Activation binds the session).
 func scheduleView(t store.Trigger) map[string]any {
 	v := map[string]any{
 		"id": t.ID, "app_id": t.AppID, "enabled": t.Enabled,
@@ -490,9 +426,6 @@ func scheduleView(t store.Trigger) map[string]any {
 	return v
 }
 
-// cfgString walks a decoded trigger config by key path and returns a string leaf,
-// matching keys case-insensitively (ActivationConfig serializes with Go field
-// names). Returns "" on any miss.
 func cfgString(configJSON string, keys ...string) string {
 	var m map[string]any
 	if configJSON == "" || json.Unmarshal([]byte(configJSON), &m) != nil {
@@ -560,11 +493,6 @@ func runViews(runs []store.Run) []map[string]any {
 	return out
 }
 
-// cronNextRun best-effort computes a cron trigger's next fire time from a
-// "schedule" expression found anywhere in its persisted config. Returns nil when
-// the schedule is not stored or is unparseable — the rest of the report is
-// unaffected (the schedule lives in the boot-time adapter config; persisting it
-// into the trigger is the only thing needed to always populate this).
 func cronNextRun(configJSON string) *time.Time {
 	if configJSON == "" {
 		return nil
@@ -588,7 +516,6 @@ func cronNextRun(configJSON string) *time.Time {
 	return &next
 }
 
-// findSchedule walks a decoded config map for a string "schedule" value.
 func findSchedule(m map[string]any) string {
 	for k, v := range m {
 		if strings.EqualFold(k, "schedule") {
@@ -611,8 +538,6 @@ func writeOps(w http.ResponseWriter, code int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// subtleConstEq is a length-independent constant-time-ish string compare for the
-// bearer token (avoids a trivial timing oracle on the credential).
 func subtleConstEq(a, b string) bool {
 	if len(a) != len(b) {
 		return false

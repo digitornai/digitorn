@@ -8,19 +8,13 @@ import (
 	"github.com/digitornai/digitorn-cli/internal/theme"
 )
 
-// diffLine is one parsed unified-diff line, annotated with its 1-based line
-// numbers in the old/new file (0 = absent on that side). segs is set only for a
-// removed/added line paired with its counterpart, marking which runs of text
-// actually changed (intra-line highlight) ; nil means highlight the whole line.
 type diffLine struct {
-	kind         byte // '+', '-', ' '
+	kind         byte
 	oldNo, newNo int
 	text         string
 	segs         []intraSpan
 }
 
-// intraSpan is a run of a line's text flagged as changed or unchanged, for
-// character-level highlighting of an edited line.
 type intraSpan struct {
 	text    string
 	changed bool

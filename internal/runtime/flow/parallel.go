@@ -18,9 +18,6 @@ type branchOutcome struct {
 	fc    *fctx
 }
 
-// execParallel fans out each branch as a concurrent sub-path, joins per the
-// configured policy, and merges branch contexts back. The parallel node's own
-// routes are evaluated afterwards by the runner.
 func (r *Runner) execParallel(ctx context.Context, node schema.FlowNode, fc *fctx, in runInput) (execResult, error) {
 	if len(node.Branches) == 0 {
 		return execResult{status: "completed"}, nil
@@ -88,8 +85,6 @@ func (r *Runner) execParallel(ctx context.Context, node schema.FlowNode, fc *fct
 	return execResult{status: "completed", text: combined}, nil
 }
 
-// parseJoin resolves the join policy against the Go schema (Type, Min, Timeout).
-// Doc names: all (default), any/first, count/min. The Go field is Min.
 func parseJoin(j *schema.FlowJoinConfig, branchCount int) (joinType string, needed int, timeout time.Duration) {
 	joinType = "all"
 	needed = branchCount

@@ -11,53 +11,27 @@ import (
 	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
 )
 
-// workspaceLiveDebounce is the quiet window a session must go without a file
-// write before its pending-changes are recomputed and pushed. It coalesces a
-// burst of writes (a multi_edit, an agent rewriting many files) into ONE git
-// status + ONE push, so a heavy edit never fans out into a storm of refreshes.
 const workspaceLiveDebounce = 250 * time.Millisecond
 
-// workspaceLiveMaxCoalesce caps how long a continuous burst of writes may delay
-// a push. Rapid writes still coalesce (one git status per quiet window), but a
-// long uninterrupted edit (a scaffold, a multi_edit, parallel writes) flushes at
-// least this often instead of only once the burst ends — so the web streams the
-// latest state while the agent works, never waiting for the turn to finish.
 const workspaceLiveMaxCoalesce = 750 * time.Millisecond
 
-// workspaceChangesTimeout bounds the background git status so a pathological
-// repo can never pin a goroutine forever.
 const workspaceChangesTimeout = 30 * time.Second
 
-// workspaceLive is the daemon-side FileChangeNotifier (tool.FileChangeNotifier).
-// The filesystem module calls FileChanged the instant it finishes a write/edit;
-// this debounces per session-root, recomputes the pending changes off the hot
-// path, and pushes them straight to the session's realtime room — EPHEMERAL:
-// never through the durable bus, so no transcript bloat and no seq burn.
-//
-// Scale : the map holds an entry only for sessions that wrote in the last
-// debounce window (the entry is removed once its refresh fires), so it is
-// O(active editors), not O(all sessions). One runtime timer per active editor.
 type workspaceLive struct {
 	rt      ports.RealtimeServer
 	builder *sessionstore.EnvelopeBuilder
-	// changes recomputes a session's pending file list (git status on the shadow
-	// repo). Injected so tests don't need a real repo, and so it moves to a
-	// worker pool later without touching this debouncer.
+
 	changes func(ctx context.Context, workdir string) ([]sessionstore.WorkspaceChangedFile, error)
-	// previewPush re-resolves + pushes the live preview URL (web_preview:attached)
-	// for the session root, off the same debounced workspace-change signal. nil in
-	// tests / when realtime is absent.
+
 	previewPush func(ctx context.Context, root string)
-	// diagnosticsPush re-runs the lsp module over the changed files and streams
-	// the result to the session's Problems panel (diagnostics channel), off the
-	// same debounced signal. nil in tests / when realtime is absent.
+
 	diagnosticsPush func(ctx context.Context, root string, changed []string)
 	log             *slog.Logger
 	window          time.Duration
 	maxWait         time.Duration
 
 	mu   sync.Mutex
-	pend map[string]*wsPend // session-root -> in-flight debounce state
+	pend map[string]*wsPend
 }
 
 // wsPend is the per-session-root debounce state. running guards against a

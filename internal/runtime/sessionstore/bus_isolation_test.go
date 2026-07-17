@@ -185,9 +185,6 @@ func TestBus_SlowSubscriber_DoesNotBlockOthers(t *testing.T) {
 	close(slowReleased)
 }
 
-// syncBuffer is a concurrency-safe io.Writer over a bytes.Buffer — the
-// bus logs subscriber-panic recoveries from multiple goroutines, so a
-// raw bytes.Buffer sink would race the test's String() read.
 type syncBuffer struct {
 	mu  sync.Mutex
 	buf bytes.Buffer
@@ -320,8 +317,6 @@ func TestBus_StateEviction_FreesIdleSessions(t *testing.T) {
 	})
 	flusher.Start()
 
-	// frozenNs is read by the bus's eviction goroutine (via Now()) AND
-	// advanced by the test — atomic to avoid a data race on the clock.
 	var frozenNs atomic.Int64
 	frozenNs.Store(time.Now().UnixNano())
 	bus, _ := NewBus(BusConfig{

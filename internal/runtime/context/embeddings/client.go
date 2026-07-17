@@ -63,7 +63,7 @@ func sqrt32(x float32) float32 {
 	}
 
 	y := x
-	z := x / 2 // BuildCorpus assembles the per-tool text payload that
+	z := x / 2
 
 	for i := 0; i < 8 && z != y; i++ {
 		y = z

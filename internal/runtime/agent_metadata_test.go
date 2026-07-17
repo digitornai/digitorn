@@ -9,10 +9,6 @@ import (
 	dgruntime "github.com/digitornai/digitorn/internal/runtime"
 )
 
-// TestTurn_LLMRequestCarriesIdentity : every LLM request is attributed to the
-// session, the user, and the running agent so the gateway/provider can trace
-// it (Paul's requirement). For a top-level turn the agent id is the entry
-// agent's logical id.
 func TestTurn_LLMRequestCarriesIdentity(t *testing.T) {
 	app := secApp("ident-app", &schema.CapabilitiesConfig{DefaultPolicy: schema.CapAuto}, nil)
 	sess := newProjectingSessions("ident-sess")
@@ -39,8 +35,6 @@ func TestTurn_LLMRequestCarriesIdentity(t *testing.T) {
 	}
 }
 
-// TestTurn_EntryAgentSelected : with two agents and runtime.entry_agent set to
-// the second, the turn runs that agent (not the hardcoded first).
 func TestTurn_EntryAgentSelected(t *testing.T) {
 	app := secApp("entry-app", &schema.CapabilitiesConfig{DefaultPolicy: schema.CapAuto}, nil)
 	app.Definition.Agents = append(app.Definition.Agents, schema.Agent{
@@ -65,9 +59,6 @@ func TestTurn_EntryAgentSelected(t *testing.T) {
 	}
 }
 
-// TestTurn_ExplicitAgentIDWins : an explicit TurnInput.AgentID overrides
-// entry_agent (the AgentManager uses this to run a chosen sub-agent), and the
-// distinct AgentRunID is what reaches the LLM.
 func TestTurn_ExplicitAgentIDWins(t *testing.T) {
 	app := secApp("explicit-app", &schema.CapabilitiesConfig{DefaultPolicy: schema.CapAuto}, nil)
 	app.Definition.Agents = append(app.Definition.Agents, schema.Agent{

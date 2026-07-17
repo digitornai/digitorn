@@ -1,14 +1,5 @@
 //go:build mcpintegration
 
-// Real-stack MCP OAuth end-to-end proof. No mocks on the hot path: a REAL MCP
-// server (official go-sdk) over REAL HTTP that REQUIRES a Bearer token from the
-// initialize handshake onward, a REAL OAuth token exchange (a stand-in provider),
-// and the REAL crypto/token/state stores. It exercises the whole loop:
-//
-//	discover → resolve(no token)=needs_auth → authorize → callback → exchange →
-//	resolve(token)=AuthContext → tool call hits the auth-gated server → success.
-//
-// Run: go test -tags mcpintegration ./internal/modules/mcp/ -run OAuthE2E -v
 package mcp_test
 
 import (
@@ -43,10 +34,6 @@ type echoArgs struct {
 	Text string `json:"text"`
 }
 
-// startMCPServer stands up a real go-sdk MCP server over HTTP that 401s any
-// request (including initialize) whose Authorization is not "Bearer <want>".
-// sawInitAuth flips true once a valid-auth request carrying method "initialize"
-// is seen — proving the token reaches the handshake, not just tool calls.
 func startMCPServer(t *testing.T, want string) (url string, sawInitAuth *atomic.Bool) {
 	t.Helper()
 	srv := mcpsdk.NewServer(&mcpsdk.Implementation{Name: "e2e", Version: "v1"}, nil)
@@ -75,8 +62,6 @@ func startMCPServer(t *testing.T, want string) (url string, sawInitAuth *atomic.
 	return ts.URL, sawInit
 }
 
-// peekMethod sniffs the jsonrpc "method" from a POST body, then restores the
-// body so the real handler can read it (mirrors the SDK's example middleware).
 func peekMethod(r *http.Request) string {
 	if r.Body == nil {
 		return ""
@@ -94,8 +79,6 @@ func peekMethod(r *http.Request) string {
 	return msg.Method
 }
 
-// startOAuthProvider stands up a token endpoint that returns realToken for any
-// authorization_code exchange (a stand-in for google/github/etc).
 func startOAuthProvider(t *testing.T) string {
 	t.Helper()
 	mux := http.NewServeMux()
@@ -147,7 +130,6 @@ func TestOAuthE2E_FullLoop(t *testing.T) {
 	ctx := context.Background()
 	const userID = "alice"
 
-	// 1) DISCOVER → RESOLVE with no token ⇒ needs_auth challenge.
 	ac, ch, err := svc.ResolveAuth(ctx, userID, "app", "mcp", "mcp_srv__echo")
 	if err != nil {
 		t.Fatalf("resolve#1: %v", err)
@@ -159,7 +141,6 @@ func TestOAuthE2E_FullLoop(t *testing.T) {
 		t.Fatalf("bad challenge: %+v", ch)
 	}
 
-	// 2) CALLBACK: consume the state (single-use) and exchange the code → token stored.
 	p, err := svc.TakeState(ctx, ch.State)
 	if err != nil || p == nil {
 		t.Fatalf("take state: p=%v err=%v", p, err)
@@ -171,7 +152,6 @@ func TestOAuthE2E_FullLoop(t *testing.T) {
 		t.Fatalf("exchange: %v", err)
 	}
 
-	// 3) RESOLVE again ⇒ a valid AuthContext carrying the real token.
 	ac, ch, err = svc.ResolveAuth(ctx, userID, "app", "mcp", "mcp_srv__echo")
 	if err != nil {
 		t.Fatalf("resolve#2: %v", err)
@@ -183,7 +163,6 @@ func TestOAuthE2E_FullLoop(t *testing.T) {
 		t.Fatalf("resolved token = %q, want %q", ac.Token, realToken)
 	}
 
-	// 4) TOOL CALL through the real module → the auth-gated real MCP server.
 	m := mcp.New()
 	t.Cleanup(func() { _ = m.Stop(context.Background()) })
 	servers := map[string]any{"srv": map[string]any{"transport": "streamable_http", "url": mcpURL}}
@@ -210,16 +189,11 @@ func TestOAuthE2E_FullLoop(t *testing.T) {
 	if data["_source"] != "mcp_server:srv" {
 		t.Errorf("missing source envelope: %v", data["_source"])
 	}
-	// PROOF the token reached the initialize handshake, not just the tool call —
-	// the per-call header injection extends to connect because ensureConnected
-	// dials with the call context.
 	if !sawInitAuth.Load() {
 		t.Fatal("server never saw an authorized initialize — per-call injection did not cover the handshake")
 	}
 }
 
-// TestOAuthE2E_NoTokenIsRejected proves the gate actually gates: without an
-// AuthContext the connection is refused (401 at the handshake) and the tool fails.
 func TestOAuthE2E_NoTokenIsRejected(t *testing.T) {
 	mcpURL, _ := startMCPServer(t, realToken)
 	m := mcp.New()

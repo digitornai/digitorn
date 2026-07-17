@@ -11,21 +11,16 @@ import (
 	"strings"
 )
 
-// ErrInvalid is returned when error-severity diagnostics block composition;
-// the previously composed file must be left untouched by callers.
 var ErrInvalid = errors.New("docstore: fragments invalid — compose refused")
 
 type fragment struct {
-	file  string // basename, e.g. "title.json"
+	file  string
 	raw   json.RawMessage
 	obj   map[string]any
 	id    string
-	dirty bool // resolver touched obj → re-marshal before assembly
+	dirty bool
 }
 
-// Compose assembles the fragments under dir into the composed document.
-// Error-severity diagnostics refuse composition (composed == nil); warnings
-// are returned alongside a successful compose.
 func Compose(m Manifest, dir string) (composed []byte, diags []Diagnostic, err error) {
 	root := map[string]json.RawMessage{}
 	rootFile := m.Root
@@ -62,11 +57,7 @@ func Compose(m Manifest, dir string) (composed []byte, diags []Diagnostic, err e
 		}
 	}
 
-	// Geometry solver: declarative graph → computed pixels (positions + routed
-	// edges + bindings). Deterministic; the agent never authors coordinates.
 	resolveLayout(m, colFrags)
-	// Painter: SVG-path fragments → sampled strokes fitted into their box/cell.
-	// Invalid path data refuses composition like any error diagnostic.
 	pdiags := resolvePaths(m, colFrags)
 	diags = append(diags, pdiags...)
 	for _, d := range pdiags {
@@ -74,16 +65,9 @@ func Compose(m Manifest, dir string) (composed []byte, diags []Diagnostic, err e
 			return nil, diags, ErrInvalid
 		}
 	}
-	// Containers: frames auto-sized around their members, group fields expanded.
 	resolveFrames(m, colFrags)
 	resolveGroups(m, colFrags)
-	// Labels: declarative node labels → bound, centred text elements (created
-	// after geometry so they sit inside their node, before completion so they
-	// are filled like any element).
 	resolveLabels(m, colFrags)
-	// Completion: fill every missing field from the app's per-type template so a
-	// declarative fragment becomes a full, renderable element. Missing-only, so
-	// it never clobbers authored or computed values.
 	applyDefaults(m, colFrags)
 
 	for _, c := range m.Collections {
@@ -108,7 +92,7 @@ func loadCollection(dir string, c Collection) (frags []fragment, ids map[string]
 	base := filepath.Join(dir, filepath.FromSlash(c.Name))
 	entries, err := os.ReadDir(base)
 	if err != nil {
-		return nil, ids, nil // no fragments yet — empty collection
+		return nil, ids, nil
 	}
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") || strings.HasPrefix(e.Name(), ".") {
@@ -206,8 +190,6 @@ func edgeSpec(m Manifest) *EdgeSpec {
 	return m.Layout.Edge
 }
 
-// assemble concatenates raw fragments into a compact array or object without
-// re-marshaling their contents.
 func assemble(frags []fragment, asMap bool) json.RawMessage {
 	var b bytes.Buffer
 	open, close := byte('['), byte(']')

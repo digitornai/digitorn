@@ -32,16 +32,6 @@ import (
 	"github.com/digitornai/digitorn/internal/worker"
 )
 
-// startWorkers builds the in-process clients for every configured worker pool
-// and launches their subprocesses IN THE BACKGROUND. It is a HARD invariant
-// that NO worker ever blocks daemon startup : the client objects are wired
-// synchronously (they only need the manager and pick a ready instance at call
-// time), while the actual pool spawn — which waits up to start_timeout for an
-// instance to report ready, and crash-loops a broken binary — runs off the
-// boot path. A worker that is slow or failing can no longer hold the whole
-// daemon hostage on its start_timeout ; calls that need it fail (and retry)
-// until it recovers. Setup errors here are the cheap, synchronous kind (binary
-// not found) ; they are logged, never fatal.
 func (d *Daemon) startWorkers(ctx context.Context) {
 	if d.cfg.Workers.LLM.Count > 0 {
 		if err := d.startLLMWorker(ctx); err != nil {
@@ -61,21 +51,10 @@ func (d *Daemon) startWorkers(ctx context.Context) {
 				slog.String("err", err.Error()))
 		}
 	}
-	// OCR fallback for SCANNED documents : a pluggable, config-selected backend
-	// installed once into the document extractor (no subprocess). Backend "none"
-	// leaves OCR off — a scanned doc keeps its native file block.
 	d.startOCR()
-	// Service gateway : the worker→daemon bridge. Started after the
-	// embeddings client is wired (synchronously above) so worker-hosted
-	// modules (RAG) can embed. No-op when embeddings is disabled.
 	d.startServiceGateway()
 }
 
-// startOCR installs the configured OCR backend into the document extractor so a
-// scanned PDF (no text layer) is recognised to text and reaches the model like
-// any document. The engine is fully config-driven (workers.ocr.backend / .model
-// / .endpoint / …) — nothing hardcoded; "none" leaves OCR off. The backend runs
-// only as an async, cached fallback, never on the turn loop.
 func (d *Daemon) startOCR() {
 	c := d.cfg.Workers.OCR
 	be, err := ocr.New(ocr.Config{

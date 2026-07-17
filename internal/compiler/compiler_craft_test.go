@@ -5,8 +5,6 @@ import (
 	"testing"
 )
 
-// TestCraft_RealAppCompiles compiles the digitorn-craft builtin app
-// to verify the Go compiler accepts the full production manifest.
 func TestCraft_RealAppCompiles(t *testing.T) {
 	src, err := filepath.Abs("../appmgr/builtins/digitorn-craft")
 	if err != nil {

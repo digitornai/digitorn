@@ -12,29 +12,11 @@ import (
 	"github.com/digitornai/digitorn/internal/worker"
 )
 
-// Client is a handle to the embeddings service. Two construction paths :
-//
-//   - NewClient(mgr) : daemon-side, routes each call through the shared
-//     worker.Manager (picks one healthy embeddings worker). Satisfies
-//     ctxembed.EmbeddingClient so it plugs into the context_builder.
-//   - NewDirectClient(cc) : over a fixed gRPC connection — used by a
-//     worker-hosted module talking to the daemon service gateway, where
-//     there is no local worker.Manager to pick from.
-//
-// Batching : input slices larger than MaxBatchSize are split into
-// multiple calls and concatenated.
 type Client struct {
-	// pick yields the gRPC connection for one call. Abstracts the
-	// Manager (daemon) vs fixed-conn (worker→gateway) transports.
 	pick func(context.Context) (grpc.ClientConnInterface, error)
-	// timeout caps each underlying RPC. 0 = no per-call deadline
-	// (the worker still enforces its own).
 	timeout time.Duration
 }
 
-// NewClient constructs a Client over the given Manager. The caller is
-// responsible for having registered an embeddings Spec on the Manager
-// beforehand (see bootstrap.go).
 func NewClient(mgr *worker.Manager) *Client {
 	return &Client{
 		pick: func(ctx context.Context) (grpc.ClientConnInterface, error) {
@@ -48,9 +30,6 @@ func NewClient(mgr *worker.Manager) *Client {
 	}
 }
 
-// NewDirectClient builds a Client over a fixed gRPC connection. Used by
-// worker-hosted modules (RAG) that reach the embeddings service through
-// the daemon service gateway.
 func NewDirectClient(cc grpc.ClientConnInterface) *Client {
 	return &Client{
 		pick:    func(context.Context) (grpc.ClientConnInterface, error) { return cc, nil },
@@ -58,15 +37,11 @@ func NewDirectClient(cc grpc.ClientConnInterface) *Client {
 	}
 }
 
-// WithTimeout sets the per-RPC timeout. Returns the receiver for
-// chaining. 0 disables the deadline (worker still enforces its own).
 func (c *Client) WithTimeout(d time.Duration) *Client {
 	c.timeout = d
 	return c
 }
 
-// Embed implements ctxembed.EmbeddingClient : default model, 384-dim,
-// cosine-ready vectors. Legacy callers (semantic search) are unchanged.
 func (c *Client) Embed(ctx context.Context, texts []string) ([]ctxembed.Vector, error) {
 	if len(texts) == 0 {
 		return nil, nil
@@ -91,9 +66,6 @@ func (c *Client) Embed(ctx context.Context, texts []string) ([]ctxembed.Vector, 
 	return out, nil
 }
 
-// EmbedModel embeds texts with a specific model + retrieval role,
-// returning vectors of that model's dimension (NOT 384-locked) plus the
-// resolved dimension. Empty model = default. Used by the RAG module.
 func (c *Client) EmbedModel(ctx context.Context, model, role string, texts []string) ([]ctxembed.Vector, int, error) {
 	if len(texts) == 0 {
 		return nil, 0, nil
@@ -122,15 +94,10 @@ func (c *Client) EmbedModel(ctx context.Context, model, role string, texts []str
 	return out, dim, nil
 }
 
-// EmbedRaw forwards a full request and returns the worker's full
-// response (model + dimension + vectors). Used by the service gateway
-// to relay requests verbatim.
 func (c *Client) EmbedRaw(ctx context.Context, req *EmbedRequest) (*EmbedResponse, error) {
 	return c.invoke(ctx, req)
 }
 
-// Rerank scores docs against query with a cross-encoder, returning one
-// score per doc. Empty model = default reranker. Used by the RAG module.
 func (c *Client) Rerank(ctx context.Context, model, query string, docs []string) ([]float32, error) {
 	if len(docs) == 0 {
 		return nil, nil
@@ -142,8 +109,6 @@ func (c *Client) Rerank(ctx context.Context, model, query string, docs []string)
 	return resp.Scores, nil
 }
 
-// RerankRaw forwards a full rerank request and returns the worker's full
-// response. Used by the service gateway to relay verbatim.
 func (c *Client) RerankRaw(ctx context.Context, req *RerankRequest) (*RerankResponse, error) {
 	if c.pick == nil {
 		return nil, errors.New("embeddings: no connection source")
@@ -168,8 +133,6 @@ func (c *Client) RerankRaw(ctx context.Context, req *RerankRequest) (*RerankResp
 	return &resp, nil
 }
 
-// embedChunk handles a single batch ≤ MaxBatchSize for the legacy
-// 384-dim path (Normalize=true so vectors are cosine-ready).
 func (c *Client) embedChunk(ctx context.Context, texts []string) ([]ctxembed.Vector, error) {
 	resp, err := c.invoke(ctx, &EmbedRequest{Inputs: texts, Normalize: true})
 	if err != nil {
@@ -190,8 +153,6 @@ func (c *Client) embedChunk(ctx context.Context, texts []string) ([]ctxembed.Vec
 	return out, nil
 }
 
-// invoke picks a connection and calls the worker's Embed method,
-// returning the full response.
 func (c *Client) invoke(ctx context.Context, req *EmbedRequest) (*EmbedResponse, error) {
 	if c.pick == nil {
 		return nil, errors.New("embeddings: no connection source")
@@ -216,5 +177,4 @@ func (c *Client) invoke(ctx context.Context, req *EmbedRequest) (*EmbedResponse,
 	return &resp, nil
 }
 
-// Compile-time guard : *Client must satisfy ctxembed.EmbeddingClient.
 var _ ctxembed.EmbeddingClient = (*Client)(nil)

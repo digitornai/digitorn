@@ -17,18 +17,13 @@ import (
 	yaml "gopkg.in/yaml.v3"
 )
 
-// liteBackend is a zero-install validator: it implements the backend interface
-// in pure Go, no subprocess, no external LSP server needed. Suitable for
-// config / markup languages where syntax-level diagnostics cover 95% of what
-// an agent needs (JSON, YAML, HTML, XML). Languages with type systems still
-// route to the real LSP backend.
 type liteBackend struct {
 	name      string
 	root      string
 	validator func(content string) []Diagnostic
 
 	mu    sync.Mutex
-	diags map[string][]Diagnostic // cacheKey -> last diagnostics
+	diags map[string][]Diagnostic
 }
 
 func newLiteBackend(name, root string, v func(content string) []Diagnostic) *liteBackend {
@@ -104,10 +99,6 @@ func (b *liteBackend) displayPath(key string) string {
 	return filepath.ToSlash(p)
 }
 
-// =============================================================================
-// validators — one per supported builtin language.
-// =============================================================================
-
 func validateJSON(content string) []Diagnostic {
 	if strings.TrimSpace(content) == "" {
 		return nil
@@ -146,7 +137,7 @@ func validateYAML(content string) []Diagnostic {
 		}
 		l, c := extractYAMLLineCol(err.Error())
 		out = append(out, Diagnostic{Line: l, Column: c, Severity: "error", Source: "yaml", Message: err.Error()})
-		break // yaml decoder is unrecoverable past a syntax error
+		break
 	}
 	return out
 }
@@ -170,11 +161,6 @@ func validateXML(content string) []Diagnostic {
 	}
 }
 
-// validateHTML runs a tolerant well-formedness pass: it tokenises the file with
-// the official x/net/html tokenizer (the engine browsers use) and reports any
-// error the tokenizer emits — unclosed comments, malformed attributes, illegal
-// entities. HTML is forgiving by design, so this catches REAL syntax bugs
-// without flooding the agent with browser-style soft warnings.
 func validateHTML(content string) []Diagnostic {
 	if strings.TrimSpace(content) == "" {
 		return nil
@@ -194,8 +180,6 @@ func validateHTML(content string) []Diagnostic {
 	}
 }
 
-// mermaidReserved are keywords that break the parser when used as an identifier
-// (node id, classDef name, or class-application style name).
 var mermaidReserved = map[string]bool{
 	"end": true, "graph": true, "subgraph": true, "style": true,
 	"classDef": true, "class": true, "click": true, "direction": true,
@@ -206,15 +190,9 @@ var (
 	mermaidHeaderRe = regexp.MustCompile(`(?i)^(flowchart|graph|sequenceDiagram|classDiagram(-v2)?|erDiagram|stateDiagram(-v2)?|journey|gantt|pie|mindmap|timeline|gitGraph|quadrantChart|requirementDiagram|sankey(-beta)?|xychart(-beta)?|block(-beta)?|C4Context|C4Container|C4Component|C4Dynamic|C4Deployment)\b`)
 	mermaidClassDefRe  = regexp.MustCompile(`^classDef\s+([A-Za-z_][\w-]*)\b`)
 	mermaidClassApplyRe = regexp.MustCompile(`^class\s+[\w,\s]+?\s+([A-Za-z_][\w-]*)\s*$`)
-	// `end` glued to a shape bracket ( end[..], end(..), end{..} ) or as an
-	// explicit edge endpoint ( --> end , end --> ) — unambiguously a node id.
 	mermaidEndNodeRe = regexp.MustCompile(`(?i)(\bend\s*[\[({])|((--+>|--+|-\.-+>?|==+>)\s*end\b)|(\bend\s*(--+>|--+|==+>))`)
 )
 
-// validateMermaid is a fast, zero-dependency linter for the LLM-common Mermaid
-// mistakes that silently blank the canvas. It is NOT a full parser (mermaid.js
-// runs in the browser) — it catches the high-confidence breakages so the agent
-// gets them back in the SAME turn via the lsp_diagnose hook and self-corrects.
 func validateMermaid(content string) []Diagnostic {
 	if strings.TrimSpace(content) == "" {
 		return nil
@@ -247,7 +225,7 @@ func validateMermaid(content string) []Diagnostic {
 		if low == "subgraph" || strings.HasPrefix(low, "subgraph ") {
 			subgraphDepth++
 		}
-		if low == "end" { // legitimate block close — never a node here
+		if low == "end" {
 			subgraphDepth--
 			continue
 		}
@@ -270,10 +248,6 @@ func validateMermaid(content string) []Diagnostic {
 	return diags
 }
 
-// =============================================================================
-// helpers
-// =============================================================================
-
 func lineColAt(content string, offset int) (int, int) {
 	if offset <= 0 || offset > len(content) {
 		return 1, 1
@@ -290,8 +264,6 @@ func lineColAt(content string, offset int) (int, int) {
 	return line, col
 }
 
-// extractYAMLLineCol pulls the "line N" component out of yaml.v3's error string
-// ("yaml: line 3: ..."). Best-effort — returns 1,1 if the format ever changes.
 func extractYAMLLineCol(msg string) (int, int) {
 	i := strings.Index(msg, "line ")
 	if i < 0 {

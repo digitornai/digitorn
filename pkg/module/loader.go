@@ -13,7 +13,6 @@ import (
 	"github.com/digitornai/digitorn/internal/domain/tool"
 )
 
-// ManifestFile is the on-disk representation of a module manifest.
 type ManifestFile struct {
 	ID                   string               `yaml:"id"`
 	Version              string               `yaml:"version,omitempty"`
@@ -117,7 +116,6 @@ func (t ManifestTool) toSpec() ToolSpec {
 	}
 }
 
-// LoadManifestFile reads one YAML manifest from disk.
 func LoadManifestFile(path string) (Manifest, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -133,9 +131,6 @@ func LoadManifestFile(path string) (Manifest, error) {
 	return f.ToManifest(), nil
 }
 
-// LoadManifestDir scans a directory for *.yaml / *.yml manifest files and
-// returns the parsed manifests sorted by ID. Missing directories are not an
-// error — they return an empty slice.
 func LoadManifestDir(dir string) ([]Manifest, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -163,5 +158,4 @@ func LoadManifestDir(dir string) ([]Manifest, error) {
 	return out, nil
 }
 
-// Ensure the platform-helper compiles against domain types we re-export.
 var _ = domainmodule.PlatformLinux

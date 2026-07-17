@@ -1,15 +1,3 @@
-// Package behavior is the runtime behavioral-enforcement engine: it evaluates
-// declarative rules against a per-session state on every turn / tool call and
-// returns directives (warn / remind) or blocks a call outright. A composer
-// mode can swap the active profile per turn while the per-session counters,
-// sets and flags survive the swap.
-//
-// Faithful port of the reference daemon's behavior module, with two of its
-// concurrency bugs fixed: the active profile + resolved rule set are held
-// PER SESSION (the reference mutated one shared engine field, so concurrent
-// sessions clobbered each other), and rule definitions are rebuilt from fresh
-// values each time (the reference shallow-copied and mutated shared condition
-// dicts when applying thresholds).
 package behavior
 
 import (
@@ -23,9 +11,9 @@ import (
 
 type Engine struct {
 	cfg         *schema.BehaviorConfig
-	profileName string         // YAML security.behavior.profile
-	rules       map[string]any // resolved default profile (used by non-overridden sessions)
-	ruleDefs    []ruleDef      // default rule set
+	profileName string
+	rules       map[string]any
+	ruleDefs    []ruleDef
 	tk          *tracking
 
 	classifyEnabled bool
@@ -35,8 +23,6 @@ type Engine struct {
 	sessions map[string]*SessionState
 }
 
-// New builds an engine from the app's security.behavior config. Returns nil
-// when cfg is nil (behavior enforcement is opt-in).
 func New(cfg *schema.BehaviorConfig) *Engine {
 	if cfg == nil {
 		return nil
@@ -54,18 +40,10 @@ func New(cfg *schema.BehaviorConfig) *Engine {
 	return e
 }
 
-// ClassifyEnabled reports whether classify_turns is on (the runtime skips all
-// classifier work when false, avoiding the extra LLM round).
 func (e *Engine) ClassifyEnabled() bool { return e.classifyEnabled }
 
-// ChatFunc runs the classifier's single LLM call (no tools). The runtime wires
-// it to the engine's LLM client with the classifier brain/model.
 type ChatFunc func(ctx context.Context, system, user string) (string, error)
 
-// Classify runs the semantic classifier for a session's upcoming turn and
-// returns a directive to inject (empty when classify is off, the turn is
-// skipped by frequency/followup gating, the call fails, or no directives are
-// produced). It NEVER errors out the turn — every failure path returns "".
 func (e *Engine) Classify(ctx context.Context, sid string, in ClassifyInput, chat ChatFunc) string {
 	if !e.classifyEnabled || chat == nil {
 		return ""
@@ -89,8 +67,6 @@ func (e *Engine) Classify(ctx context.Context, sid string, in ClassifyInput, cha
 	return formatDirectiveMessage(e.classifierCfg, parsed)
 }
 
-// ClassifierTimeout returns the configured classifier timeout in seconds
-// (default 15), so the runtime can bound the call.
 func (e *Engine) ClassifierTimeout() int {
 	return classifierGetInt(e.classifierCfg, "timeout", 15)
 }
@@ -124,9 +100,6 @@ func profileContext(rules map[string]any) map[string]any {
 	return ctx
 }
 
-// buildClassifierCfg converts the typed schema config to the generic map the
-// classifier helpers read (only set fields ; absent keys fall back to the
-// documented defaults via classifierGet).
 func buildClassifierCfg(c *schema.ClassifierConfig) map[string]any {
 	if c == nil {
 		return map[string]any{}
@@ -194,7 +167,6 @@ func (e *Engine) getSession(sid string) *SessionState {
 	return st
 }
 
-// CleanupSession drops a session's behavior state (called on session delete).
 func (e *Engine) CleanupSession(sid string) {
 	e.mu.Lock()
 	delete(e.sessions, sid)
@@ -215,10 +187,6 @@ func (e *Engine) effectiveRules(st *SessionState) map[string]any {
 	return e.rules
 }
 
-// SetActiveProfile swaps the session's active profile. An empty profile falls
-// back to the YAML-declared profile. A re-call with the same requested value
-// is a no-op. Per-session counters / sets / flags are preserved — only the
-// active rule set is rebuilt.
 func (e *Engine) SetActiveProfile(sid, profile string) {
 	st := e.getSession(sid)
 	target := strings.TrimSpace(profile)
@@ -232,7 +200,6 @@ func (e *Engine) SetActiveProfile(sid, profile string) {
 	newRules := resolveProfile(effective, e.cfg.Rules)
 	st.activeProfile = target
 	if target == "" {
-		// Back to the YAML default : share the engine's immutable set.
 		st.rules = nil
 		st.ruleDefs = nil
 		return
@@ -241,13 +208,10 @@ func (e *Engine) SetActiveProfile(sid, profile string) {
 	st.ruleDefs = buildRuleDefinitions(e.cfg, newRules)
 }
 
-// OnTurnStart resets per-turn state at the top of each agent turn.
 func (e *Engine) OnTurnStart(sid string) {
 	e.getSession(sid).onNewTurn()
 }
 
-// OnAgentText runs on_text rules against the assistant's text and marks the
-// plan as stated. Returns any violations to inject.
 func (e *Engine) OnAgentText(sid, text string) []Violation {
 	st := e.getSession(sid)
 	if strings.TrimSpace(text) != "" {
@@ -256,8 +220,6 @@ func (e *Engine) OnAgentText(sid, text string) []Violation {
 	return checkRules(e.effectiveRuleDefs(st), st, "*", nil, "on_text", nil, text, e.tk)
 }
 
-// PreTool evaluates pre_tool rules before a call executes. A returned
-// violation with Level=="block" means the call must NOT run.
 func (e *Engine) PreTool(sid, tool string, params map[string]any, agentText string) []Violation {
 	st := e.getSession(sid)
 	vios := checkRules(e.effectiveRuleDefs(st), st, tool, params, "pre_tool", nil, agentText, e.tk)
@@ -268,11 +230,6 @@ func (e *Engine) PreTool(sid, tool string, params map[string]any, agentText stri
 	return vios
 }
 
-// BlockedSubTool reports the first pre_tool block-level violation for a tool
-// reached via a meta path (execute_tool / run_parallel / background_run),
-// WITHOUT mutating session state. It is therefore safe to call concurrently
-// for run_parallel sub-tools of the same session (checkRules only reads state).
-// Returns nil when nothing blocks.
 func (e *Engine) BlockedSubTool(sid, tool string, params map[string]any) *Violation {
 	st := e.getSession(sid)
 	for _, v := range checkRules(e.effectiveRuleDefs(st), st, tool, params, "pre_tool", nil, "", e.tk) {
@@ -284,7 +241,6 @@ func (e *Engine) BlockedSubTool(sid, tool string, params map[string]any) *Violat
 	return nil
 }
 
-// PostTool updates tracking state then evaluates post_tool rules.
 func (e *Engine) PostTool(sid, tool string, params map[string]any, result any) []Violation {
 	st := e.getSession(sid)
 	updateState(st, tool, params, e.tk)
@@ -297,9 +253,6 @@ func (e *Engine) PostTool(sid, tool string, params map[string]any, result any) [
 	return rem
 }
 
-// PromptText returns the behavioral prompt section for a session's active
-// profile: the enforced-rules list, plus the dev guide or a custom-profile
-// prompt when applicable. Empty when no rules are active.
 func (e *Engine) PromptText(sid string) string {
 	st := e.getSession(sid)
 	rules := e.effectiveRules(st)
@@ -333,10 +286,6 @@ func (e *Engine) PromptText(sid string) string {
 	return b.String()
 }
 
-// buildRuleDefinitions assembles the active rule list: explicit YAML
-// rule_definitions (highest priority), then profile-boolean-selected defaults
-// with threshold overrides, then legacy custom rules. Each call builds fresh
-// values, so threshold mutation never corrupts a shared default.
 func buildRuleDefinitions(cfg *schema.BehaviorConfig, merged map[string]any) []ruleDef {
 	var defs []ruleDef
 	seen := map[string]bool{}
@@ -373,10 +322,6 @@ func buildRuleDefinitions(cfg *schema.BehaviorConfig, merged map[string]any) []r
 		seen[ruleID] = true
 	}
 
-	// Legacy custom rules. The reference reads only the merged profile's
-	// "custom" list ; we ALSO honor the top-level security.behavior.custom
-	// (which has a dedicated schema + converter but was never consumed by
-	// the reference runtime — a faithful-but-fixed gap).
 	for _, c := range cfg.Custom {
 		addLegacyCustom(&defs, seen, map[string]any(c))
 	}

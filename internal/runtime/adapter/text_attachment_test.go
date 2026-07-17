@@ -40,9 +40,6 @@ func bytesOpts(data []byte) Options {
 	return Options{LoadBlob: func(context.Context, string) ([]byte, error) { return data, nil }}
 }
 
-// THE regression guard : a text-document attachment must reach EVERY model as a
-// readable TEXT content part, never an opaque "file" block (the bug that made a
-// vision-less model ignore an attached CV).
 func TestLoadBinaryPart_TextBecomesReadableText(t *testing.T) {
 	cv := "CANDIDATE: Amelie Granger. ROLE: Rust engineer. SECRET-TAG: ZQ7."
 	cp, ok := loadBinaryPart(context.Background(), textFilePart("text/plain"), bytesOpts([]byte(cv)))
@@ -60,9 +57,6 @@ func TestLoadBinaryPart_TextBecomesReadableText(t *testing.T) {
 	}
 }
 
-// A binary DOCUMENT (PDF, DOCX…) is extracted to a readable text block when an
-// ExtractDoc hook is wired — so every model reads the document, not an opaque
-// file block. A non-document binary (image) is left untouched.
 func TestLoadBinaryPart_DocumentExtractedToText(t *testing.T) {
 	opts := bytesOpts([]byte("%PDF-fake-bytes"))
 	opts.ExtractDoc = func(hash, mime string, data []byte) (string, bool) {
@@ -82,7 +76,6 @@ func TestLoadBinaryPart_DocumentExtractedToText(t *testing.T) {
 		t.Fatalf("extracted text not inlined: %q", cp.Text)
 	}
 
-	// An image is NOT a document : ExtractDoc returns false → native image block.
 	img := sessionstore.MessagePart{Type: sessionstore.PartTypeImage, Blob: &sessionstore.BlobRef{Hash: "h", Mime: "image/png"}}
 	icp, _ := loadBinaryPart(context.Background(), img, opts)
 	if icp.Type != llm.ContentTypeImage {
@@ -90,7 +83,6 @@ func TestLoadBinaryPart_DocumentExtractedToText(t *testing.T) {
 	}
 }
 
-// A genuinely binary attachment keeps its native block (vision / audio / file).
 func TestLoadBinaryPart_BinaryKeepsNativeBlock(t *testing.T) {
 	p := sessionstore.MessagePart{Type: sessionstore.PartTypeImage, Blob: &sessionstore.BlobRef{Hash: "h", Mime: "image/png"}}
 	cp, ok := loadBinaryPart(context.Background(), p, bytesOpts([]byte{0x89, 0x50, 0x4e, 0x47}))
@@ -102,8 +94,6 @@ func TestLoadBinaryPart_BinaryKeepsNativeBlock(t *testing.T) {
 	}
 }
 
-// A text MIME whose bytes are NOT valid UTF-8 falls back to a file block — we
-// never mangle binary that was mislabeled as text.
 func TestLoadBinaryPart_InvalidUTF8FallsBack(t *testing.T) {
 	cp, ok := loadBinaryPart(context.Background(), textFilePart("text/plain"), bytesOpts([]byte{0xff, 0xfe, 0x00, 0x01}))
 	if !ok {
@@ -114,10 +104,8 @@ func TestLoadBinaryPart_InvalidUTF8FallsBack(t *testing.T) {
 	}
 }
 
-// Oversize text is truncated on a rune boundary with a visible marker so a huge
-// document can't blow the context window.
 func TestInlineTextAttachment_Truncates(t *testing.T) {
-	big := strings.Repeat("é", maxInlinedTextBytes) // 2 bytes each → well over the cap
+	big := strings.Repeat("é", maxInlinedTextBytes)
 	out := inlineTextAttachment("text/plain", []byte(big))
 	if !strings.Contains(out, "truncated") {
 		t.Fatal("expected a truncation marker")

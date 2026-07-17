@@ -10,13 +10,6 @@ import (
 	"time"
 )
 
-// TestBus_EvictDuringAppend_NoSeqCorruption hammers a single session with
-// concurrent appends while a second goroutine evicts that same session in a
-// tight loop. Before the validated-lock fix, eviction deleted the session lock
-// without holding it, so a new append could create a fresh lock and run
-// concurrently with an in-flight append — racing the seq allocator into
-// duplicate / skipped seqs. Run with -race ; assert the persisted log has every
-// successful append exactly once, with no duplicates and no gaps.
 func TestBus_EvictDuringAppend_NoSeqCorruption(t *testing.T) {
 	bus, flusher, cleanup := startBus(t, t.TempDir())
 	defer cleanup()
@@ -30,8 +23,6 @@ func TestBus_EvictDuringAppend_NoSeqCorruption(t *testing.T) {
 	var evictWg sync.WaitGroup
 	stop := make(chan struct{})
 
-	// Evictor : drop the session (state + lock + seq allocator) as fast as it can,
-	// exactly the path that used to race appends.
 	evictWg.Add(1)
 	go func() {
 		defer evictWg.Done()
@@ -89,8 +80,6 @@ func TestBus_EvictDuringAppend_NoSeqCorruption(t *testing.T) {
 		}
 		seen[s] = true
 	}
-	// Every successful append is persisted exactly once, and the seqs form a
-	// contiguous 1..N run (no gaps from a reissued / skipped allocation).
 	if uint64(len(seqs)) != uint64(ok.Load()) {
 		t.Fatalf("persisted %d events, expected %d successful appends", len(seqs), ok.Load())
 	}

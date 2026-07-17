@@ -16,8 +16,8 @@ const (
 	ConstraintStringList ConstraintType = "string_list"
 	ConstraintInteger    ConstraintType = "integer"
 	ConstraintBoolean    ConstraintType = "boolean"
-	ConstraintSize       ConstraintType = "size"     // e.g. "10MB"
-	ConstraintDuration   ConstraintType = "duration" // e.g. "30s"
+	ConstraintSize       ConstraintType = "size"
+	ConstraintDuration   ConstraintType = "duration"
 )
 
 type ConstraintScope string
@@ -36,15 +36,11 @@ type ConstraintSpec struct {
 	AppliesTo   []string
 }
 
-// ConstraintEnforcer applies one named constraint at every Invoke. The runtime
-// attaches the constraint value map to the context (via WithConstraints); Base
-// then iterates and calls each registered enforcer.
 type ConstraintEnforcer interface {
 	Name() string
 	Check(ctx context.Context, moduleID, toolName string, params json.RawMessage, value any) error
 }
 
-// ErrConstraintViolation wraps a constraint failure with the offending name.
 type ErrConstraintViolation struct {
 	Constraint string
 	Reason     string
@@ -76,8 +72,6 @@ func (r *ConstraintRegistry) Get(name string) (ConstraintEnforcer, bool) {
 	return e, ok
 }
 
-// DefaultConstraints is the process-wide registry the Base consults when an
-// Invoke arrives with a non-empty constraints map on its context.
 var DefaultConstraints = NewConstraintRegistry()
 
 func init() {
@@ -104,8 +98,6 @@ func enforceConstraints(ctx context.Context, moduleID, toolName string, params j
 	}
 	return nil
 }
-
-// --- Built-in enforcers ---
 
 type allowedCommandsEnforcer struct{}
 

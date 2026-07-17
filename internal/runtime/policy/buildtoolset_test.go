@@ -9,11 +9,6 @@ import (
 	"github.com/digitornai/digitorn/internal/runtime/policy"
 )
 
-// ---- helpers -------------------------------------------------------
-
-// catalog is a thin test-only builder for AvailableAction lists.
-// Each entry is a "<module>.<action>:<risk>" string ; the helper
-// turns it into AvailableAction with a tool.Spec.
 func catalog(entries ...catEntry) []policy.AvailableAction {
 	out := make([]policy.AvailableAction, len(entries))
 	for i, e := range entries {
@@ -44,8 +39,6 @@ func ep(module, action string, risk tool.RiskLevel, perms ...string) catEntry {
 	return catEntry{module: module, action: action, risk: risk, perms: perms}
 }
 
-// fqns extracts the (module.action) strings from a result, sorted —
-// makes test assertions stable across slice reordering.
 func fqns(result []policy.AvailableAction) []string {
 	out := make([]string, len(result))
 	for i, a := range result {
@@ -69,12 +62,6 @@ func assertVisible(t *testing.T, result []policy.AvailableAction, want ...string
 	}
 }
 
-// ---- documented YAML scenarios -------------------------------------
-
-// TestBuild_HiddenBot : reproduces hidden-bot.yaml from
-// security-04-hidden-vs-deny.md. filesystem.glob is in hidden_actions ;
-// it must not appear in the LLM's toolset. The other filesystem
-// actions stay.
 func TestBuild_HiddenBot(t *testing.T) {
 	caps := &schema.CapabilitiesConfig{
 		DefaultPolicy: schema.CapAuto,
@@ -100,9 +87,6 @@ func TestBuild_HiddenBot(t *testing.T) {
 	)
 }
 
-// TestBuild_DenyBot : reproduces deny-bot.yaml. filesystem.glob is
-// in deny — gate 4 blocks it. From the LLM's perspective the result
-// is identical to hidden-bot : glob is absent.
 func TestBuild_DenyBot(t *testing.T) {
 	caps := &schema.CapabilitiesConfig{
 		DefaultPolicy: schema.CapAuto,
@@ -128,11 +112,6 @@ func TestBuild_DenyBot(t *testing.T) {
 	)
 }
 
-// TestBuild_GatesBot : reproduces gates-bot.yaml from
-// security-02-gates.md gate 2 live demo. shell.bash is risk_level:high
-// while max_risk_level: medium → bash must be filtered at schema-build
-// time. The doc captures the live agent reply : "I don't have a
-// shell.bash tool available."
 func TestBuild_GatesBot(t *testing.T) {
 	caps := &schema.CapabilitiesConfig{
 		DefaultPolicy: schema.CapAuto,
@@ -142,7 +121,7 @@ func TestBuild_GatesBot(t *testing.T) {
 		},
 	}
 	allActions := catalog(
-		e("shell", "bash", tool.RiskHigh), // filtered by gate 2
+		e("shell", "bash", tool.RiskHigh),
 		e("filesystem", "read", tool.RiskLow),
 		e("filesystem", "write", tool.RiskMedium),
 		e("filesystem", "glob", tool.RiskLow),
@@ -151,8 +130,6 @@ func TestBuild_GatesBot(t *testing.T) {
 	agent := &schema.Agent{ID: "main"}
 
 	visible := policy.BuildAgentToolset(true, caps, agent, allActions)
-	// shell.bash filtered (gate 2). filesystem.write is not in grant
-	// but default_policy=auto so it passes (gate 4 allow).
 	assertVisible(t, visible,
 		"filesystem.read",
 		"filesystem.write",
@@ -161,14 +138,9 @@ func TestBuild_GatesBot(t *testing.T) {
 	)
 }
 
-// TestBuild_SubAgentIsolation : reproduces the canonical
-// advanced-01-sub-agent-isolation.md pattern. The "reader" sub-agent
-// declares modules: [{filesystem: [read, glob, grep]}, memory]. It
-// must see only those actions even when the app has full filesystem
-// access.
 func TestBuild_SubAgentIsolation(t *testing.T) {
 	caps := &schema.CapabilitiesConfig{
-		DefaultPolicy: schema.CapAuto, // app-wide allows everything
+		DefaultPolicy: schema.CapAuto,
 	}
 	allActions := catalog(
 		e("filesystem", "read", tool.RiskLow),
@@ -184,7 +156,7 @@ func TestBuild_SubAgentIsolation(t *testing.T) {
 		ID: "reader",
 		Modules: schema.AgentModules{
 			{ID: "filesystem", Tools: []string{"read", "glob", "grep"}},
-			{ID: "memory"}, // bare = all actions
+			{ID: "memory"},
 		},
 	}
 
@@ -198,11 +170,6 @@ func TestBuild_SubAgentIsolation(t *testing.T) {
 	)
 }
 
-// TestBuild_ApprovalBot : reproduces approval-bot.yaml from
-// security-01-approval.md. shell.bash is in approve. The doc shows
-// the LLM CAN see bash in its toolset (it issues the tool call,
-// the approval pause fires at runtime). Confirm BuildAgentToolset
-// keeps it in the list.
 func TestBuild_ApprovalBot(t *testing.T) {
 	caps := &schema.CapabilitiesConfig{
 		DefaultPolicy: schema.CapAuto,
@@ -219,15 +186,9 @@ func TestBuild_ApprovalBot(t *testing.T) {
 	agent := &schema.Agent{ID: "main"}
 
 	visible := policy.BuildAgentToolset(true, caps, agent, allActions)
-	// approve = NeedsApproval = kept in list (the LLM will see it
-	// and try to call it ; the pause happens at runtime).
 	assertVisible(t, visible, "shell.bash")
 }
 
-// ---- inactive app + edge cases -------------------------------------
-
-// TestBuild_InactiveApp_EmptyToolset : gate 0 denies for every
-// action → result is empty regardless of capabilities.
 func TestBuild_InactiveApp_EmptyToolset(t *testing.T) {
 	caps := &schema.CapabilitiesConfig{
 		DefaultPolicy: schema.CapAuto,
@@ -247,33 +208,18 @@ func TestBuild_InactiveApp_EmptyToolset(t *testing.T) {
 	}
 }
 
-// TestBuild_NilCapabilities_AllVisible : security.md says "absence
-// means dev/test mode (no enforcement)" — without capabilities,
-// every available action passes (subject to risk_level default
-// medium and agent modules subset).
 func TestBuild_NilCapabilities_AllLowAndMediumVisible(t *testing.T) {
 	allActions := catalog(
 		e("filesystem", "read", tool.RiskLow),
 		e("filesystem", "write", tool.RiskMedium),
-		e("shell", "bash", tool.RiskHigh), // default ceiling medium → filtered
+		e("shell", "bash", tool.RiskHigh),
 	)
 	agent := &schema.Agent{ID: "main"}
 
 	visible := policy.BuildAgentToolset(true, nil, agent, allActions)
-	// Without caps : gate 2 still applies its default ceiling
-	// (medium per the doc). shell.bash (high) gets filtered.
 	assertVisible(t, visible, "filesystem.read", "filesystem.write")
 }
 
-// TestBuild_PermissionsGated : an action declares required_permissions
-// that none of the grants match → filtered at gate 3. With NO grants
-// configured, the derived granted_permissions set is empty so no
-// symbolic permission match is possible → deny.
-//
-// Mirrors the Python daemon's behaviour where granted_permissions is
-// derived from capabilities.grant[].actions as "module:action" strings
-// (security.py + compiler.py audit) — there is no YAML surface for
-// declaring agent-level permissions.
 func TestBuild_PermissionsGated(t *testing.T) {
 	caps := &schema.CapabilitiesConfig{DefaultPolicy: schema.CapAuto}
 	allActions := catalog(
@@ -283,16 +229,9 @@ func TestBuild_PermissionsGated(t *testing.T) {
 	agent := &schema.Agent{ID: "main"}
 
 	visible := policy.BuildAgentToolset(true, caps, agent, allActions)
-	// Without any grants, gate 3 denies every action declaring
-	// required_permissions — neither read nor write is visible.
-	assertVisible(t, visible /* none */)
+	assertVisible(t, visible)
 }
 
-// TestBuild_HiddenAndDeny_BothEffectiveAndIdempotent : the
-// "defence in depth" pattern from security-04-hidden-vs-deny.md.
-// Listing the same action in both deny and hidden_actions is
-// redundant but should produce identical visible-output. Test that
-// it doesn't crash or double-filter.
 func TestBuild_HiddenAndDeny_BothEffectiveAndIdempotent(t *testing.T) {
 	caps := &schema.CapabilitiesConfig{
 		DefaultPolicy: schema.CapAuto,
@@ -309,16 +248,12 @@ func TestBuild_HiddenAndDeny_BothEffectiveAndIdempotent(t *testing.T) {
 	)
 	agent := &schema.Agent{ID: "main"}
 
-	// max_risk_level default is medium so risk=high would also exclude
-	// delete on its own. Bump to high to isolate hidden+deny behaviour.
 	caps.MaxRiskLevel = schema.RiskLevel(tool.RiskHigh)
 
 	visible := policy.BuildAgentToolset(true, caps, agent, allActions)
 	assertVisible(t, visible, "filesystem.read")
 }
 
-// TestBuild_HiddenModules_WholeModuleHidden : hidden_modules removes
-// every action of the module from the LLM's view.
 func TestBuild_HiddenModules_WholeModuleHidden(t *testing.T) {
 	caps := &schema.CapabilitiesConfig{
 		DefaultPolicy: schema.CapAuto,
@@ -336,9 +271,6 @@ func TestBuild_HiddenModules_WholeModuleHidden(t *testing.T) {
 	assertVisible(t, visible, "filesystem.read")
 }
 
-// TestBuild_PreservesOrder : the LLM's tool list order matches the
-// input catalog order. Stable iteration is required for deterministic
-// system-prompt assembly (downstream toolregistry / toolplanner).
 func TestBuild_PreservesOrder(t *testing.T) {
 	caps := &schema.CapabilitiesConfig{DefaultPolicy: schema.CapAuto}
 	allActions := catalog(
@@ -355,9 +287,9 @@ func TestBuild_PreservesOrder(t *testing.T) {
 	if visible[0].Module != "z" || visible[1].Module != "a" || visible[2].Module != "m" {
 		t.Fatalf("order broken : %v", fqns(visible))
 	}
+
 }
 
-// TestBuild_EmptyInput_EmptyOutput : trivial guard.
 func TestBuild_EmptyInput_EmptyOutput(t *testing.T) {
 	visible := policy.BuildAgentToolset(true, nil, &schema.Agent{}, nil)
 	if len(visible) != 0 {
@@ -365,11 +297,6 @@ func TestBuild_EmptyInput_EmptyOutput(t *testing.T) {
 	}
 }
 
-// ---- ResolveAgentModules unit tests --------------------------------
-
-// TestResolveAgentModules_EmptyIsNil : the documented signal for
-// "no restriction" is nil — distinct from "modules: []" (which is
-// "no modules allowed" but doesn't currently occur in practice).
 func TestResolveAgentModules_EmptyIsNil(t *testing.T) {
 	got := policy.ResolveAgentModules(nil)
 	if got != nil {
@@ -381,8 +308,6 @@ func TestResolveAgentModules_EmptyIsNil(t *testing.T) {
 	}
 }
 
-// TestResolveAgentModules_BareNameAllActions : `modules: [shell]`
-// gives AllActions=true.
 func TestResolveAgentModules_BareNameAllActions(t *testing.T) {
 	got := policy.ResolveAgentModules(schema.AgentModules{
 		{ID: "shell"},
@@ -392,8 +317,6 @@ func TestResolveAgentModules_BareNameAllActions(t *testing.T) {
 	}
 }
 
-// TestResolveAgentModules_ActionSubset : `modules:
-// [{filesystem: [read, glob]}]` gives Actions={read,glob}.
 func TestResolveAgentModules_ActionSubset(t *testing.T) {
 	got := policy.ResolveAgentModules(schema.AgentModules{
 		{ID: "filesystem", Tools: []string{"read", "glob"}},
@@ -413,10 +336,6 @@ func TestResolveAgentModules_ActionSubset(t *testing.T) {
 	}
 }
 
-// An agent that declares the umbrella `mcp` module can call every
-// mcp_<server> virtual tool — the concrete servers an app connects aren't known
-// when the agent declares its modules. Without this, SG-3 (BuildAgentToolset)
-// and gate 1a drop every MCP virtual tool and the agent never sees them.
 func TestCanAgentCall_MCPUmbrellaGrantsVirtualModules(t *testing.T) {
 	mcp := policy.PolicyContext{AgentModules: policy.ResolveAgentModules(schema.AgentModules{{ID: "mcp"}})}
 	if !mcp.CanAgentCall("mcp_everything", "echo") {
@@ -426,7 +345,6 @@ func TestCanAgentCall_MCPUmbrellaGrantsVirtualModules(t *testing.T) {
 		t.Error("declaring `mcp` must grant any mcp_<server> tool")
 	}
 
-	// Action subset: `mcp: [echo]` grants only echo across MCP servers.
 	subset := policy.PolicyContext{AgentModules: policy.ResolveAgentModules(schema.AgentModules{{ID: "mcp", Tools: []string{"echo"}}})}
 	if !subset.CanAgentCall("mcp_everything", "echo") {
 		t.Error("`mcp: [echo]` must grant mcp_everything.echo")
@@ -435,8 +353,6 @@ func TestCanAgentCall_MCPUmbrellaGrantsVirtualModules(t *testing.T) {
 		t.Error("`mcp: [echo]` must NOT grant mcp_everything.add")
 	}
 
-	// An agent that did not declare `mcp` reaches no MCP tool, and a genuinely
-	// undeclared non-MCP module stays denied.
 	noMCP := policy.PolicyContext{AgentModules: policy.ResolveAgentModules(schema.AgentModules{{ID: "filesystem"}})}
 	if noMCP.CanAgentCall("mcp_everything", "echo") {
 		t.Error("agent without `mcp` must NOT reach mcp_everything")
@@ -445,15 +361,11 @@ func TestCanAgentCall_MCPUmbrellaGrantsVirtualModules(t *testing.T) {
 		t.Error("undeclared non-MCP module must stay denied")
 	}
 
-	// nil AgentModules = no per-agent restriction.
 	if !(policy.PolicyContext{}).CanAgentCall("mcp_everything", "echo") {
 		t.Error("nil AgentModules must allow")
 	}
 }
 
-// TestResolveAgentModules_MultiEntrySameModule_Merges : if a YAML
-// declares the same module twice (legal in AgentModules), the
-// actions merge.
 func TestResolveAgentModules_MultiEntrySameModule_Merges(t *testing.T) {
 	got := policy.ResolveAgentModules(schema.AgentModules{
 		{ID: "filesystem", Tools: []string{"read"}},

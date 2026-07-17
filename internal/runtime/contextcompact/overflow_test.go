@@ -34,7 +34,7 @@ func TestIsContextOverflow(t *testing.T) {
 
 func TestEmergencyKeepRecent(t *testing.T) {
 	cases := []struct{ in, want int }{
-		{20, 10}, {10, 5}, {8, 4}, {6, 4}, {4, 4}, {0, 5}, // 0 → default 10 → half 5
+		{20, 10}, {10, 5}, {8, 4}, {6, 4}, {4, 4}, {0, 5},
 	}
 	for _, c := range cases {
 		if got := EmergencyKeepRecent(c.in); got != c.want {

@@ -11,9 +11,6 @@ import (
 	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
 )
 
-// interruptStreamStub streams a few deltas, then BLOCKS mid-generation (channel
-// stays open) until the turn context is cancelled — the exact shape of a user
-// abort landing while the model is still producing tokens.
 type interruptStreamStub struct {
 	*stubLLM
 	deltas []string
@@ -30,15 +27,11 @@ func (s *interruptStreamStub) ChatStream(ctx context.Context, _ *llm.ChatRequest
 			case out <- &llm.ChatChunk{Delta: d}:
 			}
 		}
-		<-ctx.Done() // generation "in progress" until aborted
+		<-ctx.Done()
 	}()
 	return out, nil
 }
 
-// TestAbort_StreamingSavesPartialAnswer : when a turn is aborted mid-stream, the
-// engine must (a) stop consuming the stream promptly and (b) persist the partial
-// answer durably — the streamed deltas are render-only and never projected into
-// the message list, so without the save the partial reply would vanish on stop.
 func TestAbort_StreamingSavesPartialAnswer(t *testing.T) {
 	app := realDispatchApp()
 	apps := &stubApps{app: app}
@@ -58,8 +51,6 @@ func TestAbort_StreamingSavesPartialAnswer(t *testing.T) {
 		done <- err
 	}()
 
-	// Wait until both deltas have streamed (so the turn is mid-generation), then
-	// abort by cancelling the turn context.
 	waitFor(t, func() bool { return sess.count(sessionstore.EventAssistantDelta) >= 2 }, "deltas streamed")
 	cancel()
 
@@ -72,7 +63,6 @@ func TestAbort_StreamingSavesPartialAnswer(t *testing.T) {
 		t.Fatal("turn did not unwind promptly after abort — streaming not interrupted")
 	}
 
-	// The partial answer is durable as an assistant message.
 	var partial string
 	for _, ev := range sess.events {
 		if ev.Type == sessionstore.EventAssistantMessage && ev.Message != nil {
@@ -83,7 +73,6 @@ func TestAbort_StreamingSavesPartialAnswer(t *testing.T) {
 		t.Errorf("partial streamed answer not saved durably, got %q", partial)
 	}
 
-	// And the turn closed as interrupted, not errored.
 	var sawInterrupt bool
 	for _, ev := range sess.events {
 		if ev.Type == sessionstore.EventTurnEnded && ev.Turn != nil && ev.Turn.Status == "interrupted" {
@@ -95,12 +84,6 @@ func TestAbort_StreamingSavesPartialAnswer(t *testing.T) {
 	}
 }
 
-// TestAbort_ResumeWithDanglingToolCall_BuildsValidPrompt : the "does the agent
-// REALLY have all the context on resume?" proof. A turn aborted (or a daemon
-// crashed) WHILE a tool ran leaves the assistant's tool_call durable but its
-// result missing. On the next turn the engine must still build a VALID prompt —
-// the dangling tool_call paired with a result — or the provider would reject
-// every future request and the session would be permanently bricked.
 func TestAbort_ResumeWithDanglingToolCall_BuildsValidPrompt(t *testing.T) {
 	app := realDispatchApp()
 	apps := &stubApps{app: app}
@@ -112,8 +95,6 @@ func TestAbort_ResumeWithDanglingToolCall_BuildsValidPrompt(t *testing.T) {
 			t.Fatalf("seed append: %v", err)
 		}
 	}
-	// History as left by an abort mid-tool-execution : user → assistant(tool_call)
-	// → <no result> → new user message (the resume).
 	mustAppend(sessionstore.Event{Type: sessionstore.EventUserMessage, Message: &sessionstore.MessagePayload{
 		Role: "user", Parts: []sessionstore.MessagePart{{Type: sessionstore.PartTypeText, Text: "read hello.txt"}}}})
 	mustAppend(sessionstore.Event{Type: sessionstore.EventAssistantMessage, Message: &sessionstore.MessagePayload{
@@ -130,7 +111,6 @@ func TestAbort_ResumeWithDanglingToolCall_BuildsValidPrompt(t *testing.T) {
 		t.Fatalf("resume turn failed: %v", err)
 	}
 
-	// The prompt the LLM actually saw must pair the dangling tool_call.
 	if lc.got == nil {
 		t.Fatal("LLM was not called on resume")
 	}

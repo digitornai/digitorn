@@ -8,13 +8,8 @@ import (
 	"time"
 )
 
-// alias so the test file doesn't introduce a leading import name conflict.
 var osMkdirAll = os.MkdirAll
 
-// writeSessionEvents materializes `count` realistic events on disk for
-// the given session id. Mix of user_message + assistant_message +
-// turn_started/ended + a few tool_call/tool_result events so the bench
-// reflects real-world turn structure, not pure text.
 func writeSessionEvents(b *testing.B, paths Paths, sid string, count int) {
 	b.Helper()
 	if err := osMkdirAll(paths.SessionDir(sid), 0o700); err != nil {
@@ -69,7 +64,6 @@ func writeSessionEvents(b *testing.B, paths Paths, sid string, count int) {
 			ev.Turn = &TurnPayload{TurnID: fmt.Sprintf("turn-%d", i), Status: "done"}
 		}
 		events = append(events, ev)
-		// Flush in batches so the buffered writer doesn't OOM at giant counts.
 		if len(events) >= 200 {
 			if _, err := w.Write(events); err != nil {
 				b.Fatalf("write batch: %v", err)
@@ -87,9 +81,6 @@ func writeSessionEvents(b *testing.B, paths Paths, sid string, count int) {
 	}
 }
 
-// BenchmarkColdLoad_1000Events measures the time to fully cold-load a
-// 1000-event session from disk. This is the "open a long conversation
-// for the first time today" path. Target : ≤ 50ms on commodity SSD.
 func BenchmarkColdLoad_1000Events(b *testing.B) {
 	dir := b.TempDir()
 	paths := NewPaths(dir)
@@ -108,9 +99,6 @@ func BenchmarkColdLoad_1000Events(b *testing.B) {
 	}
 }
 
-// BenchmarkColdLoad_5000Events is the canary for "is the algorithm
-// linear or does it degrade at scale?". 5x the volume of the previous
-// bench ; runtime should scale ~5x, not 50x.
 func BenchmarkColdLoad_5000Events(b *testing.B) {
 	dir := b.TempDir()
 	paths := NewPaths(dir)
@@ -129,17 +117,11 @@ func BenchmarkColdLoad_5000Events(b *testing.B) {
 	}
 }
 
-// BenchmarkColdLoad_Concurrent100Sessions verifies that 100 sessions
-// can be cold-loaded IN PARALLEL without contention degrading the p99.
-// Sessions live in distinct directories so there's no shared lock —
-// any slowdown here would indicate a global lock or shared
-// allocator hotspot we need to fix.
 func BenchmarkColdLoad_Concurrent100Sessions(b *testing.B) {
 	const N = 100
 	dir := b.TempDir()
 	paths := NewPaths(dir)
 
-	// Populate 100 sessions with 100 events each up-front.
 	for i := 0; i < N; i++ {
 		writeSessionEvents(b, paths, fmt.Sprintf("sess-%d", i), 100)
 	}
@@ -165,10 +147,6 @@ func BenchmarkColdLoad_Concurrent100Sessions(b *testing.B) {
 	}
 }
 
-// BenchmarkProjectionOnly isolates the in-memory projection cost from
-// disk I/O. Useful to spot regressions in the Apply hot path without
-// noise from the JSONL reader. Each iter projects 1000 events into a
-// fresh state.
 func BenchmarkProjectionOnly(b *testing.B) {
 	const N = 1000
 	now := time.Now().UnixNano()

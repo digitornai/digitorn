@@ -955,6 +955,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 	// Subscribe to EventBus events and buffer them for the background service
 	// primitives adapter to poll via GET /api/events/recent.
 	d.subscribeToEventBus()
+	d.subscribeBrowserFrames()
 	if d.agents != nil {
 		d.agents.Start(ctx) // background reaper for terminal sub-agents / empty roots
 	}

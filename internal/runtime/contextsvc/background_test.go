@@ -8,8 +8,6 @@ import (
 	"time"
 )
 
-// fakeCounter returns len(texts) tokens — so each bucket's count is its text
-// count, making the breakdown deterministic and distinguishable.
 type fakeCounter struct {
 	delay time.Duration
 	calls atomic.Int64
@@ -27,7 +25,6 @@ func (f *fakeCounter) CountTotal(ctx context.Context, texts []string, _, _ strin
 	return len(texts), nil
 }
 
-// fakeView : 1 system text, 2 tool texts, 3 message texts → breakdown 1/2/3.
 type fakeView struct{}
 
 func (fakeView) ContextView(string) (View, bool) {
@@ -39,9 +36,6 @@ func (fakeView) ContextView(string) (View, bool) {
 	}, true
 }
 
-// TestBackground_ComputesBreakdownAndNotifies : a Touch yields the EXACT
-// per-bucket breakdown (system/tools/messages) summing to Total, off the
-// caller's goroutine.
 func TestBackground_ComputesBreakdownAndNotifies(t *testing.T) {
 	got := make(chan Result, 1)
 	b := NewBackground(&fakeCounter{}, fakeView{}, func(r Result) { got <- r })
@@ -59,8 +53,6 @@ func TestBackground_ComputesBreakdownAndNotifies(t *testing.T) {
 	}
 }
 
-// TestBackground_TouchNeverBlocks : even with a SLOW counter, Touch returns
-// immediately — the runtime never waits.
 func TestBackground_TouchNeverBlocks(t *testing.T) {
 	b := NewBackground(&fakeCounter{delay: 3 * time.Second}, fakeView{}, func(Result) {})
 	b.Start(1)
@@ -75,7 +67,6 @@ func TestBackground_TouchNeverBlocks(t *testing.T) {
 	}
 }
 
-// TestBackground_CoalescesPerSession : a burst for one session collapses.
 func TestBackground_CoalescesPerSession(t *testing.T) {
 	fc := &fakeCounter{delay: 20 * time.Millisecond}
 	var mu sync.Mutex
@@ -88,14 +79,11 @@ func TestBackground_CoalescesPerSession(t *testing.T) {
 		b.Touch("sess-burst")
 	}
 	time.Sleep(300 * time.Millisecond)
-	// 3 counts per recompute, so guard against the recompute count, not raw.
 	if c := fc.calls.Load(); c >= 500 {
 		t.Fatalf("no coalescing: %d counts for 500 touches", c)
 	}
 }
 
-// TestBackground_WorkerErrorNoEstimate : a counter error → onResult NOT called
-// → the gauge keeps its last exact value, never an estimate.
 func TestBackground_WorkerErrorNoEstimate(t *testing.T) {
 	called := atomic.Bool{}
 	b := NewBackground(errCounter{}, fakeView{}, func(Result) { called.Store(true) })

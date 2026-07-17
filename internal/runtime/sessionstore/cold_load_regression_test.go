@@ -7,14 +7,6 @@ import (
 	"time"
 )
 
-// TestColdLoad_1000Events_UnderBudget is a regression guard, not a
-// benchmark : it asserts that cold-loading a 1000-event session
-// completes well below the budget every user experiences as "instant"
-// when they reopen a conversation.
-//
-// Budget : 100ms wall-clock on commodity hardware. The current
-// implementation lands around 8ms ; if a refactor pushes it over 100ms
-// the CI breaks and we know to investigate.
 func TestColdLoad_1000Events_UnderBudget(t *testing.T) {
 	if testing.Short() {
 		t.Skip("perf test : run without -short")
@@ -23,7 +15,6 @@ func TestColdLoad_1000Events_UnderBudget(t *testing.T) {
 	paths := NewPaths(dir)
 	sid := "regression-session"
 
-	// Materialise 1000 realistic events on disk.
 	if err := os.MkdirAll(paths.SessionDir(sid), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -63,10 +54,6 @@ func TestColdLoad_1000Events_UnderBudget(t *testing.T) {
 	}
 	w.Close()
 
-	// Cold-load with a generous budget. Local SSD lands ~8ms ; CI on
-	// slow disk runners may hit 30-40ms. 100ms catches actual
-	// regressions (algorithmic, allocation explosion) without being
-	// flaky on slow CI.
 	const budget = 100 * time.Millisecond
 
 	start := time.Now()

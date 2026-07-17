@@ -79,14 +79,12 @@ func TestRender_UnknownBuiltinSkipped(t *testing.T) {
 
 func TestRender_WhenGate(t *testing.T) {
 	d := sampleData()
-	// present → rendered
 	out := Render([]schema.ContextSection{
 		{Template: "region is {{user.region}}", When: "user.region"},
 	}, d)
 	if out == "" {
 		t.Fatal("when-present section should render")
 	}
-	// absent → dropped
 	d.User["region"] = ""
 	out = Render([]schema.ContextSection{
 		{Template: "region is {{user.region}}", When: "user.region"},
@@ -120,8 +118,8 @@ func TestMerge_AgentOverridesAppById(t *testing.T) {
 		{ID: "policy", Text: "app policy", Priority: 2},
 	}}
 	agent := &schema.ContextBlock{Sections: []schema.ContextSection{
-		{ID: "policy", Text: "agent policy override", Priority: 2}, // same id → replace
-		{ID: "extra", Text: "agent only", Priority: 3},             // new
+		{ID: "policy", Text: "agent policy override", Priority: 2},
+		{ID: "extra", Text: "agent only", Priority: 3},
 	}}
 	merged := Merge(app, agent)
 	if len(merged) != 3 {
@@ -384,8 +382,6 @@ func TestRender_StaticNotWrapped(t *testing.T) {
 }
 
 func TestRender_UserDataPrivacyAcrossUsers(t *testing.T) {
-	// The same section rendered for two different users must show each user's own
-	// data — proving it's pure/per-call (the leak guard the design depends on).
 	sec := []schema.ContextSection{{Builtin: "user"}}
 	a := Render(sec, Data{User: map[string]any{"name": "Alice", "region": "US"}})
 	b := Render(sec, Data{User: map[string]any{"name": "Bob", "region": "JP"}})

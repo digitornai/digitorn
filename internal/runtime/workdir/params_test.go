@@ -9,7 +9,6 @@ import (
 func TestEnforceArgs_RewritesValidAndRejectsEscape(t *testing.T) {
 	p := NewPolicy(Options{Root: t.TempDir(), Home: t.TempDir()})
 
-	// Valid relative path is rewritten in place to the enforced absolute path.
 	args := map[string]any{"path": "notes/a.txt", "limit": float64(10)}
 	if err := EnforceArgs(p, args, "path"); err != nil {
 		t.Fatalf("valid path must pass: %v", err)
@@ -22,7 +21,6 @@ func TestEnforceArgs_RewritesValidAndRejectsEscape(t *testing.T) {
 		t.Errorf("non-path arg must be untouched, got %v", args["limit"])
 	}
 
-	// Escape is rejected.
 	esc := map[string]any{"path": "../../etc/passwd"}
 	if err := EnforceArgs(p, esc, "path"); err == nil {
 		t.Error("escaping path must be rejected")

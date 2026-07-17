@@ -11,12 +11,6 @@ import (
 
 var errFuzzyNoMatch = errors.New("no fuzzy path match")
 
-// resolveReadable resolves rel for a tool that needs the file to EXIST
-// (read/edit), tolerating an unambiguous near-miss: wrong case, a bare
-// basename, a ./ prefix, or the wrong directory. An exact hit is returned
-// untouched. A miss with exactly one workspace candidate resolves to it; with
-// several, an ambiguity error lists them; with none, rel is returned unchanged
-// so the caller emits its own not-found. Never used by write (a miss = create).
 func (m *Module) resolveReadable(ctx context.Context, rel string) (abs, actual string, err error) {
 	abs, err = m.resolveCtx(ctx, rel)
 	if err != nil {
@@ -37,8 +31,6 @@ func (m *Module) resolveReadable(ctx context.Context, rel string) (abs, actual s
 	return "", "", ferr
 }
 
-// fuzzyResolvePath finds the file rel most plausibly meant. One candidate → its
-// absolute path; several → an ambiguity error; none → errFuzzyNoMatch.
 func (m *Module) fuzzyResolvePath(ctx context.Context, rel string) (abs, actual string, err error) {
 	cands := m.fuzzyFindPath(ctx, rel)
 	switch len(cands) {
@@ -60,9 +52,6 @@ func (m *Module) fuzzyResolvePath(ctx context.Context, rel string) (abs, actual 
 	}
 }
 
-// fuzzyFindPath scans the workspace for files matching rel, by precedence:
-// case-insensitive full path, then path-suffix, then basename. Returns the
-// first non-empty tier (deduped) so basename noise never dilutes a better match.
 func (m *Module) fuzzyFindPath(ctx context.Context, rel string) []string {
 	root, ok := m.globBase(ctx)
 	if !ok || root == "" {

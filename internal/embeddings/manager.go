@@ -13,7 +13,6 @@ import (
 	"github.com/digitornai/digitorn/internal/embeddings/models"
 )
 
-// Mode selects how the manager builds a backend for a model.
 type Mode string
 
 const (
@@ -28,7 +27,7 @@ const (
 type Manager struct {
 	baseDir   string
 	mode      Mode
-	modelFile string 
+	modelFile string
 	log       *slog.Logger
 
 	mu      sync.Mutex
@@ -134,7 +133,7 @@ func (m *Manager) load(ctx context.Context, spec models.Spec) (backend.Backend, 
 		{Name: m.modelFile, URL: spec.ModelURL(m.modelFile)},
 		{Name: "tokenizer.json", URL: spec.TokenizerURL()},
 	}
-	
+
 	if m.modelFile == "model.onnx" {
 		for _, extra := range spec.ExtraFiles {
 			files = append(files, loader.File{Name: extra, URL: spec.ExtraURL(extra)})

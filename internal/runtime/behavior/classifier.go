@@ -8,8 +8,6 @@ import (
 	"strings"
 )
 
-// classifierSystemPrompt is the director prompt, with {output_schema},
-// {complexity_guide} and {risk_guide} filled at build time.
 const classifierSystemPrompt = `You are a behavioral director for an AI agent. You analyze what the user wants, what the agent has done so far, and what tools it has - then you produce precise directives that push the agent toward optimal behavior.
 
 You are NOT a simple task categorizer. You are a coach who understands the domain and directs the agent's behavior in real-time.
@@ -271,12 +269,11 @@ func shouldRunThisTurn(turn int, cfg map[string]any, userMessage string) bool {
 			n = 3
 		}
 		return turn%n == 0
-	default: // every_turn, on_new_message
+	default:
 		return true
 	}
 }
 
-// ClassifyInput carries the per-turn context the classifier reasons over.
 type ClassifyInput struct {
 	UserMessage   string
 	Capabilities  []string

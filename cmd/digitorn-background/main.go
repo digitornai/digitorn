@@ -1,13 +1,3 @@
-// Command digitorn-background is the standalone background-agents service: it
-// listens to channels/triggers and launches agentic sessions by invoking the
-// daemon's PUBLIC HTTP API. It is fully isolated — it imports nothing from the
-// daemon's server/runtime and the daemon never imports it. Configure via
-// DIGITORN_BG_* env vars (SQLite local by default, zero config).
-//
-// At boot it discovers each app's `tools.modules.channels` config from the app
-// bundles, arms the triggers, and wires the webhook + cron adapters; a periodic
-// re-scan picks up installs / config changes. Each inbound event flows through
-// the channel pipeline and is launched on the daemon over its public API.
 package main
 
 import (
@@ -38,18 +28,10 @@ type inbound struct{ mgr *processor.Manager }
 func (i *inbound) Handler() http.Handler           { return i.mgr.Handler() }
 func (i *inbound) Start(ctx context.Context) error { return i.mgr.Start(ctx) }
 
-// channelRuntimeAdapters are armed from the scanned app YAML (persistent
-// listeners), not the DB-trigger path — so a /ops/triggers push for one is a
-// no-op for arming. It still carries the owner's refresh token, which we store.
-// Webhook is NOT here: a pushed webhook trigger arms its live route at runtime
-// (rearmFunc "webhook" case) and persists its provider config for reboots.
 var channelRuntimeAdapters = map[string]bool{
 	"discord": true, "telegram": true, "rss": true, "whatsapp": true,
 }
 
-// loadWebhooksFromDB rebuilds live webhook providers from DB-persisted triggers
-// (the push-based path: daemon → POST /ops/triggers with the adapter config).
-// Without this, a pushed webhook served requests only until the next restart.
 func loadWebhooksFromDB(ctx context.Context, st *store.Store) ([]webhook.Provider, error) {
 	triggers, err := st.AllTriggers(ctx, "", true)
 	if err != nil {
@@ -73,8 +55,6 @@ func loadWebhooksFromDB(ctx context.Context, st *store.Store) ([]webhook.Provide
 	return out, nil
 }
 
-// mergeWebhookProviders overlays DB-persisted providers on the YAML plan's:
-// same path → the DB one wins (it carries the freshest pushed secrets).
 func mergeWebhookProviders(yaml, db []webhook.Provider) []webhook.Provider {
 	byPath := make(map[string]webhook.Provider, len(yaml)+len(db))
 	order := make([]string, 0, len(yaml)+len(db))
@@ -96,8 +76,6 @@ func mergeWebhookProviders(yaml, db []webhook.Provider) []webhook.Provider {
 
 func rearmFunc(client *daemonclient.Client, st *store.Store, mgr *processor.Manager, ca *cron.Adapter, pa *pieces.Adapter, wa *webhook.Adapter, umgr *userauth.Manager) func(context.Context, service.CreateTriggerRequest) (store.Trigger, error) {
 	return func(ctx context.Context, req service.CreateTriggerRequest) (store.Trigger, error) {
-		// Store the owner's refresh token regardless of adapter, so background
-		// turns for this app can mint a fresh per-user access token.
 		if umgr != nil && req.Owner != "" && req.RefreshToken != "" {
 			_ = umgr.Save(ctx, req.Owner, req.RefreshToken)
 		}
@@ -114,9 +92,6 @@ func rearmFunc(client *daemonclient.Client, st *store.Store, mgr *processor.Mana
 		if req.Activation != nil {
 			activation = *req.Activation
 		}
-		// The trigger's session runs AS the user who configured it (the push
-		// owner) — that's whose stored token authorizes the LLM gateway. This
-		// overrides a blank YAML owner so channel turns are never owner-less.
 		if req.Owner != "" {
 			activation.Owner = req.Owner
 		}
@@ -155,9 +130,6 @@ func rearmFunc(client *daemonclient.Client, st *store.Store, mgr *processor.Mana
 			if err != nil {
 				return store.Trigger{}, err
 			}
-			// Catch-up: if this schedule already ran before (a re-push after a
-			// restart/outage), replay the single most recent slot missed since its
-			// last run. The per-minute DedupKey keeps it idempotent.
 			var catchUp time.Time
 			if runs, rerr := st.ListRuns(ctx, store.RunFilter{TriggerID: id, Limit: 1}); rerr == nil && len(runs) == 1 {
 				catchUp = runs[0].StartedAt
@@ -182,9 +154,6 @@ func rearmFunc(client *daemonclient.Client, st *store.Store, mgr *processor.Mana
 			return st.GetTrigger(ctx, id)
 
 		default:
-			// Channel adapters (discord/telegram/…): the live listener is armed by
-			// the YAML scan; here we arm the trigger that binds events to a session
-			// owned by the configurer, so the turn carries that user's JWT.
 			if channelRuntimeAdapters[req.Adapter] {
 				id, err := mgr.Arm(ctx, spec)
 				if err != nil {
@@ -197,10 +166,6 @@ func rearmFunc(client *daemonclient.Client, st *store.Store, mgr *processor.Mana
 	}
 }
 
-// disarmFunc stops a trigger's live listener on a runtime disable. Cron
-// schedules are the ones that keep firing after a DB-only disable (their
-// goroutine outlives the flag), so those are stopped here; other adapters are
-// re-armed from YAML/DB on restart and gated by the disabled flag next boot.
 func disarmFunc(ca *cron.Adapter) func(context.Context, store.Trigger) error {
 	return func(_ context.Context, t store.Trigger) error {
 		if t.Adapter == "cron" {
@@ -210,11 +175,6 @@ func disarmFunc(ca *cron.Adapter) func(context.Context, store.Trigger) error {
 	}
 }
 
-// resolvePiecesAuth resolves a pieces trigger's auth. When the config says
-// `auth_from_installed: "<piece>"` (or `true` for the trigger's own piece),
-// it pulls the owner's CONFIGURED connector credentials from the daemon —
-// so a connector configured once (2-click) is reused by background triggers,
-// no re-config. Otherwise it falls back to env-placeholder resolution.
 func resolvePiecesAuth(ctx context.Context, client *daemonclient.Client, owner string, cfg map[string]any, piece string) any {
 	installed := ""
 	switch v := cfg["auth_from_installed"].(type) {

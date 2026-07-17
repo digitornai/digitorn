@@ -482,8 +482,6 @@ func (m *Module) run(ctx context.Context, raw json.RawMessage) (tool.Result, err
 			timeout = 0
 		}
 		started := time.Now()
-		// Prompt watchdog active in the foreground (where a hang freezes the turn);
-		// disabled for background tasks, which run off the loop and may sit quiet.
 		promptWait := time.Duration(m.cfg.PromptWaitSecs) * time.Second
 		if tool.IsBackground(ctx) {
 			promptWait = 0
@@ -686,7 +684,7 @@ func (m *Module) result(command string, res cmdResult, err error, timeout time.D
 			out.Error = "the command ended the shell session (e.g. `exit`); a fresh shell starts on the next call"
 		case res.WaitingForInput || errors.Is(err, errWaitingForInput):
 			out.Error = "command was waiting for interactive input (e.g. a sudo/ssh password or a y/n confirmation) and was stopped so it could not hang. Retry with the `input` parameter to provide the answer, or use a non-interactive form (e.g. `sudo -n`, `--yes`/`-y`, `ssh -o BatchMode=yes`)."
-		default: // non-zero exit code: surface the code AND the reason (stderr) so the agent sees WHY
+		default:
 			if detail := errorDetail(res.Stderr, res.Stdout); detail != "" {
 				out.Error = fmt.Sprintf("exit code %d: %s", res.ExitCode, detail)
 			} else {

@@ -2,7 +2,6 @@ package module
 
 import "fmt"
 
-// State is the lifecycle state of a module.
 type State int
 
 const (
@@ -36,7 +35,6 @@ func (s State) String() string {
 	}
 }
 
-// CanTransition reports whether transitioning from current to next is allowed.
 func (s State) CanTransition(next State) bool {
 	switch s {
 	case StateLoaded:

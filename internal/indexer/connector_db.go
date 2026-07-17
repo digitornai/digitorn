@@ -16,11 +16,6 @@ import (
 
 func init() { Register(&dbConnector{}) }
 
-// dbConnector indexes rows from a SQL query (Postgres). Walk = run the query,
-// each row → one document (text from the configured text columns, the rest
-// as filterable metadata), keyed by the id column. Watch = real-time CDC :
-// stream the table's WAL via logical replication (pglogrepl/pgoutput) and
-// upsert/delete documents as rows change, resuming from a durable LSN.
 type dbConnector struct{}
 
 func (*dbConnector) Type() string      { return "database" }
@@ -65,10 +60,6 @@ func (o dbOpts) slotPub(spec SourceSpec) (slot, pub string) {
 	return slot, pub
 }
 
-// Cleanup drops the CDC replication slot + publication so a permanently
-// removed source stops retaining WAL on the upstream database. Best-effort
-// with a short retry to absorb the race against the just-cancelled Watch
-// releasing the slot.
 func (*dbConnector) Cleanup(ctx context.Context, spec SourceSpec) error {
 	o := parseDBOpts(spec.Opts)
 	if o.DSN == "" || o.Table == "" {
@@ -104,7 +95,7 @@ func (o dbOpts) docFromRow(rec map[string]any) (Document, bool) {
 	for c := range rec {
 		cols = append(cols, c)
 	}
-	sort.Strings(cols) // deterministic text order → stable content hash
+	sort.Strings(cols)
 	var parts []string
 	meta := map[string]any{}
 	for _, c := range cols {
@@ -165,10 +156,6 @@ func (*dbConnector) Walk(ctx context.Context, spec SourceSpec, emit func(Documen
 	return rows.Err()
 }
 
-// Watch streams a table's changes in real time via Postgres logical
-// replication (pgoutput) : each insert/update upserts a document, each delete
-// removes one, resuming from a durable LSN saved in the cursor. The slot +
-// publication are auto-created. Requires Postgres wal_level=logical.
 func (*dbConnector) Watch(ctx context.Context, spec SourceSpec, sink Sink, cur Cursor) error {
 	o := parseDBOpts(spec.Opts)
 	if o.DSN == "" || o.Table == "" || o.IDColumn == "" {

@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,10 +25,13 @@ const githubProviderKey = "github"
 // managed MCP server (@mcp-managed) and route it to the direct-provider exchange.
 const githubWorkspaceAppID = "@github-workspace"
 
+const githubModeNative = "native"
+
 type githubLinkState struct {
 	FullName    string `json:"full_name"` // owner/repo
 	URL         string `json:"url"`       // https://github.com/owner/repo
 	Branch      string `json:"branch"`
+	Mode        string `json:"mode,omitempty"`
 	LinkedAt    string `json:"linked_at"`
 	LastPush    string `json:"last_push,omitempty"`
 	LastPushSHA string `json:"last_push_sha,omitempty"` // HEAD at the last successful push — drives the ahead count
@@ -169,6 +173,160 @@ func (d *Daemon) githubRepos(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"repos": repos, "count": len(repos)})
 }
 
+// POST .../github/clone {repo, branch} — clone a GitHub repo into an EMPTY
+// session workspace (native mode: push/pull operate on the real .git).
+func (d *Daemon) githubClone(w http.ResponseWriter, r *http.Request) {
+	sid := chi.URLParam(r, "session_id")
+	wd, err := d.sessionWorkdir(r.Context(), sid)
+	if err != nil {
+		writeError(w, errStatus(err), errCode(err), err.Error())
+		return
+	}
+	if wd == "" {
+		writeError(w, http.StatusBadRequest, "no_workdir", "session has no workdir")
+		return
+	}
+	token, err := d.githubToken(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "github_not_connected", err.Error())
+		return
+	}
+	var req struct {
+		Repo   string `json:"repo"`
+		Branch string `json:"branch"`
+	}
+	if err := readJSONLenient(r, &req); err != nil || strings.TrimSpace(req.Repo) == "" {
+		writeError(w, http.StatusBadRequest, "bad_request", "repo is required")
+		return
+	}
+	full := strings.TrimSpace(req.Repo)
+	if !strings.Contains(full, "/") {
+		login, lerr := githubLogin(token)
+		if lerr != nil {
+			writeError(w, http.StatusBadGateway, "github_user_failed", lerr.Error())
+			return
+		}
+		full = login + "/" + full
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
+	defer cancel()
+	branch, head, err := gitrepo.CloneRepo(ctx, wd, "https://github.com/"+full+".git", strings.TrimSpace(req.Branch), token)
+	if err != nil {
+		if errors.Is(err, gitrepo.ErrWorkdirNotEmpty) {
+			writeError(w, http.StatusConflict, "workspace_not_empty", err.Error())
+			return
+		}
+		writeError(w, http.StatusBadGateway, "github_clone_failed", err.Error())
+		return
+	}
+	st := &githubLinkState{
+		FullName:    full,
+		URL:         "https://github.com/" + full,
+		Branch:      branch,
+		Mode:        githubModeNative,
+		LinkedAt:    time.Now().UTC().Format(time.RFC3339),
+		LastPushSHA: head,
+	}
+	if err := writeGithubLink(wd, st); err != nil {
+		writeError(w, http.StatusInternalServerError, "link_persist_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"repo": st.FullName, "url": st.URL, "branch": st.Branch,
+		"head": head, "mode": githubModeNative,
+	})
+}
+
+// POST .../github/create {repo, private} — create a NEW GitHub repo and bind an
+// empty session workspace to it (native mode from birth: init + origin remote;
+// the first sync pushes everything).
+func (d *Daemon) githubCreate(w http.ResponseWriter, r *http.Request) {
+	sid := chi.URLParam(r, "session_id")
+	wd, err := d.sessionWorkdir(r.Context(), sid)
+	if err != nil {
+		writeError(w, errStatus(err), errCode(err), err.Error())
+		return
+	}
+	if wd == "" {
+		writeError(w, http.StatusBadRequest, "no_workdir", "session has no workdir")
+		return
+	}
+	token, err := d.githubToken(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "github_not_connected", err.Error())
+		return
+	}
+	if cur := readGithubLink(wd); cur != nil && cur.Mode == githubModeNative {
+		writeError(w, http.StatusConflict, "github_cloned_workspace", "this workspace is already bound to a repository")
+		return
+	}
+	var req struct {
+		Repo    string `json:"repo"`
+		Private bool   `json:"private"`
+	}
+	if err := readJSONLenient(r, &req); err != nil || strings.TrimSpace(req.Repo) == "" {
+		writeError(w, http.StatusBadRequest, "bad_request", "repo is required")
+		return
+	}
+	full, err := githubCreateRepo(r.Context().Done(), token, strings.TrimSpace(req.Repo), req.Private)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "github_create_failed", err.Error())
+		return
+	}
+	if err := gitrepo.InitRepo(wd, "https://github.com/"+full+".git", "main"); err != nil {
+		if errors.Is(err, gitrepo.ErrWorkdirNotEmpty) {
+			writeError(w, http.StatusConflict, "workspace_not_empty", err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "git_init_failed", err.Error())
+		return
+	}
+	st := &githubLinkState{
+		FullName: full,
+		URL:      "https://github.com/" + full,
+		Branch:   "main",
+		Mode:     githubModeNative,
+		LinkedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+	if err := writeGithubLink(wd, st); err != nil {
+		writeError(w, http.StatusInternalServerError, "link_persist_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"repo": st.FullName, "url": st.URL, "branch": st.Branch, "mode": githubModeNative,
+	})
+}
+
+// POST .../github/pull — fast-forward a cloned workspace from origin.
+func (d *Daemon) githubPull(w http.ResponseWriter, r *http.Request) {
+	sid := chi.URLParam(r, "session_id")
+	wd, err := d.sessionWorkdir(r.Context(), sid)
+	if err != nil {
+		writeError(w, errStatus(err), errCode(err), err.Error())
+		return
+	}
+	token, err := d.githubToken(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "github_not_connected", err.Error())
+		return
+	}
+	st := readGithubLink(wd)
+	if st == nil || st.Mode != githubModeNative {
+		writeError(w, http.StatusConflict, "github_not_cloned", "this workspace is not a cloned repository")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
+	defer cancel()
+	head, updated, err := gitrepo.NativePull(ctx, wd, token)
+	if err != nil {
+		writeError(w, http.StatusConflict, "git_pull_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"repo": st.FullName, "branch": st.Branch, "head": head, "updated": updated,
+	})
+}
+
 // GET /api/apps/{app_id}/sessions/{session_id}/github/status
 func (d *Daemon) githubStatus(w http.ResponseWriter, r *http.Request) {
 	sid := chi.URLParam(r, "session_id")
@@ -187,10 +345,15 @@ func (d *Daemon) githubStatus(w http.ResponseWriter, r *http.Request) {
 		out["url"] = st.URL
 		out["branch"] = st.Branch
 		out["last_push"] = st.LastPush
-		// Sync state vs GitHub: commits waiting to push (ahead of the last pushed
-		// SHA) + pending uncommitted changes. Best-effort — a git hiccup never
-		// fails the status call, the counts just fall back to absent.
-		if repo, oerr := gitrepo.Open(wd); oerr == nil {
+		if st.Mode != "" {
+			out["mode"] = st.Mode
+		}
+		if st.Mode == githubModeNative {
+			if unc, head, nerr := gitrepo.NativeStatus(wd); nerr == nil {
+				out["uncommitted"] = unc
+				out["head"] = head
+			}
+		} else if repo, oerr := gitrepo.Open(wd); oerr == nil {
 			if changes, cerr := repo.Changes(); cerr == nil {
 				out["uncommitted"] = len(changes)
 			}
@@ -220,6 +383,11 @@ func (d *Daemon) githubLink(w http.ResponseWriter, r *http.Request) {
 	token, err := d.githubToken(r)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, "github_not_connected", err.Error())
+		return
+	}
+	if cur := readGithubLink(wd); cur != nil && cur.Mode == githubModeNative {
+		writeError(w, http.StatusConflict, "github_cloned_workspace",
+			"this workspace is a cloned repository; it cannot be re-linked")
 		return
 	}
 	var req struct {
@@ -281,6 +449,35 @@ func (d *Daemon) githubPush(w http.ResponseWriter, r *http.Request) {
 	st := readGithubLink(wd)
 	if st == nil {
 		writeError(w, http.StatusConflict, "github_not_linked", "link a repository first")
+		return
+	}
+	if st.Mode == githubModeNative {
+		var req struct {
+			Message string `json:"message"`
+		}
+		_ = readJSONLenient(r, &req)
+		msg := strings.TrimSpace(req.Message)
+		if msg == "" {
+			msg = "digitorn: workspace sync"
+		}
+		name, email := "", ""
+		if login, lerr := githubLogin(token); lerr == nil {
+			name, email = login, login+"@users.noreply.github.com"
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
+		defer cancel()
+		head, committed, serr := gitrepo.NativeSync(ctx, wd, token, msg, name, email, st.Branch)
+		if serr != nil {
+			writeError(w, http.StatusBadGateway, "git_push_failed", serr.Error())
+			return
+		}
+		st.LastPush = time.Now().UTC().Format(time.RFC3339)
+		st.LastPushSHA = head
+		_ = writeGithubLink(wd, st)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"repo": st.FullName, "url": st.URL, "branch": st.Branch,
+			"commit": head, "committed": committed, "mode": githubModeNative,
+		})
 		return
 	}
 	repo, err := gitrepo.Open(wd)

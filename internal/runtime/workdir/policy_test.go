@@ -7,8 +7,6 @@ import (
 	"testing"
 )
 
-// newTestPolicy builds a policy rooted at a fresh temp workdir, with a fake
-// HOME so the daemon-secret denylist points at a sandbox we control.
 func newTestPolicy(t *testing.T, unrestricted bool, allowed ...string) (PathPolicy, string, string) {
 	t.Helper()
 	wd := t.TempDir()
@@ -58,7 +56,7 @@ func TestEnforce_EmptyAndBlank(t *testing.T) {
 }
 
 func TestEnforce_NoWorkdir_RejectsRelative(t *testing.T) {
-	p := NewPolicy(Options{Home: t.TempDir()}) // root == ""
+	p := NewPolicy(Options{Home: t.TempDir()})
 	if p.HasWorkdir() {
 		t.Fatal("expected no workdir")
 	}
@@ -83,7 +81,6 @@ func TestEnforce_DaemonSecret_AlwaysDenied_EvenUnrestricted(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Unrestricted lifts workdir confinement but NEVER the secret denylist.
 	p := NewPolicy(Options{Root: wd, Unrestricted: true, Home: home})
 	if _, err := p.Enforce(secret); err == nil {
 		t.Error("master.key must be denied even when unrestricted")
@@ -91,7 +88,6 @@ func TestEnforce_DaemonSecret_AlwaysDenied_EvenUnrestricted(t *testing.T) {
 	if _, err := p.Enforce(filepath.Join(sessionsDir, "evt.jsonl")); err == nil {
 		t.Error("a path under ~/.digitorn/sessions must be denied even when unrestricted")
 	}
-	// A non-secret outside path IS allowed under unrestricted.
 	ok := filepath.Join(t.TempDir(), "scratch.txt")
 	if _, err := p.Enforce(ok); err != nil {
 		t.Errorf("unrestricted should allow a non-secret outside path: %v", err)
@@ -117,7 +113,6 @@ func TestEnforce_SymlinkEscapeRejected(t *testing.T) {
 	if err := os.Symlink(outside, link); err != nil {
 		t.Skipf("symlink unsupported on this platform/run: %v", err)
 	}
-	// Writing "through" the symlink must be caught (resolved before check).
 	if _, err := p.Enforce("evil/passwd"); err == nil {
 		t.Errorf("write through a symlink that exits the workdir must be rejected")
 	}

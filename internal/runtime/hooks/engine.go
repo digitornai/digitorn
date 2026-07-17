@@ -1,28 +1,3 @@
-// Package hooks implements the doc-conform runtime hook pipeline.
-// Reference : docs-site/language/31-tool-hooks.md.
-//
-// Hooks are declarative `condition → action` pairs registered at
-// app or per-agent level. They fire on canonical runtime events
-// (turn_start / turn_end / tool_start / tool_end / session_start /
-// session_end / pre_compact / error / approval_request /
-// agent_spawn / agent_complete + the `activation` declared-only
-// event).
-//
-// Engine responsibilities (this file) :
-//
-//   - Honour priority : lower priority runs first.
-//   - Honour cooldown : a fired hook can't fire again for
-//     `cooldown` seconds.
-//   - Honour max_fires : enforced per Engine lifetime, with the
-//     understanding that production typically wires one Engine
-//     per app so the cap is effectively per-app.
-//   - Honour `enabled: false`.
-//   - Merge app-level hooks and per-agent hooks before
-//     evaluation.
-//   - Run synchronous actions (gate / transform_*) inline so the
-//     engine can observe their effects ; run async actions (log /
-//     notify / module_action) in goroutines so a slow hook never
-//     stalls the turn.
 package hooks
 
 import (
@@ -37,46 +12,24 @@ import (
 	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
 )
 
-// Sink is the subset of session-store API the hook engine needs
-// (notify + emit actions). Matches *sessionstore.Bus AppendDurable.
 type Sink interface {
 	AppendDurable(ctx context.Context, ev sessionstore.Event) (uint64, error)
 }
 
-// ToolCaller invokes a tool by FQN. Plugged by the runtime with
-// the production ToolDispatcher. It returns the tool's LLM-visible text output
-// so a hook action (e.g. lsp_diagnose) can inject that output into the agent's
-// context — not just fire-and-forget.
 type ToolCaller interface {
 	Call(ctx context.Context, name string, args map[string]any) (string, error)
 }
 
-// Engine fires hooks for one app's compiled hook set. Wire app
-// hooks at construction ; per-agent hooks are merged at fire time.
-// Engine is safe for concurrent Fire calls across sessions.
 type Engine struct {
-	// Hooks is the app-level hook set (runtime.hooks[]).
 	Hooks []schema.Hook
 
-	// Deps is plumbed into every action ; field-wise nilable.
 	Deps ActionDeps
 
-	// nowFn lets tests pin the clock for cooldown assertions.
 	nowFn func() time.Time
 
-	// Async forces engine-wide async mode. Default true ;
-	// non-blocking actions (log / notify / module_action / chain
-	// containing only those) run in their own goroutine. Tests
-	// can flip this to false for deterministic ordering.
 	Async bool
 
-	// state tracks per-hook fire count + last-fired timestamp for
-	// cooldown + max_fires enforcement. A sync.Map keyed by hook ID
-	// with atomic counters gives a LOCK-FREE hot path : at the
-	// 10M-concurrent-session target, every session firing the same
-	// app's hooks must NOT serialise on a shared mutex. Reads are
-	// lock-free ; the fire reservation is a CAS loop (see allowFire).
-	state sync.Map // hookID → *hookState
+	state sync.Map
 }
 
 type hookState struct {
@@ -84,12 +37,6 @@ type hookState struct {
 	lastFiredNs atomic.Int64
 }
 
-// New constructs an Engine for the given app hook set. The app hooks
-// are sorted by priority ONCE here (on a private copy, so the caller's
-// slice is never mutated) and treated as immutable read-only state
-// thereafter. This is what lets Fire share e.Hooks across concurrent
-// fires WITHOUT re-sorting — re-sorting the shared slice on every fire
-// was a data race (concurrent in-place sort) at the 10M-session target.
 func New(appHooks []schema.Hook, deps ActionDeps) *Engine {
 	sorted := append([]schema.Hook(nil), appHooks...)
 	sort.SliceStable(sorted, func(i, j int) bool {
@@ -103,32 +50,12 @@ func New(appHooks []schema.Hook, deps ActionDeps) *Engine {
 	}
 }
 
-// FireResult carries the side effects of a Fire call. The engine
-// embed gate/inject/transform-modifications here so the runtime
-// can apply them.
 type FireResult struct {
-	Gate *GateDecision
-	// Injects holds EVERY inject_message produced this fire, in
-	// priority order. A slice (not a single pointer) so two hooks both
-	// injecting on the same event — or a chain emitting several — all
-	// land : the runtime persists one message per entry.
+	Gate     *GateDecision
 	Injects  []*MessageInjection
 	Modified bool
 }
 
-// Fire runs every hook (app-level + per-agent if provided) whose
-// `on` matches the fired event AND whose condition evaluates true.
-// Hooks run in priority order (ascending). Returns the combined
-// FireResult so the runtime can apply gates / inject queued
-// messages / observe param mutations.
-//
-// Per-event semantics :
-//
-//   - tool_start : synchronous run for `gate` + `transform_params`
-//     actions ; everything else runs async.
-//   - tool_end   : synchronous run for `transform_result` ;
-//     everything else runs async.
-//   - other events : every action runs async.
 func (e *Engine) Fire(
 	ctx context.Context,
 	fired schema.HookEvent,
@@ -143,10 +70,6 @@ func (e *Engine) Fire(
 	}
 	payload.Event = fired
 
-	// Common case (no per-agent hooks) : reuse the pre-sorted app slice
-	// READ-ONLY — never mutate it, so concurrent fires don't race. Only
-	// when per-agent hooks are present do we allocate a fresh merged
-	// slice and sort THAT (never the shared app/agent backing arrays).
 	var merged []schema.Hook
 	if len(agentHooks) == 0 {
 		merged = e.Hooks
@@ -168,14 +91,6 @@ func (e *Engine) Fire(
 		if !hookMatchesEvent(hook, fired) {
 			continue
 		}
-		// Condition BEFORE the rate-limit gate. A hook "fires" only when
-		// its condition matches ; cooldown / max_fires budget and the
-		// fire counter must therefore be consumed only on real fires.
-		// Evaluating allowFire first would let a non-matching event (e.g.
-		// a tool_end whose `tool_failed` condition is false) burn the
-		// max_fires cap and reset the cooldown window — contradicting the
-		// doc ("a FIRED hook can't fire again for cooldown seconds") and
-		// this method's own contract.
 		if !EvalCondition(hook.Condition, payload) {
 			continue
 		}
@@ -192,18 +107,11 @@ func (e *Engine) Fire(
 					"err", err.Error())
 			}
 			result = applyEffects(result, ef)
-			// gate.allow=false → veto : do not run the remaining
-			// hooks for this event, hand control back to the runtime
-			// so it can short-circuit dispatch.
 			if ef.Gate != nil && !ef.Gate.Allow {
 				return result
 			}
 			continue
 		}
-		// Async path. Hand the goroutine a payload whose mutable maps are
-		// cloned, so a later SYNC transform_params/result (which writes the
-		// original ToolArgs/ToolResult in place) can never race this hook's
-		// concurrent read — the shallow `pl := payload` shared the map header.
 		if e.Async {
 			wg.Add(1)
 			h := hook

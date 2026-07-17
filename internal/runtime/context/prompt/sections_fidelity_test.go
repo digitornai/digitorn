@@ -12,8 +12,6 @@ import (
 
 func boolp(b bool) *bool { return &b }
 
-// AuthorityPreamble : present for a real agent, absent for the degenerate
-// no-agent context (keeps the empty-prompt invariant).
 func TestAuthorityPreamble_PresentForAgent_AbsentForNil(t *testing.T) {
 	s := prompt.AuthorityPreambleSection{}
 	if out := s.Render(prompt.PromptContext{Agent: &schema.Agent{ID: "a"}}); !strings.Contains(out, "SUPERVISOR AUTHORITY") || !strings.Contains(out, "<digitorn-protocol") {
@@ -24,11 +22,9 @@ func TestAuthorityPreamble_PresentForAgent_AbsentForNil(t *testing.T) {
 	}
 }
 
-// Communicate (plan_first) : on by default, on when *true, OFF only when
-// explicitly *false.
 func TestCommunicate_PlanFirstGating(t *testing.T) {
 	s := prompt.CommunicateSection{}
-	on := s.Render(prompt.PromptContext{Agent: &schema.Agent{ID: "a"}}) // nil PlanFirst → default ON
+	on := s.Render(prompt.PromptContext{Agent: &schema.Agent{ID: "a"}})
 	if !strings.Contains(on, "How to communicate") || !strings.Contains(on, `type="plan_first"`) {
 		t.Errorf("plan_first default-on missing: %q", on)
 	}
@@ -40,15 +36,13 @@ func TestCommunicate_PlanFirstGating(t *testing.T) {
 	}
 }
 
-// ModuleSectionsSection : priority-ordered (lower first), titled "# Title",
-// empty-content sections dropped, no content → empty section.
 func TestModuleSections_PriorityOrderedAndTitled(t *testing.T) {
 	s := prompt.ModuleSectionsSection{}
 	out := s.Render(prompt.PromptContext{
 		ModuleSections: []domainmodule.PromptSection{
 			{Title: "Beta", Priority: 90, Content: "BETA_BODY"},
 			{Title: "Alpha", Priority: 10, Content: "ALPHA_BODY"},
-			{Title: "Empty", Priority: 5, Content: "   "}, // dropped
+			{Title: "Empty", Priority: 5, Content: "   "},
 		},
 	})
 	if !strings.Contains(out, "# Alpha\nALPHA_BODY") || !strings.Contains(out, "# Beta\nBETA_BODY") {
@@ -65,8 +59,6 @@ func TestModuleSections_PriorityOrderedAndTitled(t *testing.T) {
 	}
 }
 
-// ToolUsageSection : dynamic overlay WINS over static tool_prompt for the same
-// FQN ; tools without any prompt are omitted.
 func TestToolUsage_DynamicOverlayWins(t *testing.T) {
 	idx := &index.ToolIndex{Tools: map[string]*index.IndexedTool{
 		"m.withstatic": {FQN: "m.withstatic", ToolPrompt: "STATIC_X"},

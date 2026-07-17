@@ -23,7 +23,6 @@ func TestStateStore_ConcurrentRaceForSameState(t *testing.T) {
 	s := NewStateStore(gdb, sealer)
 	ctx := context.Background()
 
-	// Create a state
 	p := PendingState{
 		State: "concurrent-state", UserID: "u", AppID: "app",
 		Provider: "google", ServerID: "srv", Verifier: "v", Nonce: "n", RedirectURI: "https://cb",
@@ -33,7 +32,6 @@ func TestStateStore_ConcurrentRaceForSameState(t *testing.T) {
 	var wg sync.WaitGroup
 	var successCount int32
 
-	// Two concurrent TakeValid calls for the same state
 	for i := 0; i < 2; i++ {
 		wg.Add(1)
 		go func() {
@@ -47,7 +45,6 @@ func TestStateStore_ConcurrentRaceForSameState(t *testing.T) {
 
 	wg.Wait()
 
-	// Only ONE should succeed
 	if successCount != 1 {
 		t.Fatalf("Expected 1 success, got %d — race condition detected!", successCount)
 	}

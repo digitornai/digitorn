@@ -8,11 +8,6 @@ import (
 	"github.com/digitornai/digitorn/internal/domain/tool"
 )
 
-// autoHeal appends suggested alternative tools to a failed result so the LLM
-// can recover on its next turn. Suggestions come from the injected
-// ToolResolver ; with none it is inert. It heals only module-level failures
-// (Result.Success == false) — a transport error (err != nil) is passed through
-// for the retry / circuit layers to handle.
 type autoHeal struct {
 	maxSuggestions  int
 	includeCrossMod bool

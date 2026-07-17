@@ -13,8 +13,6 @@ import (
 	"github.com/digitornai/digitorn/internal/config"
 )
 
-// fakeOps is a minimal bg /ops server : two users' schedules, a run for each,
-// and it records what the daemon relays (the created body, the toggled id).
 func fakeOps(t *testing.T) (*httptest.Server, *map[string]any, *[]string) {
 	t.Helper()
 	var created map[string]any
@@ -57,13 +55,10 @@ func automationsDaemon(opsURL string) *Daemon {
 	return &Daemon{cfg: &config.Config{Background: config.Background{OpsURL: opsURL, OpsToken: "t"}}}
 }
 
-// asUser injects the authenticated user into the request context (the JWT
-// middleware's job in production).
 func asUser(r *http.Request, user string) *http.Request {
 	return r.WithContext(withUserID(r.Context(), user))
 }
 
-// A user lists ONLY their schedules — never another user's.
 func TestAutomations_ListIsUserScoped(t *testing.T) {
 	srv, _, _ := fakeOps(t)
 	defer srv.Close()
@@ -80,7 +75,6 @@ func TestAutomations_ListIsUserScoped(t *testing.T) {
 	}
 }
 
-// Create FORCES owner = the authenticated caller, even when the body lies.
 func TestAutomations_CreateForcesOwner(t *testing.T) {
 	srv, created, _ := fakeOps(t)
 	defer srv.Close()
@@ -98,8 +92,6 @@ func TestAutomations_CreateForcesOwner(t *testing.T) {
 	}
 }
 
-// Toggling another user's schedule is a 404 (existence not leaked) and nothing
-// is relayed to the bg.
 func TestAutomations_ToggleOwnershipEnforced(t *testing.T) {
 	srv, _, toggled := fakeOps(t)
 	defer srv.Close()
@@ -128,7 +120,6 @@ func TestAutomations_ToggleOwnershipEnforced(t *testing.T) {
 	}
 }
 
-// Runs are filtered to those born from the caller's triggers.
 func TestAutomations_RunsAreUserScoped(t *testing.T) {
 	srv, _, _ := fakeOps(t)
 	defer srv.Close()
@@ -142,7 +133,6 @@ func TestAutomations_RunsAreUserScoped(t *testing.T) {
 	}
 }
 
-// Channel/webhook trigger runs are visible when scoped to that app.
 func TestAutomations_RunsIncludeChannelTriggers(t *testing.T) {
 	srv, _, _ := fakeOps(t)
 	defer srv.Close()
@@ -156,7 +146,6 @@ func TestAutomations_RunsIncludeChannelTriggers(t *testing.T) {
 	}
 }
 
-// No ops URL configured → graceful 404, never a panic.
 func TestAutomations_UnconfiguredIsGraceful(t *testing.T) {
 	d := automationsDaemon("")
 	rec := httptest.NewRecorder()
@@ -166,14 +155,12 @@ func TestAutomations_UnconfiguredIsGraceful(t *testing.T) {
 	}
 }
 
-// Pure-function locks.
 func TestOwnSchedulesAndRuns(t *testing.T) {
 	all := []opsSchedule{{ID: "a", Owner: "u1"}, {ID: "b", Owner: "u2"}, {ID: "c", Owner: ""}}
 	mine := ownSchedules(all, "u1")
 	if len(mine) != 1 || mine[0].ID != "a" {
 		t.Fatalf("ownSchedules wrong: %+v", mine)
 	}
-	// Ownerless rows never match anyone (incl. the empty user).
 	if got := ownSchedules(all, ""); len(got) != 0 {
 		t.Fatalf("empty user must own nothing, got %+v", got)
 	}

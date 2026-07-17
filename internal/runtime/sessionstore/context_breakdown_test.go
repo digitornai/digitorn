@@ -2,9 +2,6 @@ package sessionstore
 
 import "testing"
 
-// TestProjection_ContextTokensBreakdown : EventContextTokens sets the occupancy
-// gauge AND the system/tools/messages split, all from the exact background
-// recount.
 func TestProjection_ContextTokensBreakdown(t *testing.T) {
 	s := NewSessionState("s1")
 	Apply(s, &Event{
@@ -18,7 +15,6 @@ func TestProjection_ContextTokensBreakdown(t *testing.T) {
 		t.Errorf("breakdown = sys:%d tools:%d msgs:%d, want 300/500/200",
 			s.ContextSystemTokens, s.ContextToolsTokens, s.ContextMessageTokens)
 	}
-	// The breakdown rides the snapshot for the read-model / turn variables.
 	snap := s.Snapshot()
 	if snap.ContextToolsTokens != 500 {
 		t.Errorf("snapshot lost the tools bucket: %d", snap.ContextToolsTokens)

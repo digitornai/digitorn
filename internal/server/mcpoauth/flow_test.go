@@ -70,7 +70,6 @@ func TestResolveAuth_ProviderMerge(t *testing.T) {
 
 	t.Run("explicit yaml auth method survives table", func(t *testing.T) {
 		ra := resolveAuth(&schema.MCPAuthConfig{Provider: "notion", TokenAuthMethod: "body"})
-		// notion table is basic, but only overrides when current is "body" → so it DOES flip.
 		if ra.TokenAuthMethod != "basic" {
 			t.Fatalf("notion override should apply over body default, got %q", ra.TokenAuthMethod)
 		}
@@ -100,7 +99,6 @@ func TestBuildAuthorizeURL(t *testing.T) {
 	if q.Get("owner") != "user" {
 		t.Fatal("notion extra param missing")
 	}
-	// notion has pkce off → no challenge
 	if q.Get("code_challenge") != "" {
 		t.Fatal("pkce-off provider should not carry a challenge")
 	}
@@ -179,8 +177,6 @@ func TestExchange_BasicProvider_UsesJSONAndBasicAuth(t *testing.T) {
 	}
 }
 
-// TestRefresh_BasicUsesSameEncoding is the bug #4 fix: refresh must use the same
-// content-type as exchange (JSON+Basic for basic providers), not a form body.
 func TestRefresh_BasicUsesSameEncoding(t *testing.T) {
 	var gotCT string
 	var okBasic bool

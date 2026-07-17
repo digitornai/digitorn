@@ -17,110 +17,43 @@ import (
 	"github.com/digitornai/digitorn/internal/runtime/toolname"
 )
 
-// This file implements the 5 always-direct primitives documented
-// in docs-site/docs/language/04b-builtin-tools.md :
-//
-//   - run_parallel    : fan-out N tool calls concurrently
-//   - background_run  : launch / status / wait / cancel / list
-//   - ask_user        : pause the loop for human input
-//   - use_skill       : load a reusable workflow markdown
-//   - call_app        : invoke another deployed app as a sub-tool
-//
-// Each primitive is wired by extending dispatchMetaTool's switch.
-// V1 scope :
-//
-//   - run_parallel  : full implementation (independent tool calls,
-//                     concurrent, isolated errors)
-//   - background_run: launch + status + list_tasks (no wait/cancel
-//                     for V1 — the tasks live in BackgroundManager)
-//   - ask_user      : wired to the SG-5 approval registry when
-//                     present ; otherwise returns "no approval
-//                     registry"
-//   - use_skill     : wired through SkillLoader when present
-//   - call_app      : wired through AppCaller when present
-
-// AskUserBridge resolves an ask_user request synchronously : it
-// emits the question (typically onto the session bus as an
-// EventApprovalRequest variant) and blocks until the user answers
-// via REST/Socket.IO. Returns the user's reply text on success ;
-// returns ("", error) on timeout or cancellation.
-//
-// The production implementation lives in the daemon's approval
-// registry (SG-5 reused for ask_user — the doc reference treats
-// "ask user a question" and "approve a risky action" as the same
-// human-in-the-loop primitive with different UI hints).
 type AskUserBridge interface {
 	Ask(ctx context.Context, req AskUserRequest) (string, error)
 }
 
-// AskUserRequest is what the bridge gets at ask time. It carries the
-// full interaction shape (doc-conform with the reference daemon) :
-// a plain question, an optional reviewable/editable content blob,
-// clickable choices (single or multi-select), or a structured form —
-// so the client can render buttons / a form rather than a bare text box.
 type AskUserRequest struct {
 	SessionID     string
 	AppID         string
 	UserID        string
 	TurnID        string
 	Question      string
-	Content       string           // optional reviewable / editable markdown
-	Choices       []string         // optional clickable choices (buttons / dropdown)
-	AllowMultiple bool             // with Choices : user may pick several
-	AllowCustom   bool             // with proposals : the user may type an answer not offered
-	MinSelect     int              // multi-select : minimum picks (0 = no floor)
-	MaxSelect     int              // multi-select : maximum picks (0 = no cap)
-	Default       string           // pre-filled answer for a text / single-choice question
-	Placeholder   string           // hint shown in an empty text input
-	Multiline     bool             // text answer spans multiple lines
-	Form          []map[string]any // optional structured form fields
-	TimeoutSecs   float64          // 0 = bridge default
+	Content       string
+	Choices       []string
+	AllowMultiple bool
+	AllowCustom   bool
+	MinSelect     int
+	MaxSelect     int
+	Default       string
+	Placeholder   string
+	Multiline     bool
+	Form          []map[string]any
+	TimeoutSecs   float64
 }
 
-// SkillLoader resolves a slash command (e.g. "/commit") to a skill
-// entry the agent loads as a workflow. Resolution layers two sources :
-// the caller's own authored skills (per user × app) take precedence,
-// then the app's compiled `dev.skills[]` entries (the canonical app
-// source per docs-site/language/21-skills.md).
-//
-// `command` is matched against SkillEntry.Command with the leading "/"
-// optional. `userID` scopes the user-authored layer ; it's ignored by
-// loaders that only serve app skills.
 type SkillLoader interface {
 	Load(ctx context.Context, appID, userID, command string) (SkillEntry, error)
 }
 
-// SkillEntry is what use_skill returns to the agent. Matches the
-// doc-defined result shape (21-skills.md "How an agent uses a skill") :
-//
-//	{ "success": true,
-//	  "data": { "command": "/commit",
-//	            "description": "...",
-//	            "content": "<md>",
-//	            "note": "Follow these instructions to complete the task." } }
 type SkillEntry struct {
 	Command     string
 	Description string
 	Content     string
 }
 
-// AppCaller invokes another deployed app as a sub-tool and returns
-// the called app's final agent reply. The caller is responsible
-// for isolation (the sub-app runs in its own session). V2 may
-// surface streaming, agent picks, etc ; V1 is round-trip.
 type AppCaller interface {
 	Call(ctx context.Context, callerAppID, calledAppID, prompt, userID string) (string, error)
 }
 
-// BackgroundManager handles the 5 modes of background_run :
-// launch / status / wait / cancel / list_tasks. The doc lets the
-// runtime pick its implementation ; we expose the contract so
-// tests can swap a fake.
-//
-// Launch takes the full caller identity (LaunchRequest) so the manager
-// can (a) key tasks by the real session id — not a tenancy stand-in —
-// and (b) emit correctly-routed lifecycle events for the live client
-// view. The other modes address a task by (sessionID, taskID).
 type BackgroundManager interface {
 	Launch(ctx context.Context, req LaunchRequest) (taskID string, err error)
 	Status(ctx context.Context, sessionID, taskID string) (BackgroundStatus, error)
@@ -129,10 +62,6 @@ type BackgroundManager interface {
 	List(ctx context.Context, sessionID string) ([]BackgroundStatus, error)
 }
 
-// LaunchRequest carries the caller identity + target for a background
-// launch. SessionID/AppID/UserID/AgentID are the real routing ids (so
-// lifecycle events reach the session's realtime room) ; Tool + Args are
-// the wrapped tool call.
 type LaunchRequest struct {
 	SessionID  string
 	AppID      string
@@ -140,46 +69,25 @@ type LaunchRequest struct {
 	AgentID    string
 	Tool       string
 	Args       map[string]any
-	// NotifyWhen, when non-empty, causes a monitoring goroutine to watch
-	// the task's live output and proactively wake the agent (inject a new
-	// turn) the moment the pattern first appears — no polling required.
-	// The agent receives [BACKGROUND TASK READY] with a live-output tail.
 	NotifyWhen string
 }
 
-// BackgroundStatus is what the manager returns to the LLM about a
-// background task.
 type BackgroundStatus struct {
 	TaskID    string `json:"task_id"`
 	Name      string `json:"name"`
-	State     string `json:"state"` // running | completed | errored | cancelled
+	State     string `json:"state"`
 	Result    any    `json:"result,omitempty"`
 	Error     string `json:"error,omitempty"`
 	StartedAt int64  `json:"started_at_unix,omitempty"`
-	// Log is the live output tail of a still-running task (captured as it
-	// streams), so a status check shows progress before the task finishes.
 	Log string `json:"log,omitempty"`
 }
 
-// runParallelMaxActions caps how many actions one run_parallel call may fan
-// out. Building a large scene (hundreds of fragments) means many cheap writes,
-// so the bound is generous; the real safety valve against goroutine explosion
-// is maxParallelDepth (no nesting), not this count.
 const runParallelMaxActions = 256
 
-// ctxKey is the private type for context values this package stores, so
-// the keys can never collide with another package's.
 type ctxKey int
 
-// parallelDepthKey carries the run_parallel nesting depth so a
-// run_parallel reached from inside another run_parallel can be refused
-// before it fans out (see the recursion guard in handleRunParallel).
 const parallelDepthKey ctxKey = iota
 
-// maxParallelDepth caps run_parallel nesting. 1 means a run_parallel may
-// not contain another run_parallel — the one structure that explodes the
-// goroutine count (50^depth) and can OOM the daemon. It bounds a single
-// call's fan-out to runParallelMaxActions goroutines.
 const maxParallelDepth = 1
 
 func parallelDepth(ctx context.Context) int {
@@ -187,28 +95,8 @@ func parallelDepth(ctx context.Context) int {
 	return d
 }
 
-// handleRunParallel : fan out the `actions` slice via asyncio.gather
-// equivalent (one goroutine per action, all join). Doc-conform
-// semantics (04c-primitives.md "Parallel execution") :
-//
-//   - param key is `actions`, NOT `calls` (V0 typo, corrected here).
-//   - `actions` is a list of {name, params}, 1-256 elements.
-//   - Each action is independent — failures in one don't cancel the
-//     others.
-//   - Results come back in the same order as input.
-//   - Result envelope is `{results: [<r1>, <r2>, ...]}`.
-//   - Each <ri> is the verbatim ToolOutcome-as-JSON shape : status,
-//     content (joined text parts), error if any.
-//
-// parallelWrapperKeys are the argument keys we accept for the action list, in
-// preference order. The LLM-facing schema advertises "tasks", but models vary
-// wildly, so we also accept the legacy "actions" + natural synonyms, a bare
-// array stashed under llm.ArgsArrayKey, and (last resort) the sole array-valued
-// field — so a reasonable run_parallel call NEVER fails on shape alone.
 var parallelWrapperKeys = []string{"tasks", "actions", "calls", "tools", "invocations", "steps", "items", llm.ArgsArrayKey}
 
-// extractParallelActions liberally pulls the list of actions out of the call
-// args, tolerating every common shape a model produces.
 func extractParallelActions(args map[string]any) []any {
 	if args == nil {
 		return nil
@@ -218,9 +106,6 @@ func extractParallelActions(args map[string]any) []any {
 			return arr
 		}
 	}
-	// Any field whose (possibly string-encoded) array's first item looks like an
-	// action object (a map carrying a tool/name key) — covers a model that wraps
-	// the list under an unexpected key, possibly alongside stray scalar fields.
 	for _, v := range args {
 		if arr, ok := asActionArray(v); ok {
 			if obj, ok := arr[0].(map[string]any); ok && parallelToolName(obj) != "" {
@@ -228,7 +113,7 @@ func extractParallelActions(args map[string]any) []any {
 			}
 		}
 	}
-	if len(args) == 1 { // a single array-valued field under any other name
+	if len(args) == 1 {
 		for _, v := range args {
 			if arr, ok := asActionArray(v); ok {
 				return arr
@@ -238,10 +123,6 @@ func extractParallelActions(args map[string]any) []any {
 	return nil
 }
 
-// asActionArray returns v as a non-empty []any, decoding a STRING that holds a
-// JSON array first. Models frequently double-encode list params — sending
-// {"tasks":"[{...},{...}]"} instead of {"tasks":[{...},{...}]} — which a plain
-// type assertion drops, failing the whole run_parallel call on shape alone.
 func asActionArray(v any) ([]any, bool) {
 	switch t := v.(type) {
 	case []any:
@@ -258,8 +139,6 @@ func asActionArray(v any) ([]any, bool) {
 	return nil, false
 }
 
-// parallelToolName reads the target tool name from an action object under any of
-// the accepted keys ("tool" is canonical ; name/action/tool_name tolerated).
 func parallelToolName(obj map[string]any) string {
 	for _, k := range []string{"tool", "name", "action", "tool_name"} {
 		if s, ok := obj[k].(string); ok && strings.TrimSpace(s) != "" {
@@ -269,8 +148,6 @@ func parallelToolName(obj map[string]any) string {
 	return ""
 }
 
-// parallelArgs reads the per-action argument object under any accepted key
-// ("args" is canonical ; params/arguments/input/parameters tolerated).
 func parallelArgs(obj map[string]any) any {
 	for _, k := range []string{"args", "params", "arguments", "input", "parameters"} {
 		if v, ok := obj[k]; ok {
@@ -281,11 +158,6 @@ func parallelArgs(obj map[string]any) any {
 }
 
 func (m *MetaDispatcher) handleRunParallel(ctx context.Context, call runtime.ToolInvocation) runtime.ToolOutcome {
-	// Recursion guard : a run_parallel reached from inside another
-	// run_parallel would fan out 50^depth goroutines and can OOM the
-	// daemon. Meta-tools bypass the security gate by design, so this is
-	// the only place to bound it. Nested fan-out has no legitimate use —
-	// the model should flatten its actions into one call.
 	if parallelDepth(ctx) >= maxParallelDepth {
 		return errored("run_parallel: nested run_parallel is not allowed; flatten the actions into a single call")
 	}
@@ -298,9 +170,6 @@ func (m *MetaDispatcher) handleRunParallel(ctx context.Context, call runtime.Too
 		return errored(fmt.Sprintf("run_parallel: too many actions (%d > %d)", len(raw), runParallelMaxActions))
 	}
 
-	// One result slot per input action, in input order. A malformed action
-	// becomes a single errored result instead of aborting the whole batch
-	// (doc : "failures in one do not cancel the others").
 	n := len(raw)
 	names := make([]string, n)
 	outcomes := make([]runtime.ToolOutcome, n)
@@ -310,15 +179,8 @@ func (m *MetaDispatcher) handleRunParallel(ctx context.Context, call runtime.Too
 		idx     int
 		outcome runtime.ToolOutcome
 	}
-	// Buffered to the action count so a sender NEVER blocks : even if we
-	// stop reading early on cancellation, every goroutine still delivers
-	// into the buffer and exits cleanly — no leak, and no write to a slice
-	// the collector is reading, so no data race.
 	resCh := make(chan childResult, n)
 
-	// Children run one recursion level deeper so a nested run_parallel hits
-	// the guard above. WithValue keeps the parent's Done/Err, so
-	// cancellation still propagates.
 	childCtx := context.WithValue(ctx, parallelDepthKey, parallelDepth(ctx)+1)
 
 	launched := 0
@@ -364,11 +226,6 @@ func (m *MetaDispatcher) handleRunParallel(ctx context.Context, call runtime.Too
 			}()
 			child := runtime.ToolInvocation{
 				CallID: fmt.Sprintf("%s:%d", call.CallID, i),
-				// ResolveAlias as well as Canonicalize so the GATE below sees the
-				// same resolved FQN that execute_tool gates and that Dispatch will
-				// run — otherwise a bare alias (remember, task_update, agent) is
-				// gated under its unresolved name and fail-closed denied even
-				// though the identical call works directly or via execute_tool.
 				Name:       ResolveAlias(Canonicalize(name)),
 				Args:       params,
 				AppID:      call.AppID,
@@ -401,22 +258,12 @@ func (m *MetaDispatcher) handleRunParallel(ctx context.Context, call runtime.Too
 		}(i, name, params)
 	}
 
-	// Fan-in : collect the launched children in completion order, store each
-	// in its input slot so the envelope stays input-ordered. Never block
-	// past the parent context — on cancellation, return at once with
-	// whatever finished plus a ctx error for the stragglers (their
-	// goroutines drain into the buffer and exit).
 	for got := 0; got < launched; {
 		select {
 		case r := <-resCh:
 			outcomes[r.idx] = r.outcome
 			filled[r.idx] = true
 			got++
-			// Tell the client THIS action finished, without waiting for the
-			// batch. Transient observability only — not projected into the
-			// agent's history, so the combined barrier result it gets is
-			// unchanged. Emitted here (the fan-in), so every tool — present and
-			// future — is covered identically.
 			if m.Progress != nil {
 				m.Progress(ctx, sessionstore.Event{
 					Type:          sessionstore.EventToolProgress,
@@ -426,7 +273,7 @@ func (m *MetaDispatcher) handleRunParallel(ctx context.Context, call runtime.Too
 					CorrelationID: call.CallID,
 					Tool: &sessionstore.ToolPayload{
 						CallID:   fmt.Sprintf("%s:%d", call.CallID, r.idx),
-						Name:     ResolveAlias(Canonicalize(names[r.idx])), // canonical FQN, like every other tool event
+						Name:     ResolveAlias(Canonicalize(names[r.idx])),
 						Status:   r.outcome.Status,
 						Error:    r.outcome.Error,
 						Metadata: map[string]any{"index": r.idx, "total": n, "completed": got},
@@ -456,9 +303,6 @@ func (m *MetaDispatcher) handleRunParallel(ctx context.Context, call runtime.Too
 		if outcomes[i].Error != "" {
 			results[i]["error"] = outcomes[i].Error
 		}
-		// Compress text parts to a single content string. Multi-format
-		// outcomes (e.g. text + image) join their text fields ; binary
-		// parts (image/audio) need a separate channel in V2.
 		var content string
 		for _, p := range outcomes[i].Parts {
 			content += p.Text

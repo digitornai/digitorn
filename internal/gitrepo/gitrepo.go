@@ -1,15 +1,3 @@
-// Package gitrepo is a per-workspace SHADOW git repository used to track ONLY
-// the agent's file changes, without ever touching a user's own .git that may
-// already live in the workdir.
-//
-// The git data lives under <workdir>/.digitorn/git while the worktree is the
-// <workdir> itself (go-git lets the object store and the worktree sit in
-// different places). The first commit (HEAD) is the workspace's starting state,
-// so every later modification is a clean diff against that baseline — no
-// hand-maintained per-file baselines that drift (the bug in the old system).
-//
-// It is a pure package: it runs inside the workspace worker, never on the
-// daemon hot path.
 package gitrepo
 
 import (
@@ -40,11 +28,6 @@ import (
 	"github.com/sergi/go-diff/diffmatchpatch"
 )
 
-// noGitlinkStorer hides the storer's Filesystem() method so go-git does NOT
-// write a `.git` gitlink file into the worktree. That gitlink would collide
-// with a user's pre-existing .git (and pollute even a fresh workdir); go-git
-// uses the worktree we pass it explicitly, so the link is unnecessary for our
-// in-process use. The shadow git data lives only under .digitorn/git.
 type noGitlinkStorer struct{ storage.Storer }
 
 const (
@@ -52,22 +35,12 @@ const (
 	gitSubdir = "git"
 )
 
-// Repo is the shadow repo for one workspace (session workdir). All exported
-// operations are serialised by mu so a Repo is safe for concurrent use (go-git
-// worktree ops are not re-entrant); the worker still issues one refresh per
-// session at a time, so this only guards against misuse.
 type Repo struct {
 	mu      sync.Mutex
 	workdir string
 	gitDir  string
 	repo    *git.Repository
 	wt      *git.Worktree
-	// origin maps an agent-CREATED file (absent from HEAD) to the blob of its
-	// first-seen content this session. The diff for such a file is computed
-	// against this origin — not the empty HEAD — so a later edit shows real
-	// +/- (deletions), not the whole file as one big addition. Blobs are
-	// content-addressed and immutable (no drifting baseline); the path->hash
-	// map is persisted to digitorn-origin.json and pruned at commit/reject.
 	origin map[string]plumbing.Hash
 }
 
@@ -75,9 +48,6 @@ const originFile = "digitorn-origin.json"
 
 func gitDirOf(workdir string) string { return filepath.Join(workdir, metaDir, gitSubdir) }
 
-// workdirHasContent reports whether workdir holds any entry other than the
-// daemon's own .digitorn metadata or a user's .git — i.e. whether there is
-// anything for the shadow repo to track.
 func workdirHasContent(workdir string) bool {
 	entries, err := os.ReadDir(workdir)
 	if err != nil {
@@ -91,12 +61,6 @@ func workdirHasContent(workdir string) bool {
 	return false
 }
 
-// OpenIfNeeded opens the shadow repo ONLY when there is something to track: the
-// shadow already exists, or the workdir has real (non-meta) content. On an
-// otherwise-empty workdir it returns (nil, nil) WITHOUT creating .digitorn, so a
-// scaffolder that requires an empty directory (npm create, git clone, …) can run
-// there first — the shadow is then created by the first read once files appear.
-// Read-only workspace ops use this; writes use Open (which always creates).
 func OpenIfNeeded(workdir string) (*Repo, error) {
 	if !headExists(gitDirOf(workdir)) && !workdirHasContent(workdir) {
 		return nil, nil
@@ -104,7 +68,6 @@ func OpenIfNeeded(workdir string) (*Repo, error) {
 	return Open(workdir)
 }
 
-// Open opens — initialising on first use — the shadow repo for workdir.
 func Open(workdir string) (*Repo, error) {
 	gd := gitDirOf(workdir)
 	storer := noGitlinkStorer{filesystem.NewStorage(osfs.New(gd), cache.NewObjectLRU(8*1024*1024))}
@@ -129,9 +92,6 @@ func Open(workdir string) (*Repo, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Never track our own metadata folder, nor a user's pre-existing .git.
-	// In-memory excludes drive go-git; the on-disk info/exclude keeps the real
-	// git CLI (and any reopen) consistent with the same rule.
 	wt.Excludes = append(wt.Excludes,
 		gitignore.ParsePattern(metaDir+"/", nil),
 		gitignore.ParsePattern(".git/", nil),
@@ -145,9 +105,6 @@ func Open(workdir string) (*Repo, error) {
 
 func (r *Repo) originFilePath() string { return filepath.Join(r.gitDir, originFile) }
 
-// loadOrigin rehydrates the per-file first-seen baselines so the diff survives a
-// daemon restart mid-session. Best-effort: a missing / corrupt file just yields
-// an empty map (the next write recaptures).
 func (r *Repo) loadOrigin() {
 	b, err := os.ReadFile(r.originFilePath())
 	if err != nil {
@@ -162,7 +119,6 @@ func (r *Repo) loadOrigin() {
 	}
 }
 
-// saveOriginLocked persists the path->blob map atomically (temp + rename).
 func (r *Repo) saveOriginLocked() {
 	m := make(map[string]string, len(r.origin))
 	for p, h := range r.origin {
@@ -179,8 +135,6 @@ func (r *Repo) saveOriginLocked() {
 	_ = os.Rename(tmp, r.originFilePath())
 }
 
-// writeBlobLocked stores content as a git blob and returns its hash. The blob is
-// immutable + content-addressed, so the captured baseline can never drift.
 func (r *Repo) writeBlobLocked(content string) (plumbing.Hash, error) {
 	obj := r.repo.Storer.NewEncodedObject()
 	obj.SetType(plumbing.BlobObject)
@@ -212,9 +166,6 @@ func (r *Repo) blobContentLocked(h plumbing.Hash) (string, error) {
 	return string(b), err
 }
 
-// captureOriginLocked snapshots a file's CURRENT content as its diff baseline the
-// FIRST time we see it as agent-created (absent from HEAD). Idempotent and cheap
-// once captured (a map hit); a file already at HEAD or unreadable is skipped.
 func (r *Repo) captureOriginLocked(rel string) {
 	if _, ok := r.origin[rel]; ok {
 		return
@@ -234,13 +185,6 @@ func (r *Repo) captureOriginLocked(rel string) {
 	r.saveOriginLocked()
 }
 
-// diffBaselineLocked returns the content a file's diff is computed against:
-//   - a file present at HEAD (the session baseline): the HEAD blob, so an edit
-//     shows real +/-;
-//   - an agent-CREATED file still equal to its first-seen content: EMPTY, so a
-//     brand-new file shows as a clean add (+N, full content, no deletions);
-//   - an agent-created file that has since been EDITED: its first-seen snapshot,
-//     so the edit shows real +/- (the deletions the user was missing).
 func (r *Repo) diffBaselineLocked(rel, newContent string) (string, error) {
 	head, atHead, err := r.headBlobExists(rel)
 	if err != nil {

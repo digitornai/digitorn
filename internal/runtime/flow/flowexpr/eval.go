@@ -6,24 +6,19 @@ import (
 	"sync"
 )
 
-// Context resolves a dotted path (already split) to a value. A missing path
-// returns (nil, false). Values are expected to be string, float64, bool, or nil.
 type Context interface {
 	Lookup(path []string) (any, bool)
 }
 
-// Program is a parsed, reusable expression. Compile once, evaluate many times.
 type Program struct {
 	root node
 	src  string
 }
 
-var cache sync.Map // src string → *Program (or compileErr)
+var cache sync.Map
 
 type compileErr struct{ err error }
 
-// Compile parses src into a reusable Program. Results are memoised: the flow
-// graph is bounded and validated, so the same when-expression compiles once.
 func Compile(src string) (*Program, error) {
 	if v, ok := cache.Load(src); ok {
 		switch t := v.(type) {
@@ -43,8 +38,6 @@ func Compile(src string) (*Program, error) {
 	return p, nil
 }
 
-// Eval evaluates the compiled program against ctx, returning a boolean.
-// The `default` sentinel always evaluates true (catch-all route).
 func (p *Program) Eval(ctx Context) (bool, error) {
 	v, err := evalNode(p.root, ctx)
 	if err != nil {
@@ -53,7 +46,6 @@ func (p *Program) Eval(ctx Context) (bool, error) {
 	return truthy(v), nil
 }
 
-// EvalString is a convenience that compiles and evaluates in one call.
 func EvalString(src string, ctx Context) (bool, error) {
 	p, err := Compile(src)
 	if err != nil {
@@ -62,18 +54,12 @@ func EvalString(src string, ctx Context) (bool, error) {
 	return p.Eval(ctx)
 }
 
-// EvalValue evaluates the program to its raw value (string/number/bool/nil)
-// instead of coercing to bool. Used by decision nodes, which switch routes on
-// the value of `expr` rather than on a boolean.
 func (p *Program) EvalValue(ctx Context) (any, error) {
 	return evalNode(p.root, ctx)
 }
 
-// ValueToString renders an evaluated value the way decision-route matching
-// compares it against a literal `when`.
 func ValueToString(v any) string { return toString(v) }
 
-// EvalValueString compiles src and evaluates it to its string value.
 func EvalValueString(src string, ctx Context) (string, error) {
 	p, err := Compile(src)
 	if err != nil {
@@ -175,9 +161,6 @@ func evalBinary(b binary, ctx Context) (any, error) {
 	return nil, fmt.Errorf("flowexpr: unsupported operator")
 }
 
-// valuesEqual compares two values. If both are numeric, compare numerically;
-// otherwise compare by string form so `category == 'refund'` works regardless
-// of whether the context value is a string or another scalar.
 func valuesEqual(a, b any) bool {
 	an, aok := toNumber(a)
 	bn, bok := toNumber(b)

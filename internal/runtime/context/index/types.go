@@ -1,73 +1,26 @@
-// Package index implements the tool index that powers the
-// context_builder's tool-discovery surface (CB-1). The index is
-// built per (app version, agent) tuple and pre-filtered by the
-// security gates (SG-3 BuildAgentToolset) so the LLM never sees
-// tools its agent isn't allowed to call.
-//
-// Documented in docs-site/docs/reference/modules/context_builder.md
-// section "Tool indexing" :
-//
-//	"At app start, scans every loaded module and builds a searchable
-//	 index of all available actions. Per action it records :
-//	   - Fully qualified name (filesystem.read, git.status)
-//	   - The @action description
-//	   - Tags + multilingual aliases
-//	   - Parameter names + descriptions
-//	   - Side effects + risk level
-//	   - Synonym expansions (e.g. delete indexes remove, destroy,
-//	     erase)"
-//
-// The semantic side (FastEmbed + Qdrant HNSW) lives in package
-// semantic (CB-5). This package owns the keyword half : inverted
-// index, prefix matching, fuzzy matching, synonym expansion.
-//
-// Construction is one-shot, then the index is read-only — safe to
-// share across all sessions of an (app, agent) pair without locks.
 package index
 
 import (
 	"github.com/digitornai/digitorn/internal/domain/tool"
 )
 
-// IndexedTool is the per-action record stored in the ToolIndex.
-// Every field is read directly by either the LLM-facing surface
-// (Description, Params, Tags) or the search-side (Tokens, Aliases,
-// Synonyms expanded from Tags / Description).
-//
-// FQN is the canonical "module.action" key the rest of the
-// runtime uses (the dispatcher, the gates, the audit log). It
-// MUST equal `Module + "." + Action`.
 type IndexedTool struct {
-	FQN          string // "filesystem.read"
-	Module       string // "filesystem"
-	Action       string // "read"
-	Description  string // @action description (one paragraph)
+	FQN          string
+	Module       string
+	Action       string
+	Description  string
 	Params       []tool.ParamSpec
 	RiskLevel    tool.RiskLevel
 	Irreversible bool
 
-	// ToolPrompt : optional extra usage instructions for this action,
-	// surfaced verbatim in the prompt's "Tool Usage Instructions"
-	// section. Mirrors tool.Spec.ToolPrompt.
 	ToolPrompt string
 
-	// DiscoveryOnly: tool is searchable/getable but never included in direct
-	// JSON schemas sent to the LLM. Set when the app grants wildcard access to
-	// a large catalog (pieces, MCP) — avoids blowing the token budget.
 	DiscoveryOnly bool
 
-	// Tags : free-form classification keywords from @action(tags=...).
-	// e.g. ["io", "files", "read"]. Used by browse_category and by
-	// the keyword search for tag-boost scoring.
 	Tags []string
 
-	// Aliases : multilingual short names declared on @action(aliases=...).
-	// e.g. ["lire", "read file"]. Used by the keyword search to find
-	// the tool from non-English queries.
 	Aliases []string
 
-	// Permissions : the symbolic permissions the action requires.
-	// Mirrors tool.Spec.Permissions. Used by gate 3.
 	Permissions []string
 }
 

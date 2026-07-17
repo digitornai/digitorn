@@ -1,11 +1,3 @@
-// Package scheduler exposes one LLM-facing tool — schedule — that lets an agent
-// program a recurring wake-up of ITS OWN session. The agent calls it ("remind me
-// every morning at 9"), and the module hands the request to the background
-// service's ops API (POST /ops/schedules): the service arms a cron bound to this
-// session and, at each fire, re-runs the session with the given message injected
-// (the agent keeps all of its accumulated context). The module holds no scheduler
-// state itself — it is a thin, gated bridge from the agent to the durable bg
-// service, so a daemon restart never loses a schedule.
 package scheduler
 
 import (
@@ -26,16 +18,12 @@ import (
 	"github.com/digitornai/digitorn/pkg/module"
 )
 
-// Config is the per-app configuration. BackgroundURL/OpsToken locate the bg
-// service (daemon-global, so they default from env); DefaultReply sets how a
-// wake replies on the channel when the agent doesn't specify.
 type Config struct {
 	BackgroundURL string `json:"background_url" yaml:"background_url"`
 	OpsToken      string `json:"ops_token" yaml:"ops_token"`
 	DefaultReply  string `json:"default_reply" yaml:"default_reply"`
 }
 
-// Module is the scheduler bridge.
 type Module struct {
 	module.Base
 
@@ -44,7 +32,6 @@ type Module struct {
 	client *http.Client
 }
 
-// New constructs the scheduler module with its single tool wired.
 func New() *Module {
 	m := &Module{}
 	m.Base = module.Base{
@@ -119,11 +106,6 @@ func (m *Module) snapshot() (Config, *http.Client) {
 	return m.cfg, m.client
 }
 
-// effectiveConfig layers the CALLING app's per-module config (delivered per
-// invocation in ctx) over the Init-time defaults. This is the only correct path
-// for a shared in-proc instance : the singleton's m.cfg is whatever the first
-// app set, so the app-specific background_url / ops_token / default_reply must
-// come from ctx, never from Init.
 func (m *Module) effectiveConfig(ctx context.Context) (Config, *http.Client) {
 	base, client := m.snapshot()
 	if raw := module.ModuleConfigFrom(ctx); len(raw) > 0 {
@@ -143,7 +125,6 @@ func (m *Module) effectiveConfig(ctx context.Context) (Config, *http.Client) {
 	return base, client
 }
 
-// schedule programs the wake-up by handing it to the background service.
 func (m *Module) schedule(ctx context.Context, raw json.RawMessage) (tool.Result, error) {
 	var p struct {
 		Schedule string `json:"schedule"`

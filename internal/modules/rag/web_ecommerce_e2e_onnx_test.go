@@ -15,12 +15,6 @@ import (
 	"github.com/digitornai/digitorn/internal/indexer"
 )
 
-// End-to-end : crawl a realistic e-commerce catalog (an Amazon-style product
-// site served locally) via the web connector → embed with REAL minilm → store
-// in REAL Qdrant → a shopper's natural-language query retrieves the right
-// product page. This is the "index a whole product site, then ask for a
-// product" case. (Real amazon.com is bot-blocked + JS-rendered, so the catalog
-// is served locally and crawled by the same connector.)
 func TestRAG_EcommerceWebIndex_E2E(t *testing.T) {
 	qurl := os.Getenv("QDRANT_URL")
 	if qurl == "" {
@@ -87,7 +81,7 @@ func TestRAG_EcommerceWebIndex_E2E(t *testing.T) {
 	off, on := false, true
 	src := SourceConfig{
 		Name: "shop", Type: "web", KnowledgeBase: "shop", URL: srv.URL,
-		MaxPages: 30, Sitemap: &off, RespectRobots: &off, AllowPrivate: &on, // local test server is loopback
+		MaxPages: 30, Sitemap: &off, RespectRobots: &off, AllowPrivate: &on,
 	}
 	svc := indexer.NewService(nil, 4)
 	rep, err := svc.Sync(context.Background(), webSpec(src, AutoIndex{}), ragSink{eng: eng})

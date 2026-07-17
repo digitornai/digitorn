@@ -12,13 +12,6 @@ import (
 	"github.com/digitornai/digitorn/pkg/module"
 )
 
-// TestMCPToolDescriptions_InjectedVerbatim connects the REAL everything server
-// and proves that every MCP tool's DESCRIPTION (and every declared input
-// property) is injected straight from the server — verbatim, not invented or
-// placeholdered — the same source-of-truth a native tool gets from its own
-// registration. This is the guarantee the agent reads the server's real docs.
-//
-//	go test -tags mcpintegration -run TestMCPToolDescriptions_InjectedVerbatim ./internal/modules/mcp/ -v
 func TestMCPToolDescriptions_InjectedVerbatim(t *testing.T) {
 	ctx := module.WithModuleConfig(context.Background(), map[string]any{
 		"servers": map[string]any{"ev": map[string]any{
@@ -49,14 +42,11 @@ func TestMCPToolDescriptions_InjectedVerbatim(t *testing.T) {
 				t.Errorf("server tool %q was not materialized as a native spec", raw.Name)
 				continue
 			}
-			// Description: verbatim from the server (when the server gives one).
 			if rawDesc := strings.TrimSpace(raw.Description); rawDesc != "" && spec.Description != rawDesc {
 				t.Errorf("%s: description not injected verbatim\n server: %q\n spec:   %q", raw.Name, rawDesc, spec.Description)
 			} else if spec.Description == "" {
 				t.Errorf("%s: empty description reached the agent", raw.Name)
 			}
-			// Schema: every server-declared input property is exposed as a param,
-			// parsed here independently of the module's own converter.
 			props := schemaPropNames(raw.InputSchema)
 			for _, p := range props {
 				if !hasParam(spec.Params, p) {

@@ -33,9 +33,6 @@ func (d *Daemon) listTemplates(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"templates": out})
 }
 
-// serveTemplatePreview serves a template's pre-built preview. The wildcard lets
-// the dist's relative assets (./assets/*) resolve under .../preview/, so the
-// preview_url MUST carry a trailing slash. Confined to the app bundle.
 func (d *Daemon) serveTemplatePreview(w http.ResponseWriter, r *http.Request) {
 	appID := chi.URLParam(r, "app_id")
 	tplID := chi.URLParam(r, "template_id")

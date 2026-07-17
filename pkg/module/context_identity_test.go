@@ -7,10 +7,6 @@ import (
 	"github.com/digitornai/digitorn/internal/domain/tool"
 )
 
-// The live dispatch path (BusAdapter, worker service) attaches identity via
-// tool.WithIdentity only — the module-level getters must see it. Regression:
-// they read only their own keys (set exclusively by tests), so every module
-// scoped per-app/user/session state under "" in production.
 func TestIDGettersFallBackToToolIdentity(t *testing.T) {
 	ctx := tool.WithIdentity(context.Background(), tool.Identity{
 		AppID: "app-1", UserID: "user-1", SessionID: "sess-1", AgentID: "agent-1",
@@ -29,7 +25,6 @@ func TestIDGettersFallBackToToolIdentity(t *testing.T) {
 	}
 }
 
-// Explicit With* keys must keep priority over the identity fallback.
 func TestExplicitKeysWinOverIdentity(t *testing.T) {
 	ctx := tool.WithIdentity(context.Background(), tool.Identity{AppID: "from-identity"})
 	ctx = WithAppID(ctx, "explicit")

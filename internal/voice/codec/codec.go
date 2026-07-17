@@ -1,17 +1,10 @@
-// Package codec holds the telephony audio primitives the voice transports need:
-// G.711 μ-law (the PSTN / Twilio Media Streams wire format, 8 kHz mono) ⇄ linear
-// PCM16, and a small linear resampler between the call rate (8 kHz) and the
-// provider rate (e.g. 24 kHz). Pure Go, allocation-light, no dependencies — these
-// run per 20 ms frame on the media path, so they must be boring and fast.
 package codec
 
-// G.711 μ-law constants (ITU-T G.711).
 const (
 	muLawBias = 0x84
 	muLawClip = 32635
 )
 
-// MuLawEncode compresses one linear PCM16 sample to its 8-bit μ-law code.
 func MuLawEncode(s int16) byte {
 	sign := byte(0)
 	v := int32(s)
@@ -31,7 +24,6 @@ func MuLawEncode(s int16) byte {
 	return ^(sign | (seg << 4) | low)
 }
 
-// MuLawDecode expands one 8-bit μ-law code back to linear PCM16.
 func MuLawDecode(c byte) int16 {
 	c = ^c
 	sign := c & 0x80
@@ -45,7 +37,6 @@ func MuLawDecode(c byte) int16 {
 	return int16(v)
 }
 
-// MuLawDecodeAll expands a μ-law payload (one byte per sample) to PCM16.
 func MuLawDecodeAll(in []byte) []int16 {
 	out := make([]int16, len(in))
 	for i, c := range in {
@@ -54,7 +45,6 @@ func MuLawDecodeAll(in []byte) []int16 {
 	return out
 }
 
-// MuLawEncodeAll compresses PCM16 samples to a μ-law payload.
 func MuLawEncodeAll(in []int16) []byte {
 	out := make([]byte, len(in))
 	for i, s := range in {
@@ -63,17 +53,10 @@ func MuLawEncodeAll(in []int16) []byte {
 	return out
 }
 
-// Resample converts PCM16 samples from one rate to another by linear
-// interpolation. Telephony-grade : it preserves speech intelligibility for the
-// 8 kHz ⇄ 24 kHz hops the realtime providers need; it is not a mastering-grade
-// polyphase filter and doesn't try to be. from==to (or empty input) returns the
-// input unchanged.
 func Resample(in []int16, from, to int) []int16 {
 	if from == to || from <= 0 || to <= 0 || len(in) == 0 {
 		return in
 	}
-	// Downsampling first runs a tiny box low-pass sized to the decimation factor,
-	// which knocks down the worst aliasing without a real filter bank.
 	src := in
 	if to < from {
 		k := from / to
@@ -101,10 +84,6 @@ func Resample(in []int16, from, to int) []int16 {
 	return out
 }
 
-// boxLowPass is a centered moving average of width k — the cheapest usable
-// anti-aliasing pre-filter for integer decimation. Deliberately the direct
-// O(n·k) form : k is the decimation factor (3 for 24→8 kHz) and frames are tiny
-// (≈160–480 samples), so clarity beats a sliding-window micro-optimisation.
 func boxLowPass(in []int16, k int) []int16 {
 	if k <= 1 || len(in) == 0 {
 		return in

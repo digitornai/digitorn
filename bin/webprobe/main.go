@@ -1,6 +1,3 @@
-// Command webprobe is a tiny single-page HTTP server used by the live web
-// end-to-end test. It serves one unfakeable token at "/", so a successful
-// web.fetch by the agent proves the module really performed the HTTP request.
 package main
 
 import (

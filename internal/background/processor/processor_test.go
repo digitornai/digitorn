@@ -38,7 +38,6 @@ func newStore(t *testing.T) *store.Store {
 	return st
 }
 
-// fakeDaemon serves the minimal create/exists/history surface for the launch.
 type fakeDaemon struct {
 	mu       sync.Mutex
 	creates  int
@@ -89,7 +88,6 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// fakeAdapter records outbound replies.
 type fakeAdapter struct {
 	mu    sync.Mutex
 	sent  []string

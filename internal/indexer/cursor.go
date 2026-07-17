@@ -8,9 +8,6 @@ import (
 	"sync"
 )
 
-// MemCursor is an in-process Cursor for tests + the first live proof. The
-// durable gateway-KV cursor (survives worker restarts) implements the same
-// interface and swaps in without touching the service. See DESIGN.md §10.
 type MemCursor struct {
 	mu sync.Mutex
 	m  map[string][]byte
@@ -31,17 +28,11 @@ func (c *MemCursor) Save(key string, state []byte) error {
 	return nil
 }
 
-// FileCursor persists sync state to a directory, one file per source key
-// (key hashed for a safe filename). Durable across worker restarts on the
-// same host : on restart, Walk diffs resume from the saved hashes (no
-// re-embed storm) and CDC from the saved LSN. (Kafka offsets + the Postgres
-// replication slot are durable server-side regardless.)
 type FileCursor struct {
 	dir string
 	mu  sync.Mutex
 }
 
-// NewFileCursor creates the directory and returns a file-backed cursor.
 func NewFileCursor(dir string) (*FileCursor, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
@@ -71,5 +62,5 @@ func (c *FileCursor) Save(key string, state []byte) error {
 	if err := os.WriteFile(tmp, state, 0o644); err != nil {
 		return err
 	}
-	return os.Rename(tmp, c.file(key)) // atomic replace
+	return os.Rename(tmp, c.file(key))
 }

@@ -13,7 +13,6 @@ import (
 	"github.com/digitornai/digitorn/internal/runtime/policy"
 )
 
-// metaSpecs is a representative discovery-mode native tool list.
 func metaSpecs() []llm.ToolSpec {
 	return []llm.ToolSpec{
 		{Name: "search_tools", Description: "Discover tools by query."},
@@ -22,7 +21,6 @@ func metaSpecs() []llm.ToolSpec {
 	}
 }
 
-// domainSpecs is a representative direct-mode native tool list.
 func domainSpecs(n int) []llm.ToolSpec {
 	out := make([]llm.ToolSpec, 0, n)
 	for i := 0; i < n; i++ {
@@ -34,13 +32,6 @@ func domainSpecs(n int) []llm.ToolSpec {
 	return out
 }
 
-// =====================================================================
-// Section order conformity
-// =====================================================================
-
-// TestAssembler_SectionOrder_MatchesDoc : the 9 documented sections
-// are present in the exact order from
-// docs-site/docs/reference/modules/context_builder.md.
 func TestAssembler_SectionOrder_MatchesDoc(t *testing.T) {
 	want := []string{
 		"authority_preamble",
@@ -69,10 +60,6 @@ func TestAssembler_SectionOrder_MatchesDoc(t *testing.T) {
 		}
 	}
 }
-
-// =====================================================================
-// IdentitySection
-// =====================================================================
 
 func TestIdentity_BasicAgent(t *testing.T) {
 	s := prompt.IdentitySection{}
@@ -109,12 +96,6 @@ func TestIdentity_NilAgent_Empty(t *testing.T) {
 	}
 }
 
-// =====================================================================
-// ToolInstructionsSection — mode-dependent
-// =====================================================================
-
-// buildIndex builds an index with N tools across 2 categories for
-// the tool-instructions render tests.
 func buildIndex(t *testing.T, n int) *index.ToolIndex {
 	t.Helper()
 	universe := make([]policy.AvailableAction, 0, n)
@@ -202,7 +183,7 @@ func TestToolInstructions_DefaultMode_FallsBackToDiscovery(t *testing.T) {
 	s := prompt.ToolInstructionsSection{}
 	idx := buildIndex(t, 5)
 	out := s.Render(prompt.PromptContext{
-		InjectionMode: "", // unset
+		InjectionMode: "",
 		ToolIndex:     idx,
 		InjectedTools: metaSpecs(),
 	})

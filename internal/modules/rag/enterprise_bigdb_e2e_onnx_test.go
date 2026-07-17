@@ -22,22 +22,11 @@ import (
 	"github.com/digitornai/digitorn/internal/indexer"
 )
 
-// Enterprise production test : a LARGE remote MySQL knowledge base is indexed
-// through the dbaccess connector → real minilm embeddings → Qdrant (streamed),
-// then exercised like production : correctness-at-scale (5 planted "needles"
-// retrieved from a big haystack by SEMANTIC search with no keyword overlap),
-// query latency p50/p95/p99, concurrent query load, and incremental re-sync
-// (update + delete reflected). Reports real numbers.
-//
-//	ONNXRUNTIME_LIB="$PWD/bin/onnxruntime.dll" PATH="$PWD/bin:$PATH" ENTERPRISE_ROWS=10000 \
-//	  go test -tags onnx ./internal/modules/rag/ -run TestRAG_Enterprise_BigDB_Production -v -timeout 30m
 func TestRAG_Enterprise_BigDB_Production(t *testing.T) {
 	native := envD("DBACCESS_MYSQL_NATIVE", "root:root@tcp(localhost:3307)/ragtest")
 	qurl := envD("QDRANT_URL", "localhost:6334")
 	n := envN("ENTERPRISE_ROWS", 10000)
 
-	// Needles : distinctive facts buried in the corpus. Queries are KEYWORD-FREE
-	// so retrieval must be semantic, and we assert the unique marker comes back.
 	needles := []struct{ id int; body, query, marker string }{
 		{n + 1, "INTERNAL MEMO ROTATION: the production database master credential is rotated on the third Tuesday of each quarter by the platform security team.", "when is the production database master password changed", "ROTATION"},
 		{n + 2, "INCIDENT POSTMORTEM FALCON: the third-quarter service interruption was caused by connection pool exhaustion in the billing component after a 02:14 deploy.", "what was the root cause of the Q3 service outage", "FALCON"},
@@ -51,7 +40,7 @@ func TestRAG_Enterprise_BigDB_Production(t *testing.T) {
 
 	mgr := embeddings.NewManager("", embeddings.ModeONNX, false, nil)
 	defer mgr.Close()
-	ret := envD("RETRIEVAL", "hybrid") // hybrid (default) | semantic (bounded memory)
+	ret := envD("RETRIEVAL", "hybrid")
 	t.Logf("retrieval mode: %s", ret)
 	cfg, _ := ParseConfig(map[string]any{
 		"embedding_model": "minilm-l12",
@@ -75,7 +64,6 @@ func TestRAG_Enterprise_BigDB_Production(t *testing.T) {
 	}
 	svc := indexer.NewService(nil, 4)
 
-	// ---- 1) INDEX AT SCALE : throughput + bounded memory ----
 	var m0, m1 runtime.MemStats
 	runtime.GC()
 	runtime.ReadMemStats(&m0)
@@ -95,7 +83,6 @@ func TestRAG_Enterprise_BigDB_Production(t *testing.T) {
 		total, idxDur.Round(time.Millisecond), dps,
 		(int64(m1.HeapAlloc)-int64(m0.HeapAlloc))/(1024*1024), 1_000_000/dps/3600)
 
-	// ---- 2) CORRECTNESS AT SCALE : find the needles semantically ----
 	found := 0
 	for _, nd := range needles {
 		hits, err := eng.Query(context.Background(), "enterprise", nd.query, 3)
@@ -121,7 +108,6 @@ func TestRAG_Enterprise_BigDB_Production(t *testing.T) {
 		t.Errorf("retrieval quality too low: only %d/%d needles found", found, len(needles))
 	}
 
-	// ---- 3) QUERY LATENCY p50/p95/p99 over many queries ----
 	queries := []string{}
 	for _, nd := range needles {
 		queries = append(queries, nd.query)
@@ -142,7 +128,6 @@ func TestRAG_Enterprise_BigDB_Production(t *testing.T) {
 	t.Logf("LATENCY (%d queries): p50=%v p95=%v p99=%v max=%v",
 		len(lat), p(0.50).Round(time.Millisecond), p(0.95).Round(time.Millisecond), p(0.99).Round(time.Millisecond), lat[len(lat)-1].Round(time.Millisecond))
 
-	// ---- 4) CONCURRENT QUERY LOAD ----
 	const conc = 50
 	var wg sync.WaitGroup
 	var qerr int64
@@ -162,15 +147,12 @@ func TestRAG_Enterprise_BigDB_Production(t *testing.T) {
 		t.Errorf("%d concurrent queries failed", qerr)
 	}
 
-	// ---- 5) INCREMENTAL RE-SYNC : update + delete reflected ----
 	raw, _ := sql.Open("mysql", native)
 	defer raw.Close()
-	// update FALCON's cause
 	if _, err := raw.Exec("UPDATE enterprise_docs SET body=? WHERE id=?",
 		"INCIDENT POSTMORTEM FALCON: REVISED — the outage was actually caused by a expired TLS certificate on the payment gateway, not the connection pool.", needles[1].id); err != nil {
 		t.Fatal(err)
 	}
-	// delete ORION
 	if _, err := raw.Exec("DELETE FROM enterprise_docs WHERE id=?", needles[4].id); err != nil {
 		t.Fatal(err)
 	}
@@ -182,11 +164,9 @@ func TestRAG_Enterprise_BigDB_Production(t *testing.T) {
 	if rep2.Updated != 1 || rep2.Deleted != 1 {
 		t.Errorf("incremental diff wrong: %+v", rep2)
 	}
-	// updated content retrievable
 	if hits, _ := eng.Query(context.Background(), "enterprise", "what caused the payment outage tls certificate", 3); len(hits) == 0 || !containsAny(hits, "REVISED", "certificate") {
 		t.Errorf("updated FALCON doc not reflected after re-sync")
 	}
-	// deleted doc gone
 	if hits, _ := eng.Query(context.Background(), "enterprise", needles[4].query, 3); containsAny(hits, "ORION") {
 		t.Errorf("deleted ORION doc still retrievable after re-sync")
 	}

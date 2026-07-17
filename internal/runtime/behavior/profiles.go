@@ -5,10 +5,6 @@ import (
 	"strings"
 )
 
-// profiles are the built-in presets. A profile is a flat bag of boolean rule
-// flags + integer thresholds + two string knobs (verbosity, autonomy). It is a
-// SELECTOR, not a rule list : each true flag pulls the matching rule out of
-// defaultRuleDefinitions (see boolToRuleID).
 var profiles = map[string]map[string]any{
 	"dev": {
 		"read_before_edit":             true,
@@ -136,10 +132,6 @@ var profiles = map[string]map[string]any{
 	},
 }
 
-// resolveProfile merges a profile preset with user overrides. A profileName
-// beginning with "{" is a JSON custom profile (from a behavior/*.yaml bundle):
-// it carries an `extends` base, extra `rules`, legacy `custom` rules and a
-// free-text `prompt`. Reserved keys (prefixed "_") carry resolved metadata.
 func resolveProfile(profileName string, overrides map[string]any) map[string]any {
 	var custom map[string]any
 	if strings.HasPrefix(profileName, "{") {
@@ -196,9 +188,6 @@ func appendCustom(existing any, extra []any) []any {
 	return append(out, extra...)
 }
 
-// truthy mirrors the reference daemon's `if merged.get(key)` flag check, which
-// relies on Python truthiness. It matters because some enable-flags double as
-// thresholds (e.g. max_sequential_same_tool is the int 8, truthy → enabled).
 func truthy(v any) bool {
 	switch x := v.(type) {
 	case nil:
@@ -218,8 +207,6 @@ func truthy(v any) bool {
 	}
 }
 
-// intFlag reads a profile integer threshold, accepting the int / int64 /
-// float64 forms YAML and JSON decode into. Falls back to def when absent.
 func intFlag(rules map[string]any, key string, def int) int {
 	switch v := rules[key].(type) {
 	case int:
@@ -232,8 +219,6 @@ func intFlag(rules map[string]any, key string, def int) int {
 	return def
 }
 
-// devPromptSection is the advanced dev-profile behavior guide, injected into
-// the system prompt when the active profile is "dev".
 const devPromptSection = `You are guided by the "dev" behavioral profile - the highest standard of developer behavior. Follow these principles in every situation.
 
 ## How you think

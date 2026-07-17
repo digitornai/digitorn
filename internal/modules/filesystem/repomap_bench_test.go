@@ -20,13 +20,11 @@ func TestRepomapTiming(t *testing.T) {
 
 	fmt.Printf("\n=== Repomap timing (root: %s, CPUs: %d) ===\n", root, runtime.NumCPU())
 
-	// ── Cold build (all files new) ────────────────────────────────────────
 	t0 := time.Now()
 	entries := walkRepo(root)
 	walkDur := time.Since(t0)
 	fmt.Printf("Walk (cold)    : %-10v  %d files\n", walkDur, len(entries))
 
-	// Simulate what buildIncremental does: parse all files (nothing cached).
 	t1 := time.Now()
 	var totalSyms int
 	cache := make(map[string]repomap.FileSyms, len(entries))
@@ -45,7 +43,6 @@ func TestRepomapTiming(t *testing.T) {
 	parseDur := time.Since(t1)
 	fmt.Printf("Parse (cold)   : %-10v  %d syms  (%d files parsed)\n", parseDur, totalSyms, len(cache))
 
-	// Assemble graph + rank + render.
 	t2 := time.Now()
 	g := repomap.Graph{Calls: make(map[string][]string)}
 	for _, fs := range cache {
@@ -59,17 +56,15 @@ func TestRepomapTiming(t *testing.T) {
 	fmt.Printf("Rank+Render    : %-10v  %d chars output\n", rankDur, len(rendered))
 	fmt.Printf("TOTAL (cold)   : %v\n\n", time.Since(t0))
 
-	// ── Warm build (1 file changed) ───────────────────────────────────────
-	// Simulate: one file evicted from cache, rest still warm.
 	var oneFile repomap.WalkEntry
 	for _, e := range entries {
 		oneFile = e
 		break
 	}
-	delete(cache, oneFile.Rel) // evict one file
+	delete(cache, oneFile.Rel)
 
 	t3 := time.Now()
-	entries2 := walkRepo(root) // re-walk (fast, filesystem cache warm)
+	entries2 := walkRepo(root)
 	walkDur2 := time.Since(t3)
 
 	t4 := time.Now()
@@ -105,7 +100,6 @@ func TestRepomapTiming(t *testing.T) {
 	fmt.Printf("Rank+Render    : %-10v\n", rankDur2)
 	fmt.Printf("TOTAL (warm)   : %v\n", time.Since(t3))
 
-	// Print a snippet of the rendered output so we can inspect quality.
 	if len(rendered) > 800 {
 		fmt.Printf("\n--- Rendered snippet (first 800 chars) ---\n%s\n---\n", rendered[:800])
 	} else {

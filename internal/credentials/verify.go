@@ -12,33 +12,19 @@ import (
 	"github.com/digitornai/digitorn/internal/dbaccess"
 )
 
-// testTimeout bounds a live verification so a slow/unreachable provider can't
-// hang the settings request. This runs on the settings plane (its own request
-// goroutine), never on an agent's hot path.
 const testTimeout = 10 * time.Second
 
-// TestResult is the outcome of a live credential verification.
 type TestResult struct {
 	OK        bool   `json:"ok"`
 	Detail    string `json:"detail"`
 	LatencyMS int64  `json:"latency_ms"`
 }
 
-// RunTest validates the supplied fields against the provider's live endpoint.
-// It looks up a recipe from the catalogue; for an unknown provider that ships a
-// base_url + api_key (custom LLM), it falls back to GET {base_url}/models. When
-// no recipe applies it reports that a live test isn't available (OK=false) —
-// the caller distinguishes "not available" from "rejected" via Detail.
 func RunTest(ctx context.Context, providerName string, fields map[string]string) TestResult {
 	fields = trimValues(fields)
-	// Database credentials carry a connection string — verify by actually
-	// connecting (and authenticating) via the shared dbaccess layer.
 	if cs := fields["connection_string"]; cs != "" {
 		return verifyDB(ctx, cs)
 	}
-	// Custom / self-hosted OpenAI-compatible endpoint (base_url, optional
-	// api_key): verify by actually listing models, so a 200 with an error body
-	// isn't reported as valid, and a base_url missing /v1 is retried with it.
 	if _, known := verifyRecipes[providerName]; !known {
 		if base := strings.TrimRight(strings.TrimSpace(fields["base_url"]), "/"); base != "" {
 			return verifyOpenAICompatible(ctx, base, strings.TrimSpace(fields["api_key"]))
@@ -99,10 +85,6 @@ func RunTest(ctx context.Context, providerName string, fields map[string]string)
 	return TestResult{OK: false, Detail: fmt.Sprintf("Unexpected response from provider (HTTP %d).", resp.StatusCode), LatencyMS: latency}
 }
 
-// verifyOpenAICompatible verifies a custom/self-hosted OpenAI-compatible LLM
-// endpoint by GET {base}/models and requiring a parseable model list — a 200
-// with an error body (e.g. LM Studio's "Unexpected endpoint" when /v1 is
-// missing) is NOT valid. When base_url omits /v1 it retries {base}/v1/models.
 func verifyOpenAICompatible(ctx context.Context, base, apiKey string) TestResult {
 	ctx, cancel := context.WithTimeout(ctx, testTimeout)
 	defer cancel()
@@ -165,10 +147,6 @@ func verifyOpenAICompatible(ctx context.Context, base, apiKey string) TestResult
 	}
 }
 
-// verifyDB validates a database connection string by opening a real connection
-// through the shared dbaccess layer (which pings/authenticates on Open). Egress
-// is "open" so the user can test their own local/private database — same trust
-// model as the HTTP api_key test that dials arbitrary hosts.
 func verifyDB(ctx context.Context, connStr string) TestResult {
 	kind := dbKindFromDSN(connStr)
 	if kind == "" {
@@ -190,8 +168,6 @@ func verifyDB(ctx context.Context, connStr string) TestResult {
 	return TestResult{OK: true, Detail: "Valid — connected to " + kind + ".", LatencyMS: latency}
 }
 
-// dbErrDetail turns a driver's verbose (often multi-line, duplicated) error
-// into one clear sentence for the UI.
 func dbErrDetail(err error) string {
 	msg := strings.ToLower(err.Error())
 	switch {
@@ -209,7 +185,6 @@ func dbErrDetail(err error) string {
 	case strings.Contains(msg, "does not exist"), strings.Contains(msg, "unknown database"):
 		return "Database not found — check the database name."
 	}
-	// Fallback: first line only, prefixes stripped.
 	first := strings.TrimSpace(strings.SplitN(err.Error(), "\n", 2)[0])
 	if i := strings.LastIndex(first, ": "); i >= 0 && i < len(first)-2 {
 		first = strings.TrimSpace(first[i+2:])
@@ -239,8 +214,6 @@ func lookupVerify(providerName string, fields map[string]string) (*Verify, bool)
 	if v, ok := verifyRecipes[providerName]; ok {
 		return v, true
 	}
-	// Custom OpenAI-compatible endpoint stored as base_url (+ optional api_key).
-	// Local servers (LM Studio, Ollama…) have no key, so only base_url is required.
 	if bu := strings.TrimSpace(fields["base_url"]); bu != "" {
 		auth := ""
 		if fields["api_key"] != "" {
@@ -254,7 +227,6 @@ func lookupVerify(providerName string, fields map[string]string) (*Verify, bool)
 	return nil, false
 }
 
-// subst replaces {field} placeholders with the credential's field values.
 func subst(tmpl string, fields map[string]string) string {
 	if !strings.Contains(tmpl, "{") {
 		return tmpl

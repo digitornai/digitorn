@@ -258,7 +258,11 @@
       "Bash(python3 -c \"import sqlite3;c=sqlite3.connect\\('digitorn-background.db'\\);print\\('bg_user_token:', list\\(c.execute\\('SELECT user_id,length\\(refresh_token\\) FROM bg_user_token'\\)\\) or '\\(vide\\)'\\)\")",
       "Bash(echo \"bg healthz: $\\(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8090/healthz 2>&1\\)\")",
       "Bash(curl -s -X POST http://127.0.0.1:8090/ops/triggers -H 'Content-Type: application/json' -d '{\"app_id\":\"discord-test\",\"provider\":\"my-discord\",\"adapter\":\"discord\",\"owner\":\"3442647483eb4a458e4feffcbe4b9429\",\"refresh_token\":\"TESTREFRESH123\",\"activation\":{\"agent\":\"main\",\"session\":\"per_event\",\"reply\":\"auto\"}}' -w '  HTTP %{http_code}\\\\n')",
-      "Bash(curl -s \"http://127.0.0.1:8000/api/apps/discord-test/channel-secret?key=discord_bot_token\" -H 'X-User-ID: paul')"
+      "Bash(curl -s \"http://127.0.0.1:8000/api/apps/discord-test/channel-secret?key=discord_bot_token\" -H 'X-User-ID: paul')",
+      "Bash(awk -F/ '{ *)",
+      "Bash(awk -F/ '{print $1\"/\"$2\"/\"$3}')",
+      "Bash(echo \"exit: $?\")",
+      "Bash(grep -vE '^#|possible misuse|^$')"
     ],
     "additionalDirectories": [
       "/home/paul/codes/digitorn_web/src/lib",

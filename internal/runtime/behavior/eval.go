@@ -40,10 +40,6 @@ func intFromAny(v any, def int) int {
 	return def
 }
 
-// evaluateCondition mirrors the reference daemon's evaluator exactly, including
-// the all/any/not composites and the consecutive_gte "+1 lookahead" (it
-// predicts the upcoming consecutive count, since on_tool_call has not run yet
-// at pre_tool time).
 func evaluateCondition(cond map[string]any, st *SessionState, toolName string, params map[string]any, result any, agentText string, tk *tracking) bool {
 	if len(cond) == 0 {
 		return true
@@ -203,8 +199,6 @@ func resultHasLintErrors(result any) bool {
 	return false
 }
 
-// updateState applies the tracking config after a tool runs: bumps the call
-// counters, then mutates the configured sets / counters / flags.
 func updateState(st *SessionState, toolName string, params map[string]any, tk *tracking) {
 	tn := strings.ToLower(toolName)
 	b := bare(tn)
@@ -303,7 +297,6 @@ func renderMessage(template string, st *SessionState, toolName string, params ma
 	return msg
 }
 
-// Violation is a detected rule firing. Level is block | warn | remind.
 type Violation struct {
 	RuleID  string
 	Level   string

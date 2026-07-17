@@ -43,8 +43,6 @@ type catalogEntry struct {
 	OAuthEnvTokenVar string
 	OAuthScopes      []string
 	OAuthStyle       string
-	// google_keyfile style: the env vars the server reads for its OAuth client
-	// keyfile + credentials file, and the credentials filename it writes.
 	OAuthKeyfileEnv          string
 	OAuthCredentialsEnv      string
 	OAuthCredentialsFilename string

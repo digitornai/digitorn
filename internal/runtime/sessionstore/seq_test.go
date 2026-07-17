@@ -91,7 +91,6 @@ func TestSeq_RecoverFromMetaSnapshotJSONL(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 1. JSONL only — recovery should see the max in the JSONL.
 	now := time.Now().UnixNano()
 	events := []Event{
 		mkEvent(1, sid, EventUserMessage, now),
@@ -107,7 +106,6 @@ func TestSeq_RecoverFromMetaSnapshotJSONL(t *testing.T) {
 		t.Fatalf("recover from jsonl only: %d", got)
 	}
 
-	// 2. Add a snapshot with cutoff=42 (higher than JSONL).
 	snap := SessionSnapshot{SessionID: sid, LastSeq: 42, CutoffSeq: 42}
 	if _, err := WriteSnapshotAtomic(dir, snap, SnapshotJSON, false); err != nil {
 		t.Fatal(err)
@@ -117,7 +115,6 @@ func TestSeq_RecoverFromMetaSnapshotJSONL(t *testing.T) {
 		t.Fatalf("recover with snapshot 42: %d", got)
 	}
 
-	// 3. Meta says 99 (highest of all three).
 	meta := &Meta{SessionID: sid, LastSeq: 99, EventCount: 99}
 	if err := WriteMetaAtomic(dir, meta, false); err != nil {
 		t.Fatal(err)
@@ -291,7 +288,6 @@ func TestSeq_RecoverAfterMultipleCompactions(t *testing.T) {
 	}
 	r2, _ := c.Compact(context.Background(), state, CompactOptions{TruncateMode: TruncateSync})
 
-	// Simulate a fresh process : new registry, new compactor.
 	reg2 := NewSeqRegistry(paths)
 	a2, _ := reg2.For(sid)
 	if a2.Current() < r2.CompactDoneSeq {
@@ -323,7 +319,6 @@ func TestCrossPlatform_FilesystemBasicsWork(t *testing.T) {
 		t.Fatalf("snapshot not at expected path (os=%s): %v", runtime.GOOS, err)
 	}
 
-	// Atomic rename verification : no leftover tmp files in the session dir.
 	entries, _ := os.ReadDir(paths.SessionDir(sid))
 	for _, e := range entries {
 		name := e.Name()
@@ -332,7 +327,6 @@ func TestCrossPlatform_FilesystemBasicsWork(t *testing.T) {
 		}
 	}
 
-	// Verify path separators behave correctly: we should be able to load.
 	loaded, err := Load(paths, sid, LoadOptions{Mode: JSONLStrict})
 	if err != nil {
 		t.Fatalf("load on %s: %v", runtime.GOOS, err)

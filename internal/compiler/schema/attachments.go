@@ -6,8 +6,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Attachments accepts a list of attachment types, the wildcard "*" (all types),
-// or null.
 type Attachments []AttachmentType
 
 func (a *Attachments) UnmarshalYAML(node *yaml.Node) error {

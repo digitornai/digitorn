@@ -106,8 +106,6 @@ func branches(ids ...string) []schema.FlowBranch {
 	return out
 }
 
-// ---------------------------------------------------------------------------
-
 func TestRoutesChain(t *testing.T) {
 	h := newHarness()
 	flow := &schema.FlowConfig{

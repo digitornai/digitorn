@@ -7,9 +7,6 @@ import (
 	"time"
 )
 
-// fakeBatchCounter implements BOTH CountTotal and CountEach, counting calls so a
-// test can assert which path the recount took. CountEach returns 1 token per
-// text → each bucket's count equals its text count (matching fakeView's 1/2/3).
 type fakeBatchCounter struct {
 	eachCalls  atomic.Int64
 	totalCalls atomic.Int64
@@ -29,9 +26,6 @@ func (f *fakeBatchCounter) CountEach(_ context.Context, texts []string, _, _ str
 	return out, nil
 }
 
-// TestBackground_BatchedRecount: a counter that supports CountEach is counted in
-// ONE batched RPC pass — same breakdown as the per-bucket fallback, but with no
-// per-bucket CountTotal calls.
 func TestBackground_BatchedRecount(t *testing.T) {
 	got := make(chan Result, 1)
 	fc := &fakeBatchCounter{}

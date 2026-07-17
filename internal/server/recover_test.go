@@ -7,8 +7,6 @@ import (
 	"testing"
 )
 
-// A handler panic must become a clean 500 and never propagate (the test process
-// would crash if it did).
 func TestPanicRecoverer_HandlerPanicBecomes500(t *testing.T) {
 	d := &Daemon{logger: slog.Default()}
 	h := d.panicRecoverer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
@@ -21,7 +19,6 @@ func TestPanicRecoverer_HandlerPanicBecomes500(t *testing.T) {
 	}
 }
 
-// A non-panicking handler passes through untouched.
 func TestPanicRecoverer_PassThrough(t *testing.T) {
 	d := &Daemon{logger: slog.Default()}
 	h := d.panicRecoverer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

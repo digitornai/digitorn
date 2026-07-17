@@ -102,7 +102,6 @@ func BenchmarkColdLoad_WithSnapshotPlus50Tail(b *testing.B) {
 	sid := "bench-snap"
 	benchSetupSession(b, paths, sid, 1000)
 
-	// Compact first.
 	st, err := Load(paths, sid, LoadOptions{Mode: JSONLStrict})
 	if err != nil {
 		b.Fatal(err)
@@ -111,7 +110,6 @@ func BenchmarkColdLoad_WithSnapshotPlus50Tail(b *testing.B) {
 	if _, err := c.Compact(context.Background(), st.State, CompactOptions{TruncateMode: TruncateSync}); err != nil {
 		b.Fatal(err)
 	}
-	// Add 50 events past the snapshot.
 	w, err := OpenJSONLAppend(paths.EventsFile(sid), false)
 	if err != nil {
 		b.Fatal(err)

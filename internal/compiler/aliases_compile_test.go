@@ -5,11 +5,6 @@ import (
 	"testing"
 )
 
-// TestWorkspaceAlias_CompilesToFilesystem proves an old app that declares the
-// legacy `workspace` file module compiles clean and is rewritten to
-// `filesystem` everywhere (tools.modules, agents.modules, capability grant) —
-// the back-compat alias. The fixture lives under testdata/valid so TestFixtures
-// also asserts it produces zero diagnostics.
 func TestWorkspaceAlias_CompilesToFilesystem(t *testing.T) {
 	c := newCompilerForFixtures(t)
 	res, err := c.Compile(filepath.Join("testdata", "valid", "workspace_alias"))

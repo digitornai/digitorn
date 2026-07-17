@@ -1,10 +1,3 @@
-// Package lsp gives an agent live code diagnostics. It speaks the Language
-// Server Protocol (JSON-RPC over a server's stdio) to any installed language
-// server — gopls, pyright, typescript-language-server, rust-analyzer, texlab,
-// … — so a new language is one config line, no code. After the agent edits a
-// file the lsp_diagnose hook calls notify_change, which syncs the document to
-// the server and returns the errors/warnings it reports. The backend behind a
-// file is pluggable (see manager.backend): LSP today, compiler/linter later.
 package lsp
 
 import (
@@ -21,31 +14,21 @@ import (
 	"github.com/digitornai/digitorn/pkg/module"
 )
 
-// Config is the per-app configuration. It is applied via Init because the lsp
-// module runs in a worker (worker/runner.go calls Init with the app config).
 type Config struct {
 	Servers         map[string]ServerConfig `json:"servers" yaml:"servers"`
 	SettleSeconds   float64                 `json:"settle_seconds" yaml:"settle_seconds"`
 	DisableBuiltins bool                    `json:"disable_builtins" yaml:"disable_builtins"`
 }
 
-// ServerConfig declares one language server: how to launch it and which files
-// it owns.
 type ServerConfig struct {
-	Command     string   `json:"command" yaml:"command"`           // e.g. "gopls" or "pyright-langserver --stdio"
-	Extensions  []string `json:"extensions" yaml:"extensions"`     // e.g. [".go"]
-	RootMarkers []string `json:"root_markers" yaml:"root_markers"` // e.g. ["go.mod"]
-	Protocol    string   `json:"protocol" yaml:"protocol"`         // "lsp" (default)
+	Command     string   `json:"command" yaml:"command"`
+	Extensions  []string `json:"extensions" yaml:"extensions"`
+	RootMarkers []string `json:"root_markers" yaml:"root_markers"`
+	Protocol    string   `json:"protocol" yaml:"protocol"`
 }
 
-// maxOpTimeout is a hard ceiling on ANY lsp operation, independent of the
-// caller's context. The lsp_diagnose hook is fire-and-forget and best-effort:
-// if a language server hangs (slow cold start, wedged process), the operation
-// must still return so the async hook goroutine can never leak and a failure is
-// simply skipped — diagnostics never block or slow the agent loop.
 const maxOpTimeout = 30 * time.Second
 
-// Module is the lsp module instance.
 type Module struct {
 	module.Base
 
@@ -53,7 +36,6 @@ type Module struct {
 	mgr *manager
 }
 
-// New constructs the lsp module with its tools wired.
 func New() *Module {
 	m := &Module{}
 	m.Base = module.Base{
@@ -110,7 +92,6 @@ func (m *Module) Init(ctx context.Context, cfg map[string]any) error {
 	return nil
 }
 
-// Stop shuts down every running language server.
 func (m *Module) Stop(ctx context.Context) error {
 	m.mu.Lock()
 	mgr := m.mgr
@@ -127,41 +108,25 @@ func (m *Module) manager() *manager {
 	return m.mgr
 }
 
-// flexContent accepts the file body in whatever shape the model emits:
-//
-//   - a plain JSON string        → used as-is
-//   - an array of strings        → joined with "\n" (models often send lines this way)
-//   - an array of objects        → the first of "text"/"content"/"line"/"value" key
-//                                  found on each object is extracted, then joined
-//   - any other scalar (number…) → converted via fmt.Sprintf
-//
-// Prevents "cannot unmarshal array into … of type string" when an LLM
-// structures file content as a line array instead of a single string.
 type flexContent string
 
-// Object keys we recognize as carrying string content. Order matters: first match wins.
 var (
 	flexArrayObjectKeys  = []string{"text", "content", "line", "value", "code", "source", "snippet"}
 	flexObjectStringKeys = []string{"content", "text", "body", "code", "source"}
 )
 
 func (f *flexContent) UnmarshalJSON(b []byte) error {
-	// 1. Explicit null
 	if string(b) == "null" {
 		*f = ""
 		return nil
 	}
 
-	// 2. Fast path : plain JSON string
 	var s string
 	if err := json.Unmarshal(b, &s); err == nil {
 		*f = flexContent(s)
 		return nil
 	}
 
-	// 3. Array path : []any — each element becomes a line. A bad element fails
-	// the WHOLE unmarshal: silently embedding raw JSON as source code would
-	// produce nonsense diagnostics the LLM would take at face value.
 	var arr []any
 	if err := json.Unmarshal(b, &arr); err == nil {
 		lines := make([]string, 0, len(arr))
@@ -185,7 +150,6 @@ func (f *flexContent) UnmarshalJSON(b []byte) error {
 		return nil
 	}
 
-	// 4. Object path
 	var obj map[string]any
 	if err := json.Unmarshal(b, &obj); err == nil {
 		if sv, ok := firstStringField(obj, flexObjectStringKeys); ok {
@@ -195,7 +159,6 @@ func (f *flexContent) UnmarshalJSON(b []byte) error {
 		return fmt.Errorf("lsp: content is an object with no string field in %v (got keys %v)", flexObjectStringKeys, sortedKeys(obj))
 	}
 
-	// 5. Scalar (number, bool…) — refuse instead of stringifying it as code.
 	return fmt.Errorf("lsp: content has unsupported shape %q; pass the file body as a string", strings.TrimSpace(string(b)))
 }
 
@@ -285,9 +248,6 @@ func (m *Module) diagnostics(ctx context.Context, raw json.RawMessage) (tool.Res
 	return diagnosticsResult(p.Path, diags, mgr.projectSummary(ctx, p.Path)), nil
 }
 
-// buildSpecs turns the config into server specs: app-declared servers first
-// (so they win on overlapping extensions), then the built-in defaults unless
-// disabled.
 func buildSpecs(c Config) []serverSpec {
 	var specs []serverSpec
 	for name, sc := range c.Servers {
@@ -328,8 +288,6 @@ func diagnosticsResult(path string, diags []Diagnostic, project ProjectSummary) 
 		"warnings":    warns,
 		"ok":          errs == 0 && project.TotalErrors == 0,
 	}
-	// Embed the project rollup only when it carries signal — keeps the wire
-	// payload small for the common "everything is fine" case.
 	if project.TotalErrors > 0 || project.TotalWarnings > 0 {
 		data["project"] = project
 	}

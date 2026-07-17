@@ -1,6 +1,3 @@
-// Command sidebar-demo renders the activity-rail with each candidate section-
-// header style side by side, using the real theme + border, so a style can be
-// judged by eye in the terminal rather than from an ASCII mockup.
 package main
 
 import (
@@ -49,7 +46,6 @@ func spread(items []string, gap string) []string {
 	return out
 }
 
-// rail renders one activity rail using the given section-header style.
 func rail(t *theme.Theme, header func(label, right string) string) string {
 	pri := lipgloss.NewStyle().Foreground(lipgloss.Color(t.Primary)).Bold(true)
 	mut := lipgloss.NewStyle().Foreground(lipgloss.Color(t.TextMuted))
@@ -81,8 +77,6 @@ func rail(t *theme.Theme, header func(label, right string) string) string {
 		Padding(0, 1).
 		Render(body)
 }
-
-// --- the candidate header styles -------------------------------------------
 
 func accentBar(t *theme.Theme) func(string, string) string {
 	bar := lipgloss.NewStyle().Foreground(lipgloss.Color(t.Primary)).Bold(true)
@@ -130,7 +124,6 @@ func rule(t *theme.Theme) func(string, string) string {
 	}
 }
 
-// padRight pins `right` to the rail's right edge on the header line.
 func padRight(t *theme.Theme, left, right string) string {
 	if right == "" {
 		return left

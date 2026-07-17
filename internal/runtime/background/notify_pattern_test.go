@@ -14,7 +14,6 @@ import (
 	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
 )
 
-// testWaker counts WakeSession calls.
 type testWaker struct {
 	mu    sync.Mutex
 	calls atomic.Int32
@@ -28,8 +27,6 @@ func (w *testWaker) WakeSession(appID, sessionID, userID string) {
 	w.calls.Add(1)
 }
 
-// patternDispatcher simulates a long-running server: writes a startup line to
-// the live sink after a short delay, then blocks until context is cancelled.
 type patternDispatcher struct {
 	writeDelay time.Duration
 	output     string
@@ -46,7 +43,6 @@ func (d *patternDispatcher) Dispatch(ctx context.Context, call runtime.ToolInvoc
 	if sink := tool.LiveSinkFromContext(ctx); sink != nil {
 		_, _ = sink.Write([]byte(d.output + "\n"))
 	}
-	// Keep running until cancelled (simulates a live server).
 	<-ctx.Done()
 	return runtime.ToolOutcome{
 		Status: "errored",
@@ -80,7 +76,6 @@ func TestWatchPattern_NotifiesAgent(t *testing.T) {
 	}
 	t.Logf("launched task %s", tid)
 
-	// Wait up to 3s for WakeSession to fire.
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		if waker.calls.Load() > 0 {
@@ -94,7 +89,6 @@ func TestWatchPattern_NotifiesAgent(t *testing.T) {
 	}
 	t.Logf("WakeSession called %d time(s)", waker.calls.Load())
 
-	// Drain and verify the notification.
 	notes := mgr.DrainNotifications("sess-notify-1")
 	if len(notes) == 0 {
 		t.Fatal("no notifications enqueued after pattern match")
@@ -115,7 +109,6 @@ func TestWatchPattern_NotifiesAgent(t *testing.T) {
 	}
 	t.Logf("notification message:\n%s", msg)
 
-	// Verify task is still running (not cancelled by the notification).
 	st, err := mgr.Status(ctx, "sess-notify-1", tid)
 	if err != nil {
 		t.Fatalf("Status: %v", err)
@@ -126,13 +119,11 @@ func TestWatchPattern_NotifiesAgent(t *testing.T) {
 }
 
 func TestWatchPattern_FiresExactlyOnce(t *testing.T) {
-	// Even if the pattern appears multiple times, WakeSession fires exactly once.
 	mgr := New()
 	waker := &testWaker{}
 	mgr.AttachWaker(waker)
 	mgr.AttachDispatcher(&patternDispatcher{
 		writeDelay: 100 * time.Millisecond,
-		// Pattern appears multiple times in output.
 		output: "ready\nready\nready\nready\nready",
 	})
 
@@ -150,7 +141,6 @@ func TestWatchPattern_FiresExactlyOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Give the watcher time to tick multiple times.
 	time.Sleep(1200 * time.Millisecond)
 
 	if n := waker.calls.Load(); n != 1 {
@@ -159,7 +149,6 @@ func TestWatchPattern_FiresExactlyOnce(t *testing.T) {
 }
 
 func TestWatchPattern_NoFalsePositive(t *testing.T) {
-	// When pattern never appears, WakeSession must NOT fire.
 	mgr := New()
 	waker := &testWaker{}
 	mgr.AttachWaker(waker)
@@ -176,18 +165,14 @@ func TestWatchPattern_NoFalsePositive(t *testing.T) {
 		AppID:      "app1",
 		UserID:     "user1",
 		Tool:       "bash.run",
-		NotifyWhen: "ready on port 9999", // won't appear
+		NotifyWhen: "ready on port 9999",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Wait for the task to be cancelled by our context timeout.
 	time.Sleep(2 * time.Second)
 
-	// No wake should have fired (pattern never appeared).
-	// Note: the task COMPLETION may also fire a wake, so we only care about
-	// pattern_matched notifications — not completion ones.
 	notes := mgr.DrainNotificationsPeek("sess-nopattern")
 	for _, n := range notes {
 		if n.Status == "pattern_matched" {

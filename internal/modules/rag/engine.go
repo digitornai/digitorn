@@ -12,10 +12,6 @@ import (
 	pkgmodule "github.com/digitornai/digitorn/pkg/module"
 )
 
-// Engine is the per-call RAG pipeline : chunk → embed (via the daemon
-// gateway embedder) → store/search in the app's VectorBackend → cite.
-// It is built per invocation from the app's resolved Config so a shared
-// worker instance serves every app correctly.
 type Engine struct {
 	cfg      Config
 	backend  VectorBackend
@@ -25,13 +21,10 @@ type Engine struct {
 	cache    *semCache
 
 	mu       sync.Mutex
-	idx      map[string]*kbIndex          // kb -> keyword index (BM25 + doc metadata)
-	srcState map[string]map[string]string // sourceKey -> relpath -> stat-sig (incremental sync)
+	idx      map[string]*kbIndex
+	srcState map[string]map[string]string
 }
 
-// kbIndex is the in-memory keyword side of a knowledge base : a BM25
-// index plus the chunk metadata needed to resolve a hit back to a
-// citation. Rebuilt from the vector store on cold start.
 type kbIndex struct {
 	mu   sync.RWMutex
 	bm25 *BM25
@@ -63,8 +56,6 @@ func (ix *kbIndex) doc(id string) Document {
 	return ix.docs[id]
 }
 
-// NewEngine wires an engine from a parsed Config, a backend connector,
-// the embedder and (optionally) the reranker bridged in from the daemon.
 func NewEngine(cfg Config, backend VectorBackend, embed pkgmodule.Embedder, reranker pkgmodule.Reranker) *Engine {
 	e := &Engine{
 		cfg: cfg, backend: backend, embed: embed, reranker: reranker, model: cfg.EmbeddingModel.ID,
@@ -77,8 +68,6 @@ func NewEngine(cfg Config, backend VectorBackend, embed pkgmodule.Embedder, rera
 	return e
 }
 
-// Close releases the engine's backend connection. Called when the engine is
-// evicted from the module's LRU.
 func (e *Engine) Close() error {
 	if e.backend != nil {
 		return e.backend.Close()
@@ -86,23 +75,16 @@ func (e *Engine) Close() error {
 	return nil
 }
 
-// invalidate marks a knowledge base's cached query results stale (called
-// after any write to that KB). No-op when the semantic cache is off.
 func (e *Engine) invalidate(kb string) {
 	if e.cache != nil {
 		e.cache.bump(kb)
 	}
 }
 
-// Ingest chunks text, embeds the chunks as documents, ensures the KB
-// exists at the right dimension, and upserts. Returns the chunk count.
 func (e *Engine) Ingest(ctx context.Context, kb, text, source string) (int, error) {
 	return e.IngestWithMeta(ctx, kb, text, source, nil)
 }
 
-// IngestWithMeta is Ingest with author-supplied metadata attached to every
-// chunk. The ACL scope field is always overwritten from the caller, so an
-// author can never stamp a document with someone else's owner.
 func (e *Engine) IngestWithMeta(ctx context.Context, kb, text, source string, meta map[string]any) (int, error) {
 	if e.embed == nil {
 		return 0, fmt.Errorf("rag: embeddings unavailable (no gateway)")
@@ -153,16 +135,11 @@ func (e *Engine) IngestWithMeta(ctx context.Context, kb, text, source string, me
 	return len(docs), nil
 }
 
-// SourceDoc is one document for batch ingestion.
 type SourceDoc struct {
 	ID, Text, Source string
 	Meta             map[string]any
 }
 
-// IngestBatch chunks + embeds MANY documents with BATCHED embedding calls (one
-// model forward per ~64 chunks instead of one per document) and writes them in
-// a single backend upsert — the high-throughput path the indexer uses. At
-// scale this is an order of magnitude faster than per-document ingestion.
 func (e *Engine) IngestBatch(ctx context.Context, kb string, items []SourceDoc) (int, error) {
 	if e.embed == nil {
 		return 0, fmt.Errorf("rag: embeddings unavailable (no gateway)")
@@ -193,7 +170,7 @@ func (e *Engine) IngestBatch(ctx context.Context, kb string, items []SourceDoc) 
 	if len(texts) == 0 {
 		return 0, nil
 	}
-	const batch = 256 // large enough to keep the embedding session pool saturated
+	const batch = 256
 	vecs := make([][]float32, len(texts))
 	dim := 0
 	for off := 0; off < len(texts); off += batch {
@@ -236,15 +213,12 @@ func (e *Engine) IngestBatch(ctx context.Context, kb string, items []SourceDoc) 
 	return len(out), nil
 }
 
-// usesBM25 reports whether the keyword index is needed. Semantic-only retrieval
-// skips the in-memory BM25 index entirely, so a large corpus does not pin its
-// full text in daemon RAM.
 func (e *Engine) usesBM25() bool {
 	if strings.EqualFold(strings.TrimSpace(e.cfg.Pipeline.Retrieval), "semantic") {
 		return false
 	}
 	if _, ok := e.backend.(KeywordSearcher); ok {
-		return false // keyword search delegated server-side ; no in-RAM index
+		return false
 	}
 	return true
 }
@@ -260,8 +234,6 @@ func (e *Engine) indexFor(kb string) *kbIndex {
 	return ix
 }
 
-// ensureIndex returns the keyword index for kb, rebuilding it from the
-// vector store when empty (cold start / fresh worker).
 func (e *Engine) ensureIndex(ctx context.Context, kb string) (*kbIndex, error) {
 	ix := e.indexFor(kb)
 	if ix.length() > 0 {
@@ -277,9 +249,6 @@ func (e *Engine) ensureIndex(ctx context.Context, kb string) (*kbIndex, error) {
 	return ix, nil
 }
 
-// Query retrieves the topK chunks for a question per the configured
-// retrieval mode : semantic (vectors), bm25 (keyword), or hybrid (both,
-// fused with Reciprocal Rank Fusion). topK falls back to final_top_k.
 func (e *Engine) Query(ctx context.Context, kb, query string, topK int) ([]SearchHit, error) {
 	if topK <= 0 {
 		topK = e.cfg.Pipeline.FinalTopK
@@ -334,8 +303,6 @@ func (e *Engine) Query(ctx context.Context, kb, query string, topK int) ([]Searc
 	return hits, nil
 }
 
-// rerankHits re-scores hits with the cross-encoder and reorders them.
-// A reranker failure degrades to the original order (graceful).
 func (e *Engine) rerankHits(ctx context.Context, query string, hits []SearchHit) []SearchHit {
 	docs := make([]string, len(hits))
 	for i, h := range hits {
@@ -373,10 +340,6 @@ func (e *Engine) semanticSearchVec(ctx context.Context, kb string, vec []float32
 	return e.backend.Search(ctx, kb, vec, topK, filter)
 }
 
-// keywordHits returns BM25/keyword hits for a query, delegated to the backend's
-// native full-text search when it supports it (no in-RAM corpus), else served
-// from the in-process BM25 index. Hits carry their Document + score and have
-// already passed the metadata filter.
 func (e *Engine) keywordHits(ctx context.Context, kb, query string, n int, filter Filter) ([]SearchHit, error) {
 	if ks, ok := e.backend.(KeywordSearcher); ok {
 		return ks.KeywordSearch(ctx, kb, query, n, filter)
@@ -419,7 +382,7 @@ func (e *Engine) hybridSearchVec(ctx context.Context, kb, query string, vec []fl
 	}
 	bm, err := e.keywordHits(ctx, kb, query, candN, filter)
 	if err != nil {
-		bm = nil // keyword side unavailable → degrade to semantic-only
+		bm = nil
 	}
 	if len(bm) == 0 {
 		if len(sem) > topK {
@@ -451,22 +414,15 @@ func (e *Engine) hybridSearchVec(ctx context.Context, kb, query string, vec []fl
 	return out, nil
 }
 
-// docID is a stable UUID for a chunk so re-ingesting the same source
-// updates in place rather than duplicating. A deterministic UUIDv5 keeps
-// it valid for backends (Qdrant) that require UUID/uint64 point ids.
 func docID(kb, source string, chunk int) string {
 	return uuid.NewSHA1(uuid.NameSpaceURL, []byte(fmt.Sprintf("%s\x00%s\x00%d", kb, source, chunk))).String()
 }
 
-// Retrieval role constants, mirrored from the embeddings wire so the
-// engine doesn't import that package directly.
 const (
 	pkgmoduleRoleQuery    = "query"
 	pkgmoduleRoleDocument = "document"
 )
 
-// formatCitations renders retrieved hits into the configured citation
-// style for injection alongside the answer context.
 func formatCitations(hits []SearchHit, format string) string {
 	if len(hits) == 0 {
 		return ""
@@ -476,7 +432,7 @@ func formatCitations(hits []SearchHit, format string) string {
 		switch format {
 		case "footnote":
 			fmt.Fprintf(&b, "[^%d]: %s (chunk %d, score %.3f)\n", i+1, h.Source, h.Chunk, h.Score)
-		default: // inline
+		default:
 			fmt.Fprintf(&b, "[%d] %s#%d (%.3f)\n", i+1, h.Source, h.Chunk, h.Score)
 		}
 	}

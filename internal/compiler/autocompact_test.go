@@ -18,9 +18,6 @@ func autoHook(def *schema.AppDefinition) *schema.Hook {
 	return nil
 }
 
-// TestAutoCompact_DefaultOn : an app with no runtime.context at all still gets
-// the synthetic hook (auto_compact defaults to true), with the doc-default
-// threshold and the canonical condition/action/event.
 func TestAutoCompact_DefaultOn(t *testing.T) {
 	def := &schema.AppDefinition{}
 	injectAutoCompact(def)
@@ -46,9 +43,6 @@ func TestAutoCompact_DefaultOn(t *testing.T) {
 	}
 }
 
-// TestAutoCompact_ThresholdAndKnobsFromYAML : the threshold comes from
-// compression_trigger and strategy/keep_recent are carried into the action —
-// proving the value is YAML-driven, not hardcoded.
 func TestAutoCompact_ThresholdAndKnobsFromYAML(t *testing.T) {
 	def := &schema.AppDefinition{Runtime: &schema.RuntimeBlock{Context: &schema.ContextConfig{
 		CompressionTrigger: 0.9,
@@ -72,7 +66,6 @@ func TestAutoCompact_ThresholdAndKnobsFromYAML(t *testing.T) {
 	}
 }
 
-// TestAutoCompact_DisabledByFlag : auto_compact:false suppresses the injection.
 func TestAutoCompact_DisabledByFlag(t *testing.T) {
 	off := false
 	def := &schema.AppDefinition{Runtime: &schema.RuntimeBlock{Context: &schema.ContextConfig{AutoCompact: &off}}}
@@ -83,8 +76,6 @@ func TestAutoCompact_DisabledByFlag(t *testing.T) {
 	}
 }
 
-// TestAutoCompact_SkipsWhenExplicit : a hand-written compact_context hook fully
-// replaces the default — no _auto_compact is added.
 func TestAutoCompact_SkipsWhenExplicit(t *testing.T) {
 	def := &schema.AppDefinition{Runtime: &schema.RuntimeBlock{Hooks: []schema.Hook{{
 		ID:     "my_compactor",

@@ -5,14 +5,6 @@ import (
 	"strings"
 )
 
-// AutoFact extracts a short, structured fact from a tool call outcome that
-// should be remembered across compactions. Returns "" when nothing noteworthy
-// occurred. These facts feed snap.Facts (the lossless, never-compacted channel)
-// so the agent always knows which files it modified and what commands it ran,
-// even after many successive compactions — without relying on the LLM summarizer.
-//
-// Only write operations and meaningful commands are tracked. Reads are skipped
-// (they don't change state). Errors are skipped (visible in the conversation).
 func AutoFact(toolName string, args map[string]any, status string) string {
 	if status == "errored" || status == "cancelled" {
 		return ""
@@ -78,7 +70,6 @@ func bashFact(action string, args map[string]any) string {
 		return ""
 	}
 	cmd = strings.TrimSpace(cmd)
-	// Skip trivial read-only commands that don't change state.
 	for _, trivial := range []string{"ls", "cat", "echo", "pwd", "which", "find", "grep",
 		"head", "tail", "wc", "diff", "tree", "du", "df", "ps", "top", "date",
 		"go test", "go build", "make test", "curl -s", "wget"} {

@@ -13,14 +13,9 @@ import (
 	"github.com/digitornai/digitorn/internal/persistence/models"
 )
 
-// builtinFS holds the app sources SHIPPED WITH the daemon : builtins/<app_id>/app.yaml
-// (+ any sibling assets). Embedded into the binary so a fresh install has working
-// apps with no manual step. Add a built-in by dropping a directory under builtins/.
-//
 //go:embed all:builtins
 var builtinFS embed.FS
 
-// builtinAppNames lists the bundled app ids (each builtins/<id>/ holding an app.yaml).
 func builtinAppNames() []string {
 	entries, err := builtinFS.ReadDir("builtins")
 	if err != nil {
@@ -36,9 +31,6 @@ func builtinAppNames() []string {
 	return names
 }
 
-// fetchBuiltin extracts a built-in app's embedded source into a fresh temp dir that
-// the install path compiles like any other local source. The caller removes it via
-// fetchInfo.cleanup.
 func (m *gormManager) fetchBuiltin(name string) (string, error) {
 	sub, err := fs.Sub(builtinFS, "builtins/"+name)
 	if err != nil {
@@ -58,8 +50,6 @@ func (m *gormManager) fetchBuiltin(name string) (string, error) {
 	return dir, nil
 }
 
-// seedBuiltins seeds built-ins at boot. Channel "server" routes via
-// channels.yaml (re-install server apps); "" keeps seed-if-missing.
 func (m *gormManager) seedBuiltins(ctx context.Context) {
 	if m.cfg.Channel == "server" {
 		m.seedServerChannel(ctx)

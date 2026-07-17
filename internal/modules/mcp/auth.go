@@ -11,32 +11,16 @@ import (
 	"github.com/digitornai/digitorn/pkg/module"
 )
 
-// applyServerAuth applies the daemon-resolved credential to a stdio connection
-// spec using the server's auth STYLE, derived GENERICALLY from the config + the
-// catalog entry — never hardcoded per server. Any server works by declaration.
-//
-// Styles (stdio):
-//   - google_keyfile : provider "google" + client credentials. Writes the OAuth
-//     client keyfile and (when a token exists) the credentials file the server's
-//     own auto-auth reads, and points the server's env vars at them.
-//   - env_token      : an env-var name is declared (catalog OAuthEnvTokenVar or
-//     auth.env_token_var). Sets that env var to the access token.
-//
-// HTTP transports inject an Authorization header per-request via the
-// headerRoundTripper, so applyServerAuth leaves them untouched. Returns the spec
-// with env mutated + an AuthFP set so the pool reconnects only when the
-// credential actually changes.
 func (m *Module) applyServerAuth(spec connectSpec, serverID string, sc schema.MCPServerConfig, ce catalogEntry, ac module.AuthContext) connectSpec {
 	if normTransport(spec.Transport) != "stdio" {
 		return spec
 	}
 	if ac.Token == "" && ac.ClientID == "" {
-		return spec // nothing resolved
+		return spec
 	}
 
 	provider := firstNonEmpty(ac.Provider, ce.OAuthProvider)
 
-	// google_keyfile style.
 	if provider == "google" && ac.ClientID != "" && ac.ClientSecret != "" {
 		if env, ok := writeGoogleKeyfile(serverID, ce, ac); ok {
 			spec.Env = mergeEnv(spec.Env, env)
@@ -45,7 +29,6 @@ func (m *Module) applyServerAuth(spec connectSpec, serverID string, sc schema.MC
 		}
 	}
 
-	// env_token style.
 	envVar := firstNonEmpty(ac.EnvTokenVar, ce.OAuthEnvTokenVar)
 	if envVar == "" && sc.Auth != nil {
 		envVar = sc.Auth.EnvTokenVar
@@ -57,11 +40,6 @@ func (m *Module) applyServerAuth(spec connectSpec, serverID string, sc schema.MC
 	return spec
 }
 
-// writeGoogleKeyfile writes gcp-oauth.keys.json (the OAuth client, Google
-// "installed app" shape) and — when a token exists — the credentials file
-// ("authorized_user" shape) into the server's isolated dir, both 0600, and
-// returns the env vars pointing the server at them. ok=false when the env-var
-// names aren't known.
 func writeGoogleKeyfile(serverID string, ce catalogEntry, ac module.AuthContext) (map[string]string, bool) {
 	keyEnv := ce.OAuthKeyfileEnv
 	credEnv := ce.OAuthCredentialsEnv
@@ -87,8 +65,6 @@ func writeGoogleKeyfile(serverID string, ce catalogEntry, ac module.AuthContext)
 	}
 
 	credPath := filepath.Join(dir, credFile)
-	// Write the credentials file only when we already hold a token. Otherwise the
-	// Google MCP server runs its own loopback OAuth on first start and writes it.
 	if ac.Token != "" {
 		creds := map[string]any{
 			"type":          "authorized_user",
@@ -98,12 +74,11 @@ func writeGoogleKeyfile(serverID string, ce catalogEntry, ac module.AuthContext)
 			"token_type":    firstNonEmpty(ac.TokenType, "Bearer"),
 			"expiry_date":   expiryUnixMillis(ac.ExpiresAt),
 		}
-		_ = writeJSONFile0600(credPath, creds) // best-effort; server self-auths if absent
+		_ = writeJSONFile0600(credPath, creds)
 	}
 	return map[string]string{keyEnv: keyPath, credEnv: credPath}, true
 }
 
-// serverAuthDir is the per-server isolated directory for OAuth keyfiles.
 func serverAuthDir(serverID string) string {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
@@ -120,8 +95,6 @@ func writeJSONFile0600(path string, v any) error {
 	return os.WriteFile(path, b, 0o600)
 }
 
-// expiryUnixMillis converts an expiry in unix SECONDS to the unix MILLISECONDS
-// the Google credentials file expects. 0 → 0.
 func expiryUnixMillis(sec int64) int64 {
 	if sec <= 0 {
 		return 0

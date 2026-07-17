@@ -5,9 +5,7 @@ import (
 	"sync"
 )
 
-// reCache memoises compiled regexes used in error route matching.
-// Patterns come from the app's validated YAML so the set is bounded.
-var reCache sync.Map // pattern string → compiledRe
+var reCache sync.Map
 
 type compiledRe struct {
 	re  *regexp.Regexp

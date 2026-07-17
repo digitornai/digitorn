@@ -1,11 +1,3 @@
-// Package eventbus provides the in-memory implementation of ports.EventBus.
-// It is a lightweight pub/sub bus for intra-process event delivery between
-// modules and the runtime. Delivery is async (worker pool) and best-effort:
-// handler errors are logged but do not block other subscribers.
-//
-// SAFETY: The bus NEVER blocks the caller. Publish is non-blocking and drops
-// events when the internal channel is full (backpressure). The worker pool
-// has a fixed number of goroutines to prevent saturation.
 package eventbus
 
 import (
@@ -22,14 +14,8 @@ var ErrBusClosed = errors.New("eventbus: bus is closed")
 var ErrBusFull = errors.New("eventbus: channel full, event dropped")
 
 const (
-	// defaultWorkerCount is the number of goroutines processing events.
-	// Too few = events pile up; too many = CPU saturation. 4 is safe for
-	// typical module event rates (< 100 events/sec).
 	defaultWorkerCount = 4
 
-	// defaultChannelSize is the buffer between Publish and handlers.
-	// When full, Publish drops the event (non-blocking). This prevents
-	// the caller from ever blocking.
 	defaultChannelSize = 1024
 )
 

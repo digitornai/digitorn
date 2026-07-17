@@ -11,11 +11,6 @@ import (
 
 func init() { Register(&kafkaConnector{}) }
 
-// kafkaConnector consumes a Kafka topic as a continuous change stream
-// (Watch only) : each message → one document (id from the message key or a
-// JSON field, text from configured fields, the rest as metadata), an empty
-// value (tombstone) → delete. Offsets are committed to the consumer group,
-// so a restart resumes exactly where it left off.
 type kafkaConnector struct{}
 
 func (*kafkaConnector) Type() string                                          { return "kafka" }
@@ -72,8 +67,6 @@ func (*kafkaConnector) Watch(ctx context.Context, spec SourceSpec, sink Sink, _ 
 	}
 }
 
-// toDoc maps a Kafka (key,value) to a document. Returns (doc, isDelete, ok).
-// Empty value with a key = a compaction tombstone → delete.
 func (o kafkaOpts) toDoc(key, value []byte) (Document, bool, bool) {
 	id := string(key)
 	if len(value) == 0 {

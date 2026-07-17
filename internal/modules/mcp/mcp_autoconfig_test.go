@@ -8,9 +8,6 @@ import (
 	"github.com/digitornai/digitorn/internal/compiler/schema"
 )
 
-// Auth is inferred purely from declared env-var NAMES: OAuth needs both a
-// client-id AND a client-secret var; a lone token var is not OAuth; the provider
-// comes from the *_CLIENT_ID prefix.
 func TestDetectOAuthFromEnvVars(t *testing.T) {
 	d := detectOAuthFromEnvVars([]string{"GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GOOGLE_ACCESS_TOKEN"})
 	if d == nil || d.Provider != "google" || d.ClientIDVar != "GOOGLE_CLIENT_ID" || d.TokenVar != "GOOGLE_ACCESS_TOKEN" {
@@ -41,8 +38,6 @@ func TestEnvVarToShorthands(t *testing.T) {
 	}
 }
 
-// An UNKNOWN server's registry entry maps to a launch config: npm → npx, the
-// user's shorthand credential lands in the declared env var.
 func TestRegistryToConnectSpec_NPM(t *testing.T) {
 	srv := &registryServer{Name: "io.github.x/cool", Packages: []registryPackage{
 		{RegistryType: "npm", Identifier: "@x/cool-mcp", EnvVars: []registryEnvVar{{Name: "COOL_API_KEY"}}},
@@ -57,10 +52,6 @@ func TestRegistryToConnectSpec_NPM(t *testing.T) {
 	}
 }
 
-// A brand-new server declares an ACCESS_TOKEN var but the user supplied the
-// credential under a DIFFERENT shorthand (`api_key`). It must STILL wire — the
-// detected token var receives any token-ish value, so no code and no knowledge
-// of the server's exact env-var name is needed.
 func TestRegistryToConnectSpec_DynamicTokenWiring(t *testing.T) {
 	srv := &registryServer{Name: "io.github.x/svc", Packages: []registryPackage{
 		{RegistryType: "npm", Identifier: "@x/svc-mcp", EnvVars: []registryEnvVar{{Name: "SVC_ACCESS_TOKEN"}}},
@@ -89,7 +80,6 @@ func TestRegistryToConnectSpec_PipAndRemote(t *testing.T) {
 	}
 }
 
-// The registry path auto-detects a server's OAuth from its env-var names.
 func TestRegistryToConnectSpec_AutoDetectsAuth(t *testing.T) {
 	srv := &registryServer{Packages: []registryPackage{{RegistryType: "npm", Identifier: "@x/g",
 		EnvVars: []registryEnvVar{{Name: "GITHUB_CLIENT_ID"}, {Name: "GITHUB_CLIENT_SECRET"}}}}}
@@ -99,7 +89,6 @@ func TestRegistryToConnectSpec_AutoDetectsAuth(t *testing.T) {
 	}
 }
 
-// matchRegistry: exact id match (on the last name segment) wins; else first hit.
 func TestMatchRegistry(t *testing.T) {
 	body := []byte(`{"servers":[
 		{"name":"io.github.a/other","packages":[{"registry_type":"npm","identifier":"@a/other"}]},
@@ -111,15 +100,12 @@ func TestMatchRegistry(t *testing.T) {
 	if srv := matchRegistry(body, "zzz"); srv == nil || srv.Name != "io.github.a/other" {
 		t.Fatalf("first-result fallback failed: %+v", srv)
 	}
-	// also handle the wrapped {"server":{...}} shape.
 	wrapped := []byte(`{"servers":[{"server":{"name":"io.x/w","packages":[{"registryType":"npm","identifier":"@x/w"}]}}]}`)
 	if srv := matchRegistry(wrapped, "w"); srv == nil || srv.Name != "io.x/w" {
 		t.Fatalf("wrapped shape not handled: %+v", srv)
 	}
 }
 
-// Best-effort: hit the REAL registry for a well-known server. Skips on no
-// network / API change so it never flakes CI, but proves the live path when up.
 func TestSearchRegistry_Live(t *testing.T) {
 	if testing.Short() {
 		t.Skip("short mode")

@@ -14,12 +14,8 @@ import (
 	"github.com/digitornai/digitorn-cli/internal/client"
 )
 
-// ---- helpers -------------------------------------------------------
-
 type routeKey struct{ Method, Path string }
 
-// recordingMux is a tiny test mux that lets a test pre-program
-// canned responses per (method, path) and asserts the inbound request.
 type recordingMux struct {
 	t        *testing.T
 	handlers map[routeKey]http.HandlerFunc
@@ -70,8 +66,6 @@ func newClientAgainst(t *testing.T, mux http.Handler) (*client.Client, *httptest
 	return c, srv
 }
 
-// ---- New / Options ------------------------------------------------
-
 func TestNew_RequiresBaseURL(t *testing.T) {
 	_, err := client.New(client.Options{})
 	if err == nil || !strings.Contains(err.Error(), "BaseURL") {
@@ -85,8 +79,6 @@ func TestNew_RejectsMalformedURL(t *testing.T) {
 		t.Fatal("expected error on missing scheme")
 	}
 }
-
-// ---- Ping ----------------------------------------------------------
 
 func TestPing_OK(t *testing.T) {
 	mux := newMux(t)
@@ -110,8 +102,6 @@ func TestPing_5xx(t *testing.T) {
 	}
 }
 
-// ---- Auth headers --------------------------------------------------
-
 func TestHeaders_BearerAndUserID(t *testing.T) {
 	mux := newMux(t)
 	mux.Handle("GET", "/api/apps", func(w http.ResponseWriter, r *http.Request) {
@@ -126,8 +116,6 @@ func TestHeaders_BearerAndUserID(t *testing.T) {
 	c, _ := newClientAgainst(t, mux)
 	_, _ = c.ListApps(context.Background(), false)
 }
-
-// ---- Apps ----------------------------------------------------------
 
 func TestListApps_DecodesPayload(t *testing.T) {
 	mux := newMux(t)
@@ -225,8 +213,6 @@ func TestSetBYOK_PutsEnabledField(t *testing.T) {
 		t.Errorf("body = %+v", got)
 	}
 }
-
-// ---- Sessions ------------------------------------------------------
 
 func TestCreateSession_PostsAndDecodes(t *testing.T) {
 	mux := newMux(t)

@@ -1,6 +1,3 @@
-// Package filesystem exposes read/write/edit/ls/grep/glob actions over a
-// path-restricted workspace. Every path is normalized and validated to stay
-// inside the configured workspace root — symlinks pointing outside are rejected.
 package filesystem
 
 import (
@@ -28,27 +25,19 @@ import (
 	"github.com/digitornai/digitorn/pkg/module"
 )
 
-// Config is the per-app configuration for the filesystem module.
 type Config struct {
-	Workspace    string `json:"workspace" yaml:"workspace"`           // root directory; defaults to CWD
-	MaxFileBytes int64  `json:"max_file_bytes" yaml:"max_file_bytes"` // 0 = no limit
+	Workspace    string `json:"workspace" yaml:"workspace"`
+	MaxFileBytes int64  `json:"max_file_bytes" yaml:"max_file_bytes"`
 }
 
-// Module is the filesystem module instance.
 type Module struct {
 	module.Base
 	cfg Config
 
-	// semanticApps tracks appIDs where semantic search is confirmed active
-	// (auto_index_workdir=true AND embedder available). Populated on each
-	// dispatch so DynamicToolPrompts can inject the right grep guidance.
-	semanticApps sync.Map   // appID (string) → struct{}
-	embedderSeen atomic.Bool // true once an embedder was observed in any ctx
+	semanticApps sync.Map
+	embedderSeen atomic.Bool
 }
 
-// PromptSections contributes the filesystem module's operating guidance to the
-// system prompt of every agent AUTHORIZED for it (the framework gathers this
-// automatically — no per-call wiring). Implements domainmodule.PromptContributor.
 func (m *Module) PromptSections(domainmodule.PromptScope) []domainmodule.PromptSection {
 	return []domainmodule.PromptSection{{
 		Title:    "Filesystem",
@@ -66,17 +55,11 @@ func (m *Module) PromptSections(domainmodule.PromptScope) []domainmodule.PromptS
 	}}
 }
 
-// Invoke intercepts every tool dispatch to snapshot per-app semantic search
-// availability, then delegates to Base.Invoke. This keeps DynamicToolPrompts
-// accurate without requiring a separate wiring call.
 func (m *Module) Invoke(ctx context.Context, name string, params []byte) (tool.Result, error) {
 	m.snapshotSemanticStatus(ctx)
 	return m.Base.Invoke(ctx, name, params)
 }
 
-// snapshotSemanticStatus reads the current dispatch context and caches whether
-// semantic search is active for this app. Called on every tool invocation so
-// the status is always fresh by the time the next turn's prompt is assembled.
 func (m *Module) snapshotSemanticStatus(ctx context.Context) {
 	id, ok := tool.IdentityFromContext(ctx)
 	if !ok || id.AppID == "" {
@@ -93,9 +76,6 @@ func (m *Module) snapshotSemanticStatus(ctx context.Context) {
 	}
 }
 
-// DynamicToolPrompts injects an enhanced grep prompt when semantic search is
-// confirmed active for this app (auto_index_workdir=true + embedder running).
-// The overlay is additive — the static ToolPrompt still applies.
 func (m *Module) DynamicToolPrompts(scope domainmodule.PromptScope) map[string]string {
 	if scope.AppID == "" {
 		return nil
@@ -129,7 +109,6 @@ When to exploit "related":
 
 Workflow: run ONE grep with a descriptive phrase, read both "matches" and "related", then act. Skip the "find files → open each → search" loop entirely.`
 
-// New constructs the filesystem module with all its actions wired.
 func New() *Module {
 	m := &Module{}
 	m.Base = module.Base{
@@ -352,7 +331,6 @@ func New() *Module {
 	return m
 }
 
-// Init parses the module configuration.
 func (m *Module) Init(ctx context.Context, cfg map[string]any) error {
 	if cfg != nil {
 		raw, _ := json.Marshal(cfg)
@@ -369,9 +347,6 @@ func (m *Module) Init(ctx context.Context, cfg map[string]any) error {
 	if err != nil {
 		return fmt.Errorf("filesystem: abs(%s): %w", m.cfg.Workspace, err)
 	}
-	// Canonicalise the workspace root (resolve symlinks) so the
-	// containment check in resolve() compares like-for-like — otherwise a
-	// symlinked workspace would make every real path look like an escape.
 	if real, err := filepath.EvalSymlinks(abs); err == nil {
 		abs = real
 	}
@@ -379,26 +354,12 @@ func (m *Module) Init(ctx context.Context, cfg map[string]any) error {
 	return nil
 }
 
-// resolve validates that target stays inside the workspace and returns the
-// absolute path. It is hardened against two escapes the naive version missed :
-//
-//   - Absolute targets are rejected outright (a workspace path must be
-//     relative ; an absolute path is never inside by construction here).
-//   - Symlinks are resolved on the deepest EXISTING ancestor — not just when
-//     the full target exists — then the not-yet-existing tail is re-appended.
-//     This catches a planted symlink in a parent dir (e.g. workspace/evil ->
-//     /etc, then a write to evil/passwd) which the exists-only EvalSymlinks
-//     let through for create operations.
 func (m *Module) resolve(target string) (string, error) {
 	if target == "" {
 		return "", errors.New("path must not be empty")
 	}
 	var abs string
 	if filepath.IsAbs(target) {
-		// An absolute path is accepted only if it resolves inside the
-		// workspace — the containment check below rejects any escape. Agents
-		// routinely emit absolute paths once they know the workdir root, so
-		// rejecting them outright only makes the model fight the tool.
 		abs = filepath.Clean(target)
 	} else {
 		a, err := filepath.Abs(filepath.Join(m.cfg.Workspace, target))
@@ -412,19 +373,12 @@ func (m *Module) resolve(target string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// rel == "." is the workspace itself ; any rel that is ".." or begins
-	// with "../" escapes. The exact-and-separator check avoids matching a
-	// legitimate sibling like "..foo".
 	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("path %q is outside the workspace %q", target, m.cfg.Workspace)
 	}
 	return resolved, nil
 }
 
-// resolveExistingPrefix resolves symlinks on the deepest existing ancestor
-// of abs, then re-joins the remaining (non-existent) tail. So a symlink in a
-// parent directory is followed for containment checking even when the final
-// component doesn't exist yet (the create-then-escape case).
 func resolveExistingPrefix(abs string) string {
 	cur := abs
 	tail := ""
@@ -437,19 +391,13 @@ func resolveExistingPrefix(abs string) string {
 		}
 		parent := filepath.Dir(cur)
 		if parent == cur {
-			return abs // reached the volume root with nothing resolvable
+			return abs
 		}
 		tail = filepath.Join(filepath.Base(cur), tail)
 		cur = parent
 	}
 }
 
-// resolveCtx confines target using the per-call workdir PathPolicy when one
-// rides on the dispatch context (the agent path : the chokepoint has already
-// rewritten the arg to an enforced absolute path, and Enforce re-validates it —
-// defense in depth). Without a policy (setup steps / CLI / admin) it falls back
-// to the module's static workspace-rooted resolution, which keeps its strict
-// "relative only" stance for non-agent callers.
 func (m *Module) resolveCtx(ctx context.Context, target string) (string, error) {
 	var abs string
 	var err error
@@ -467,10 +415,6 @@ func (m *Module) resolveCtx(ctx context.Context, target string) (string, error) 
 	return abs, nil
 }
 
-// globBase returns the root that glob/grep results are listed relative to —
-// the session workdir when a policy is present, else the static workspace.
-// ok is false when there is a policy but no workdir (file ops are confined to
-// nothing → callers return no results rather than leaking the CWD).
 func (m *Module) globBase(ctx context.Context) (string, bool) {
 	if pp, ok := workdir.PathPolicyFromContext(ctx); ok {
 		if !pp.HasWorkdir() {
@@ -481,9 +425,6 @@ func (m *Module) globBase(ctx context.Context) (string, bool) {
 	return m.cfg.Workspace, m.cfg.Workspace != ""
 }
 
-// relInside returns the slash-form path of abs under base, and false when abs
-// escapes base. Used to confine glob results to the workdir even for patterns
-// like "../*" (which filepath.Glob would otherwise resolve outside).
 func relInside(base, abs string) (string, bool) {
 	rel, err := filepath.Rel(base, abs)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
@@ -492,26 +433,21 @@ func relInside(base, abs string) (string, bool) {
 	return filepath.ToSlash(rel), true
 }
 
-// --- Action handlers ---
-
 type readParams struct {
 	Path     string   `json:"path"`
-	FilePath string   `json:"file_path"` // alias (Claude editor convention)
-	Filename string   `json:"filename"`  // alias
-	File     string   `json:"file"`      // alias
-	Paths    flexjson.StringSlice `json:"paths"` // read several files in one call (labeled sections)
-	Offset   flexjson.Int  `json:"offset"`    // 1-based start line (default 1)
-	Limit    flexjson.Int  `json:"limit"`     // max lines to return (default 2000)
-	Outline  flexjson.Bool `json:"outline"`   // return a structural map (defs + line numbers) not content
-	// JSONPath returns ONLY the given subtree of a JSON file (gjson syntax —
-	// supports querying arrays by field, e.g. elements.#(id=="r1") — and a
-	// leading-slash JSON Pointer). Lets the agent zoom into one element.
+	FilePath string   `json:"file_path"`
+	Filename string   `json:"filename"`
+	File     string   `json:"file"`
+	Paths    flexjson.StringSlice `json:"paths"`
+	Offset   flexjson.Int  `json:"offset"`
+	Limit    flexjson.Int  `json:"limit"`
+	Outline  flexjson.Bool `json:"outline"`
 	JSONPath string `json:"json_path"`
 }
 
 const (
-	readDefaultLines    = 200  // default when no limit given — forces targeted reads
-	readAutoOutlineOver = 300  // files larger than this get an outline prepended when read from the top
+	readDefaultLines    = 200
+	readAutoOutlineOver = 300
 )
 
 func (m *Module) read(ctx context.Context, raw json.RawMessage) (tool.Result, error) {
@@ -529,8 +465,6 @@ func (m *Module) read(ctx context.Context, raw json.RawMessage) (tool.Result, er
 		targets = []string{p.Path}
 	}
 
-	// Single file : Data is the text body ; an image/binary file also rides as an
-	// OutputPart so the model actually SEES it (vision) via the multipart adapter.
 	if len(targets) == 1 {
 		body, blob, err := m.readBody(ctx, targets[0], p)
 		if err != nil {
@@ -543,9 +477,6 @@ func (m *Module) read(ctx context.Context, raw json.RawMessage) (tool.Result, er
 		return res, nil
 	}
 
-	// Multi-file : labeled sections in ONE call. One unreadable file is reported
-	// inline and never aborts the others. Any images are collected as OutputParts
-	// so the model sees them all alongside the combined text.
 	var b strings.Builder
 	var blobs []tool.OutputPart
 	for _, rel := range targets {
@@ -571,14 +502,8 @@ func (m *Module) read(ctx context.Context, raw json.RawMessage) (tool.Result, er
 	return res, nil
 }
 
-// maxVisionBytes caps the image size shipped inline to the model. Vision models
-// reject very large images (and base64 inflates ~33%), so a bigger file is
-// reported as text with a "resize first" hint instead of being silently dropped.
 const maxVisionBytes = 5 << 20
 
-// readBody resolves one file and returns its renderable body : a numbered slice
-// (offset/limit), an outline (when p.Outline), or a descriptor for a non-text
-// file. Pure per-file logic, shared by single- and multi-file read.
 func (m *Module) readBody(ctx context.Context, rel string, p readParams) (string, *tool.OutputPart, error) {
 	abs, actual, err := m.resolveReadable(ctx, rel)
 	if err != nil {
@@ -593,9 +518,6 @@ func (m *Module) readBody(ctx context.Context, rel string, p readParams) (string
 		return "", nil, err
 	}
 	if fi.IsDir() {
-		// A directory orients the agent instead of erroring : `outline: true` →
-		// a cross-file map of every file's definitions ; otherwise a bounded,
-		// .gitignore-aware TREE of the structure. Both are pure-Go (no treesitter).
 		label := rel
 		if label == "" || label == "." {
 			label = "."
@@ -621,8 +543,6 @@ func (m *Module) readBody(ctx context.Context, rel string, p readParams) (string
 	if k := detectKind(head); k.kind != "text" {
 		switch k.kind {
 		case "image":
-			// Ship the image bytes as a vision part so the model SEES it (like a
-			// human opening the file). Too-large images are reported as text.
 			if overCap || int64(len(data)) > maxVisionBytes {
 				return fmt.Sprintf("[image %s is %d bytes — too large to view inline (max %d); resize it first]", filepath.Base(abs), fi.Size(), maxVisionBytes), nil, nil
 			}
@@ -635,9 +555,6 @@ func (m *Module) readBody(ctx context.Context, rel string, p readParams) (string
 		}
 	}
 
-	// JSON-aware reading: an agent editing a .json (config, Excalidraw scene…)
-	// should SEE the structure in depth rather than a huge blob, and zoom into
-	// one subtree via json_path — then edit surgically by pointer.
 	if looksJSON(data) {
 		content := string(data)
 		if p.JSONPath != "" {
@@ -647,24 +564,18 @@ func (m *Module) readBody(ctx context.Context, rel string, p readParams) (string
 			}
 			return fmt.Sprintf("%s @ json_path=%q:\n%s", filepath.Base(abs), p.JSONPath, sub), nil, nil
 		}
-		// Deep structure map when asked (outline) or when the raw would be big.
 		if bool(p.Outline) || len(data) > 2048 {
 			if st, err := jsonStructure(content); err == nil {
 				return fmt.Sprintf("JSON structure of %s — pass json_path=\"…\" for a subtree's full content (e.g. elements.#(id==\"r1\")), or edit(patch=[…]) to modify by pointer:\n\n%s",
 					filepath.Base(abs), st), nil, nil
 			}
 		}
-		// small JSON with no json_path/outline → fall through to raw read
 	}
 
-	// Outline mode : a structural map (definitions + line numbers) so a big file
-	// is navigable in a few dozen lines. Falls back to a normal read when the
-	// file has no recognizable structure (plain text, data).
 	if p.Outline {
 		if om, n := outlineOf(string(data)); n > 0 {
 			return fmt.Sprintf("outline of %s (%d definitions):\n%s\nRead a line range (start_line/end_line via edit, or offset/limit here) for full detail.", filepath.Base(abs), n, om), nil, nil
 		}
-		// fall through to a normal read
 	}
 
 	lines := splitLines(string(data))
@@ -679,10 +590,6 @@ func (m *Module) readBody(ctx context.Context, rel string, p readParams) (string
 		limit = readDefaultLines
 	}
 
-	// Auto-outline: when reading a large file from the top without an explicit
-	// limit, prepend the structural outline so the agent can navigate before
-	// reading more. Skipped when the caller already set outline:true or requested
-	// a specific range (offset > 0) or explicitly set a limit.
 	var autoOutlinePrefix string
 	if !bool(p.Outline) && start == 0 && !explicitLimit && total > readAutoOutlineOver {
 		if om, n := outlineOf(string(data)); n > 0 {
@@ -718,8 +625,6 @@ func (m *Module) readBody(ctx context.Context, rel string, p readParams) (string
 	return body, nil, nil
 }
 
-// readCapped reads up to cap bytes ; overCap reports the file was larger and got
-// clipped. Uses a full read (not a single Read syscall, which may short-read).
 func readCapped(abs string, cap int64) (data []byte, overCap bool, err error) {
 	f, err := os.Open(abs)
 	if err != nil {
@@ -829,7 +734,6 @@ func (m *Module) write(ctx context.Context, raw json.RawMessage) (tool.Result, e
 	if existed {
 		action = "overwrote"
 	}
-	// Emit event for the background service
 	emitFileEvent(ctx, "file."+action, p.Path, map[string]any{
 		"bytes":   len(string(p.Content)),
 		"action":  action,
@@ -848,10 +752,6 @@ func (m *Module) write(ctx context.Context, raw json.RawMessage) (tool.Result, e
 
 type editParams struct {
 	Path string `json:"path"`
-	// Aliases: weaker models key the file under file_path (Claude's editor
-	// convention), filename, or file. Accept them so a correct edit is not
-	// rejected with "path must not be empty" over the key name alone — the same
-	// forgiveness the glob/grep tools already give the pattern argument.
 	FilePath   string   `json:"file_path"`
 	Filename   string   `json:"filename"`
 	File       string   `json:"file"`
@@ -859,7 +759,6 @@ type editParams struct {
 	NewString    string        `json:"new_string"`
 	NewStringB64 string        `json:"new_string_b64"`
 	ReplaceAll   flexjson.Bool `json:"replace_all"`
-	// Surgical locators (alternatives to old_string — provide exactly one).
 	Occurrence   flexjson.Int  `json:"occurrence"`
 	StartLine    flexjson.Int  `json:"start_line"`
 	EndLine      flexjson.Int  `json:"end_line"`
@@ -869,11 +768,6 @@ type editParams struct {
 	Append       flexjson.Bool `json:"append"`
 	Expect       string   `json:"expect"`
 	DryRun       flexjson.Bool `json:"dry_run"`
-	// RFC 6902 JSON Patch for surgical .json editing. When present, `edit`
-	// applies this patch to the file and the text-mode locators above are
-	// ignored — the agent sends only the tiny patch, never the whole file.
-	// flexjson.RawArray tolerates a model double-encoding the array as a JSON
-	// string (`"patch": "[{...}]"`) instead of native JSON (`"patch": [{...}]`).
 	Patch flexjson.RawArray `json:"patch"`
 }
 
@@ -886,41 +780,24 @@ func (p editParams) locator() editLocator {
 	}
 }
 
-// editError distinguishes the two recoverable edit failures so callers can give
-// the agent the right correction hint : a total miss carries the closest blocks,
-// an ambiguous match carries the line numbers it hit.
 type editError struct {
-	kind    string // "empty" | "not_found" | "ambiguous"
+	kind    string
 	message string
 	closest []suggestion
 }
 
 func (e *editError) Error() string { return e.message }
 
-// applyEdit performs ONE old→new substitution against in-memory content and
-// returns the result, without touching disk. Exact (byte-identical) match wins ;
-// on an exact miss it falls back to the deterministic fuzzy locate (line-endings
-// / trailing-space / indentation) — never a risky similarity guess. Shared by
-// edit (single) and multi_edit (batch), so their matching semantics are identical.
 func applyEdit(content, oldStr, newStr string, replaceAll bool) (updated string, count int, strategy string, err error) {
 	return applyEditTry(content, oldStr, newStr, replaceAll, true)
 }
 
-// applyEditTry is applyEdit with one self-healing retry: on a TOTAL miss it
-// strips read's line-number prefixes ("  142\t…") from old_string — the single
-// most common reason a model's edit fails first-try is pasting numbered read
-// output verbatim — and tries once more. allowStrip is false on the retry so it
-// can never loop. The strip is conservative (every non-blank line must carry the
-// prefix), so a genuine edit is never mangled.
 func applyEditTry(content, oldStr, newStr string, replaceAll, allowStrip bool) (updated string, count int, strategy string, err error) {
 	if oldStr == "" {
 		return "", 0, "", &editError{kind: "empty", message: "old_string must not be empty"}
 	}
 	if c := strings.Count(content, oldStr); c >= 1 {
 		if c > 1 && !replaceAll {
-			// Report WHERE the matches are (like the fuzzy path) so the agent can
-			// add surrounding context to target ONE precisely, instead of blindly
-			// using replace_all (which would change them all — often not intended).
 			lines := make([]int, 0, c)
 			for off := 0; len(lines) < 20; {
 				i := strings.Index(content[off:], oldStr)
@@ -968,9 +845,6 @@ func applyEditTry(content, oldStr, newStr string, replaceAll, allowStrip bool) (
 	return applyFuzzySpans(content, spans, newStr), len(spans), strat, nil
 }
 
-// effectivePath returns the first non-empty of the canonical path and the
-// aliases a confused model reaches for (file_path / filename / file), so an edit
-// keyed under the wrong name still lands instead of failing on an empty path.
 func effectivePath(primary string, aliases ...string) string {
 	if strings.TrimSpace(primary) != "" {
 		return primary
@@ -1011,7 +885,6 @@ func (m *Module) edit(ctx context.Context, raw json.RawMessage) (tool.Result, er
 	var updated, strategy string
 	var count int
 	if len(p.Patch) > 0 {
-		// Surgical JSON mode: apply the RFC 6902 patch, ignore text locators.
 		u, n, perr := applyJSONPatch(content, json.RawMessage(p.Patch))
 		if perr != nil {
 			data := map[string]any{
@@ -1043,8 +916,6 @@ func (m *Module) edit(ctx context.Context, raw json.RawMessage) (tool.Result, er
 	if d.Summary != "" {
 		data["summary"] = d.Summary
 	}
-	// dry_run : show the agent the unified diff and write NOTHING. Lets a weak
-	// agent preview a surgical edit before committing it.
 	if p.DryRun {
 		data["dry_run"] = true
 		data["note"] = "DRY RUN — nothing written. Re-call without dry_run to apply."
@@ -1053,16 +924,13 @@ func (m *Module) edit(ctx context.Context, raw json.RawMessage) (tool.Result, er
 		}
 		return tool.Result{Success: true, Data: data, Diff: diffView(p.Path, content, updated)}, nil
 	}
-	// Atomic write : a crash leaves the old or new file, never a truncated one ;
-	// existing permissions preserved.
 	if err := atomicWrite(abs, []byte(updated), fileMode(abs, 0o644)); err != nil {
 		return errResult(err), err
 	}
 	tindexes.markDirty(abs)
 	sindexes.markDirty(abs)
 	repomap.MarkDirty(abs)
-	notifyFileChange(ctx, abs) // live workspace push (non-blocking, best-effort)
-	// Emit event for the background service
+	notifyFileChange(ctx, abs)
 	emitFileEvent(ctx, "file.modified", p.Path, map[string]any{
 		"replacements": count,
 		"strategy":     strategy,
@@ -1096,15 +964,6 @@ type multiEditParams struct {
 	DryRun flexjson.Bool `json:"dry_run"`
 }
 
-// multiEdit applies a batch of edits to one file as a SINGLE atomic operation :
-// every edit runs in order against the in-memory content (each sees the previous
-// edit's result), and the file is written exactly once. If ANY edit fails to
-// match, NOTHING is written — the file is left untouched and the failing edit's
-// index (plus closest-match hints) is reported. This is the agent-grade
-// "rewrite a function across N spots" primitive, crash-safe end to end.
-// unwrapStringifiedArray rewrites {"field":"[...]"} → {"field":[...]} when a
-// model double-encodes an array field as a JSON string. Returns raw unchanged
-// on any mismatch.
 func unwrapStringifiedArray(raw json.RawMessage, field string) json.RawMessage {
 	var mp map[string]json.RawMessage
 	if json.Unmarshal(raw, &mp) != nil {
@@ -1162,8 +1021,6 @@ func (m *Module) multiEdit(ctx context.Context, raw json.RawMessage) (tool.Resul
 		}
 		upd, count, strategy, aerr := resolveEditOp(cur, loc)
 		if aerr != nil {
-			// All-or-nothing : a single failure aborts the whole batch with the
-			// file untouched, so the agent never lands a half-applied edit.
 			msg := fmt.Sprintf("edits[%d] in %s: %v", i, p.Path, aerr)
 			data := map[string]any{"error": msg, "path": p.Path, "failed_edit": i}
 			if ee, ok := aerr.(*editError); ok && ee.kind == "not_found" && len(ee.closest) > 0 {
@@ -1196,8 +1053,7 @@ func (m *Module) multiEdit(ctx context.Context, raw json.RawMessage) (tool.Resul
 	tindexes.markDirty(abs)
 	sindexes.markDirty(abs)
 	repomap.MarkDirty(abs)
-	notifyFileChange(ctx, abs) // live workspace push (non-blocking, best-effort)
-	// Emit event for the background service
+	notifyFileChange(ctx, abs)
 	emitFileEvent(ctx, "file.modified", p.Path, map[string]any{
 		"replacements": total,
 		"edits":        len(p.Edits),
@@ -1221,10 +1077,6 @@ type deleteParams struct {
 	File     string `json:"file"`
 }
 
-// delete removes a single file from the workspace. It refuses directories and
-// errors on a missing path (so a delete never silently no-ops), then fires the
-// live workspace push like the other mutators. This is the new-world equivalent
-// of the legacy workspace.delete tool (filesystem is its alias).
 func (m *Module) delete(ctx context.Context, raw json.RawMessage) (tool.Result, error) {
 	var p deleteParams
 	if err := json.Unmarshal(raw, &p); err != nil {
@@ -1255,8 +1107,7 @@ func (m *Module) delete(ctx context.Context, raw json.RawMessage) (tool.Result, 
 		return errResult(err), err
 	}
 	tindexes.markDirty(abs)
-	notifyFileChange(ctx, abs) // live workspace push (non-blocking, best-effort)
-	// Emit event for the background service
+	notifyFileChange(ctx, abs)
 	emitFileEvent(ctx, "file.deleted", p.Path, nil)
 	ddata := map[string]any{"path": p.Path, "deleted": true}
 	if s := docSyncData(ctx, abs); s != nil {
@@ -1265,9 +1116,6 @@ func (m *Module) delete(ctx context.Context, raw json.RawMessage) (tool.Result, 
 	return tool.Result{Success: true, Data: ddata}, nil
 }
 
-// applyFuzzySpans rebuilds content with each located span replaced by the
-// (re-indented) replacement. Spans are ascending and non-overlapping, so a
-// single gap-copy pass is correct and O(n).
 func applyFuzzySpans(content string, spans []matchSpan, newStr string) string {
 	var b strings.Builder
 	b.Grow(len(content) + len(newStr))
@@ -1283,16 +1131,12 @@ func applyFuzzySpans(content string, spans []matchSpan, newStr string) string {
 
 type globParams struct {
 	Pattern    string  `json:"pattern"`
-	Glob       string  `json:"glob"`        // alias : models often key the pattern under the tool name
-	Type       string  `json:"type"`        // "file" | "dir" | "any" (default)
-	MaxResults flexjson.Int `json:"max_results"` // cap (default globDefaultCap)
-	Tree       *flexjson.Bool `json:"tree"` // nil = default true; false only when explicitly set
+	Glob       string  `json:"glob"`
+	Type       string  `json:"type"`
+	MaxResults flexjson.Int `json:"max_results"`
+	Tree       *flexjson.Bool `json:"tree"`
 }
 
-// effectivePattern resolves the glob pattern, accepting the common LLM mistake of
-// keying it under the TOOL name ("glob") instead of the parameter name
-// ("pattern"). Returning the alias rather than erroring keeps a confused model
-// from dead-ending the agent on "pattern must not be empty".
 func (p globParams) effectivePattern() string {
 	if s := strings.TrimSpace(p.Pattern); s != "" {
 		return s
@@ -1300,10 +1144,6 @@ func (p globParams) effectivePattern() string {
 	return strings.TrimSpace(p.Glob)
 }
 
-// glob walks the confined tree and returns paths matching the pattern, with full
-// ** recursion (the stdlib filepath.Glob cannot recurse), VCS/build noise dirs
-// pruned, an optional file/dir type filter, results sorted MOST-RECENT-FIRST
-// (the order an agent usually wants), and a cap with a truncation flag.
 func (m *Module) glob(ctx context.Context, raw json.RawMessage) (tool.Result, error) {
 	var p globParams
 	if err := json.Unmarshal(raw, &p); err != nil {

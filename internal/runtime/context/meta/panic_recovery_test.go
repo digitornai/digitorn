@@ -19,11 +19,6 @@ func tinyIndex() *index.ToolIndex {
 	})
 }
 
-// TestDispatch_InnerPanic_RecoveredAsErrored : a domain tool whose handler
-// PANICS must come back as an errored outcome, NEVER crash the daemon. This is
-// the universal guard protecting every foreground turn goroutine and every
-// background task goroutine (they funnel through Dispatch). The test process
-// surviving the call IS the proof.
 func TestDispatch_InnerPanic_RecoveredAsErrored(t *testing.T) {
 	d := &meta.MetaDispatcher{Inner: &panicInner{boom: "danger.boom"}}
 	out := d.Dispatch(context.Background(), runtime.ToolInvocation{Name: "danger.boom"})
@@ -35,10 +30,6 @@ func TestDispatch_InnerPanic_RecoveredAsErrored(t *testing.T) {
 	}
 }
 
-// TestDispatch_SearchToolsNegativeLimit_NoPanic : a negative limit must NOT
-// panic make([]T,0,-1) — the clamp turns it into a valid request. Reachable by
-// any LLM (search_tools is always injected), so a crash here = a 1-call daemon
-// kill.
 func TestDispatch_SearchToolsNegativeLimit_NoPanic(t *testing.T) {
 	d := &meta.MetaDispatcher{IndexLookup: func(_, _ string) *index.ToolIndex { return tinyIndex() }}
 	out := d.Dispatch(context.Background(), runtime.ToolInvocation{
@@ -50,8 +41,6 @@ func TestDispatch_SearchToolsNegativeLimit_NoPanic(t *testing.T) {
 	}
 }
 
-// TestDispatch_SearchToolsHugeLimit_NoOOM : a giant limit must be clamped so
-// fetch=limit*6 can't overflow / allocate absurdly.
 func TestDispatch_SearchToolsHugeLimit_NoOOM(t *testing.T) {
 	d := &meta.MetaDispatcher{IndexLookup: func(_, _ string) *index.ToolIndex { return tinyIndex() }}
 	out := d.Dispatch(context.Background(), runtime.ToolInvocation{
@@ -63,12 +52,10 @@ func TestDispatch_SearchToolsHugeLimit_NoOOM(t *testing.T) {
 	}
 }
 
-// TestDispatch_BrowseCategoryOverflowPage_NoPanic : a huge page must NOT make
-// (page-1)*pageSize overflow into a negative slice bound (a daemon-crash panic).
 func TestDispatch_BrowseCategoryOverflowPage_NoPanic(t *testing.T) {
 	d := &meta.MetaDispatcher{IndexLookup: func(_, _ string) *index.ToolIndex { return tinyIndex() }}
 	out := d.Dispatch(context.Background(), runtime.ToolInvocation{
-		Name: "context_builder.search_tools", // empty query + category → browse path
+		Name: "context_builder.search_tools",
 		Args: map[string]any{"category": "fs", "page": float64(4.7e17)},
 	})
 	if out.Status != "completed" {

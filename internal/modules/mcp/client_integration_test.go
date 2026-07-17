@@ -11,11 +11,6 @@ import (
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// TestDialStdioReal proves the SDK wrapper end-to-end against a real MCP server:
-// handshake, tools/list, tools/call, content mapping, ping. Gated behind the
-// mcpintegration tag (needs npx + network):
-//
-//	go test -tags mcpintegration -run TestDialStdioReal ./internal/modules/mcp/ -v
 func TestDialStdioReal(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()

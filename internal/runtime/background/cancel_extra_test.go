@@ -12,24 +12,11 @@ import (
 	"github.com/digitornai/digitorn/internal/runtime/context/meta"
 )
 
-// =============================================================================
-// CANCEL PROOFS — extends the existing bash cancel test to cover the gaps:
-//  - PowerShell on Windows (the default backend the daemon uses there).
-//  - Cancel WHILE the task is streaming output: the live log must hold the
-//    lines emitted before the kill, and the agent's status read must see them.
-// =============================================================================
-
-// TestPowerShellBackgroundCancel_KillsProcessAndWakesAgent is the Windows-
-// PowerShell counterpart of TestBashBackgroundCancel: launches a
-// `Start-Sleep 30` background task and proves Manager.Cancel kills the whole
-// PowerShell process tree promptly, the task state reaches cancelled, and the
-// agent is woken.
 func TestPowerShellBackgroundCancel_KillsProcessAndWakesAgent(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("PowerShell test is Windows-only")
 	}
 	m := bash.New()
-	// No `shell:` config → Windows default = powershell, as the daemon ships.
 	if err := m.Init(context.Background(), map[string]any{"workdir": t.TempDir()}); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
@@ -99,12 +86,6 @@ func TestPowerShellBackgroundCancel_KillsProcessAndWakesAgent(t *testing.T) {
 	}
 }
 
-// TestBackgroundCancel_WithLiveLog_PreservesEmittedLines runs a streaming task,
-// cancels it mid-stream, and asserts that the live log still carries the
-// lines emitted before the kill. The agent reading Status after cancel must
-// see WHAT got done before the cancel — silence on cancel would tell the agent
-// nothing about how far the task got. Works on both bash and powershell (the
-// default for the host); skips when neither is available.
 func TestBackgroundCancel_WithLiveLog_PreservesEmittedLines(t *testing.T) {
 	m := bash.New()
 	if err := m.Init(context.Background(), map[string]any{"workdir": t.TempDir()}); err != nil {
@@ -118,9 +99,6 @@ func TestBackgroundCancel_WithLiveLog_PreservesEmittedLines(t *testing.T) {
 	}
 	defer m.Stop(context.Background())
 
-	// Choose a streaming command the active shell can run. The test exercises
-	// the CANCEL path, not the shell — both forms emit `PROOF_LINE_<i>` so the
-	// assertion is the same.
 	var cmd string
 	switch m.Kind() {
 	case "powershell", "pwsh":
@@ -141,7 +119,6 @@ func TestBackgroundCancel_WithLiveLog_PreservesEmittedLines(t *testing.T) {
 		t.Fatalf("Launch: %v", err)
 	}
 
-	// Wait until at least 3 lines have streamed, then cancel mid-stream.
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		st, _ := mgr.Status(context.Background(), sid, id)
@@ -155,7 +132,6 @@ func TestBackgroundCancel_WithLiveLog_PreservesEmittedLines(t *testing.T) {
 		t.Fatalf("Cancel: %v", err)
 	}
 
-	// Drain to final state and inspect the log.
 	deadline = time.Now().Add(8 * time.Second)
 	var final meta.BackgroundStatus
 	for time.Now().Before(deadline) {
@@ -172,8 +148,6 @@ func TestBackgroundCancel_WithLiveLog_PreservesEmittedLines(t *testing.T) {
 	if !strings.Contains(final.Log, "PROOF_LINE_1") {
 		t.Fatalf("live log lost the lines emitted before cancel:\n%s", final.Log)
 	}
-	// The task ran for ~600 ms before cancel (3 lines × 200 ms), so it cannot
-	// have reached line 50.
 	if strings.Contains(final.Log, "PROOF_LINE_50") {
 		t.Errorf("task somehow finished — cancel did not stop it in time:\n%s", final.Log)
 	}

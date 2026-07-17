@@ -1,10 +1,3 @@
-// Package userauth lets the background service act on behalf of a user the same
-// way any other daemon client does: it holds that user's refresh token, keeps a
-// fresh access token by exchanging it against the auth service, and hands the
-// valid access token to the daemonclient as the Bearer. This is what lets a
-// background-triggered turn (a Discord message, a schedule) authorize against
-// the LLM gateway, which requires a real per-user JWT — without depending on a
-// session's last-seen token.
 package userauth
 
 import (
@@ -21,9 +14,6 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-// UserToken is one user's stored credential for the background service. The
-// refresh token is the long-lived secret; the access token + expiry are a cache
-// of the last refresh so a restart doesn't force an immediate round-trip.
 type UserToken struct {
 	UserID       string `gorm:"size:128;primaryKey"`
 	RefreshToken string `gorm:"type:text"`
@@ -34,7 +24,6 @@ type UserToken struct {
 
 func (UserToken) TableName() string { return "bg_user_token" }
 
-// Store persists per-user tokens in the background service's own DB.
 type Store struct{ db *gorm.DB }
 
 func NewStore(db *gorm.DB) *Store { return &Store{db: db} }

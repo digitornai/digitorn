@@ -1,21 +1,3 @@
-// Package adapter converts between session-store types and LLM client
-// types. Pure functions where possible ; the only I/O lives in
-// blob fetching when a message contains binary attachments.
-//
-// The "MessagesToLLM" path is LOSSLESS by contract :
-//
-//   - Every sessionstore.MessagePart of type text/image/audio/video/file
-//     becomes an llm.ContentPart of the same kind.
-//   - Inline blob bytes are loaded via the supplied BlobLoader so the
-//     worker stays oblivious to our blob store (it only ever sees
-//     bytes on the wire).
-//   - Tool-call parts inside an assistant message become entries in
-//     llm.ChatMessage.ToolCalls (matching the OpenAI / Anthropic shape).
-//   - Tool-result parts inside a "tool" message become a separate
-//     ChatMessage with Role="tool", carrying the matching ToolCallID.
-//   - Unknown part types are SKIPPED rather than failing the request —
-//     we'd rather a slightly incomplete prompt than a broken turn.
-//     The skip is logged via the optional Reporter so it's visible.
 package adapter
 
 import (
@@ -28,45 +10,19 @@ import (
 	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
 )
 
-// BlobLoader fetches the bytes for a referenced blob. The runtime passes
-// the BlobStore.Get adapter ; tests pass a stub. Returning empty bytes +
-// nil is treated as "blob missing" — the adapter skips the part and
-// reports it via Reporter.
 type BlobLoader func(ctx context.Context, hash string) ([]byte, error)
 
-// Reporter is the optional sink for adapter-level diagnostics : skipped
-// parts, missing blobs, type-mismatches. Pass nil to discard. Used in
-// production with slog ; in tests with a slice for assertions.
 type Reporter interface {
 	Warn(msg string, kv ...any)
 }
 
-// Options bundles the dependencies MessagesToLLM needs. All optional :
-// passing the zero value disables blob loading (binary parts become
-// no-ops) and silences diagnostics.
 type Options struct {
 	LoadBlob BlobLoader
 	Report   Reporter
-	// ExtractDoc, when set, turns a binary DOCUMENT blob (PDF, DOCX, …) into
-	// plain text so it reaches every model as readable content rather than an
-	// opaque file block. Keyed by content hash so the impl can cache. Returns
-	// ok=false for anything it can't extract — the part then keeps its native
-	// (file) block. Optional: nil disables document extraction.
 	ExtractDoc func(hash, mime string, data []byte) (string, bool)
-	// DropAttachments omits the user message's binary attachment parts from the
-	// LLM prompt. The engine sets it when the app has a workdir + filesystem
-	// `read` tool: attachments are materialised on disk and the agent reads them
-	// on demand (read→vision), so inlining them here would duplicate (expensive)
-	// image blocks every turn. When false (no read tool), attachments are inlined
-	// so a model without file tools still sees them.
 	DropAttachments bool
 }
 
-// MessagesToLLM converts the projected session-store message list into
-// the LLM-compatible format. Chronological order is preserved.
-//
-// This function is the SINGLE BOUNDARY between persisted state and the
-// LLM wire. Every byte that ends up in the prompt flows through here.
 func MessagesToLLM(ctx context.Context, msgs []sessionstore.Message, opts Options) []llm.ChatMessage {
 	if len(msgs) == 0 {
 		return nil
@@ -79,38 +35,12 @@ func MessagesToLLM(ctx context.Context, msgs []sessionstore.Message, opts Option
 	return repairToolPairing(out, opts)
 }
 
-// repairToolPairing guarantees the contract every chat provider enforces : an
-// assistant message carrying tool_calls MUST be IMMEDIATELY followed by a tool
-// message for EACH tool_call_id, with nothing in between.
-//
-// Two ways that invariant gets broken in persisted history :
-//
-//   - A MISPLACED result : the approval flow (and message queueing) interleaves
-//     a message between an assistant's tool_call and its result — the user's
-//     "approve" reply is persisted as a user_message that lands BEFORE the
-//     gated tool runs, so the stream reads [assistant(tool_calls), user, tool].
-//     OpenAI/Anthropic tolerate the gap ; DeepSeek rejects the whole request
-//     ("Messages with role 'tool' must be a response to a preceding message
-//     with 'tool_calls'"). We PULL every answering tool message forward to sit
-//     directly after its assistant, wherever it sits in the stream ; the
-//     interleaved messages keep their order and fall in right after the tool
-//     block.
-//
-//   - A MISSING result : a turn aborted (or the daemon crashed) WHILE a tool was
-//     executing leaves the assistant's tool_call durable but its result absent.
-//     We synthesize a terminal "interrupted" result so one bad turn can't poison
-//     every future request — but ONLY when the conversation actually moved on
-//     past this assistant. A trailing assistant+tool_calls with no results yet
-//     is the normal pre-dispatch state, not a gap.
-//
-// This is the LAST line of defense at the single state→wire boundary, so it
-// holds no matter how the gap arose.
 func repairToolPairing(msgs []llm.ChatMessage, opts Options) []llm.ChatMessage {
 	consumed := make([]bool, len(msgs))
 	out := make([]llm.ChatMessage, 0, len(msgs))
 	for i := 0; i < len(msgs); i++ {
 		if consumed[i] {
-			continue 
+			continue
 		}
 		m := msgs[i]
 		out = append(out, m)
@@ -319,8 +249,6 @@ func effectiveParts(m sessionstore.Message, dropAttachments bool) []sessionstore
 		if !dropAttachments {
 			return m.Parts
 		}
-		// Materialised-to-workdir mode: drop binary (blob) parts — the agent
-		// reads them on demand — but keep text / tool parts.
 		kept := make([]sessionstore.MessagePart, 0, len(m.Parts))
 		for _, p := range m.Parts {
 			if p.Blob != nil {
@@ -409,7 +337,7 @@ func loadBinaryPart(ctx context.Context, p sessionstore.MessagePart, opts Option
 }
 
 
-const maxInlinedTextBytes = 256 << 10 // 256 KiB
+const maxInlinedTextBytes = 256 << 10
 
 
 func isTextualMime(mime string) bool {

@@ -42,7 +42,6 @@ func TestPhase_IsInFlight(t *testing.T) {
 }
 
 func TestCanTransition_HappyPath(t *testing.T) {
-	// The single canonical success path.
 	chain := []turn.Phase{
 		turn.PhasePending,
 		turn.PhaseLoading,
@@ -85,8 +84,6 @@ func TestCanTransition_TerminalIsSink(t *testing.T) {
 }
 
 func TestCanTransition_SkipsAreRejected(t *testing.T) {
-	// You cannot skip phases — every non-error path goes through each
-	// intermediate.
 	skips := []struct{ from, to turn.Phase }{
 		{turn.PhasePending, turn.PhaseRunning},
 		{turn.PhasePending, turn.PhasePersisting},
@@ -151,16 +148,10 @@ func TestValidate_LegalReturnsNil(t *testing.T) {
 
 func TestAllPhases_CoversEveryConstant(t *testing.T) {
 	got := turn.AllPhases()
-	// 8 phases since SG-5 added PhaseWaitingApproval (pending,
-	// loading, running, waiting_approval, persisting, done, errored,
-	// interrupted).
 	if len(got) != 8 {
 		t.Fatalf("AllPhases returned %d, want 8", len(got))
 	}
-	// Spot-check : every phase appears in the matrix as a key (even if
-	// terminal with empty allowed-set).
 	for _, p := range got {
-		// Should not panic. Indirectly checks the matrix covers all phases.
 		_ = p.IsTerminal()
 		_ = p.IsInFlight()
 	}

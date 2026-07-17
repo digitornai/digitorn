@@ -15,24 +15,15 @@ import (
 	pkgmodule "github.com/digitornai/digitorn/pkg/module"
 )
 
-// sindex.go : the EPHEMERAL semantic index that makes grep code-aware.
-// Per workspace root we keep an in-memory set of embedded code chunks,
-// built asynchronously (never on the loop) and bounded by an LRU cap +
-// TTL so a session's workdir index disappears on its own — no memory
-// saturation, no persistence. grep fuses the trigram-exact matches with
-// the semantically-nearest chunks here. Mirrors tindexManager's lifecycle
-// (LRU / TTL / dirty / async build / recover-and-degrade).
-
 const (
-	sindexTTL        = 15 * time.Minute // idle index ages out
-	sindexMaxRoots   = 2                // hot per-workdir indexes (was 4 — halves peak RAM)
-	sindexMaxChunks  = 3000             // per-root chunk cap (was 8000 — 62% less RAM)
+	sindexTTL        = 15 * time.Minute
+	sindexMaxRoots   = 2
+	sindexMaxChunks  = 3000
 	sindexChunkLines = 60
 	sindexOverlap    = 10
 	sindexBatch      = 64
 )
 
-// ignoredDirs are skipped during a code-index walk (heavy / non-source).
 var sindexIgnoredDirs = map[string]bool{
 	".git": true, "node_modules": true, "vendor": true, "dist": true,
 	"build": true, "target": true, ".idea": true, ".vscode": true,
@@ -42,9 +33,9 @@ var sindexIgnoredDirs = map[string]bool{
 type sChunk struct {
 	path string
 	line int
-	text string // used during build for embedding+BM25, then cleared to save RAM
-	sym  string // "func Deploy" etc. (AST chunks) ; empty for line windows
-	end  int    // last line of this chunk (for on-demand disk reads)
+	text string
+	sym  string
+	end  int
 	vec  []float32
 }
 
@@ -67,7 +58,7 @@ type sindex struct {
 	ready    bool
 	model    string
 	chunks   []sChunk
-	bm25     *rag.BM25 // parallel keyword index for BM25-hybrid scoring
+	bm25     *rag.BM25
 	builtAt  time.Time
 	usedAt   time.Time
 	dirty    bool
@@ -126,10 +117,6 @@ func (m *sindexManager) evictLRULocked() {
 	}
 }
 
-// maybeBuild kicks an async (re)build when there is no index yet or the
-// current one is stale/dirty, unless one is already running. recover()
-// guards the build so a failure degrades to "no semantic results", never
-// a crash.
 func (s *sindex) maybeBuild(emb pkgmodule.Embedder, model string) {
 	s.mu.Lock()
 	stale := s.dirty || (s.ready && time.Since(s.builtAt) > sindexTTL)
@@ -162,7 +149,7 @@ func (s *sindex) build(emb pkgmodule.Embedder, model string) ([]sChunk, *rag.BM2
 	var pending []sChunk
 	var texts []string
 	out := make([]sChunk, 0, 1024)
-	bm := rag.NewBM25() // fresh BM25 for this build
+	bm := rag.NewBM25()
 
 	flush := func() {
 		if len(texts) == 0 {
@@ -172,7 +159,7 @@ func (s *sindex) build(emb pkgmodule.Embedder, model string) ([]sChunk, *rag.BM2
 		if err == nil && len(vecs) == len(pending) {
 			for i := range pending {
 				pending[i].vec = vecs[i]
-				pending[i].text = "" // clear text after embedding — saves ~19 MB per root
+				pending[i].text = ""
 				out = append(out, pending[i])
 			}
 		}
@@ -203,9 +190,9 @@ func (s *sindex) build(emb pkgmodule.Embedder, model string) ([]sChunk, *rag.BM2
 		}
 		rel, _ := filepath.Rel(s.root, path)
 		rel = filepath.ToSlash(rel)
-		chs := astChunks(rel, b) // AST symbol-level chunks (tree-sitter build)
+		chs := astChunks(rel, b)
 		if chs == nil {
-			chs = chunkLines(string(b), rel) // fallback : line windows
+			chs = chunkLines(string(b), rel)
 		}
 		for _, ch := range chs {
 			bm.Add(fmt.Sprintf("%s:%d", ch.path, ch.line), ch.text)
@@ -224,8 +211,6 @@ func (s *sindex) build(emb pkgmodule.Embedder, model string) ([]sChunk, *rag.BM2
 	return out, bm
 }
 
-// search embeds the query and returns the topK nearest code chunks. nil
-// when the index is not ready yet (building) — grep then shows exact-only.
 func (s *sindex) search(ctx context.Context, emb pkgmodule.Embedder, model, query string, topK int) []sHit {
 	s.mu.Lock()
 	if !s.ready || len(s.chunks) == 0 {
@@ -243,10 +228,6 @@ func (s *sindex) search(ctx context.Context, emb pkgmodule.Embedder, model, quer
 	}
 	q := vecs[0]
 
-	// HyDE (Hypothetical Document Embeddings) — for complex multi-word queries,
-	// generate a template code snippet and average its embedding with the query
-	// vector. Improves conceptual recall (e.g. "handles rate limiting").
-	// Hard 30ms budget, recover-guarded; failure leaves q unchanged.
 	func() {
 		defer func() { recover() }()
 		hydeDoc := hydeExpand(query)
@@ -261,11 +242,10 @@ func (s *sindex) search(ctx context.Context, emb pkgmodule.Embedder, model, quer
 		}
 		hv := hydeVecs[0]
 		for i := range q {
-			q[i] = 0.55*q[i] + 0.45*hv[i] // weight query slightly more than hypothesis
+			q[i] = 0.55*q[i] + 0.45*hv[i]
 		}
 	}()
 
-	// BM25 keyword scores — pure in-memory, ~0ms, recover-guarded.
 	bm25Map := make(map[string]float32, 64)
 	func() {
 		defer func() { recover() }()
@@ -286,7 +266,6 @@ func (s *sindex) search(ctx context.Context, emb pkgmodule.Embedder, model, quer
 		}
 	}()
 
-	// Vector cosine scores — fused with BM25: 0.6×vector + 0.4×BM25.
 	hits := make([]sHit, 0, len(chunks))
 	for i := range chunks {
 		vec := cosineF(q, chunks[i].vec)
@@ -296,23 +275,17 @@ func (s *sindex) search(ctx context.Context, emb pkgmodule.Embedder, model, quer
 		id := fmt.Sprintf("%s:%d", chunks[i].path, chunks[i].line)
 		fused := 0.6*vec + 0.4*bm25Map[id]
 		hits = append(hits, sHit{Path: chunks[i].path, Line: chunks[i].line, Symbol: chunks[i].sym, Score: fused})
-		// Snippet field left empty — filled in below for top-K only (disk read).
 	}
 	sort.Slice(hits, func(i, j int) bool { return hits[i].Score > hits[j].Score })
 	if topK > 0 && len(hits) > topK {
 		hits = hits[:topK]
 	}
-	// Read snippets from disk only for the top-K results so we never keep
-	// the text of 8000 chunks in RAM (was ~19 MB per indexed root).
 	for i := range hits {
 		hits[i].Snippet = readChunkSnippet(s.root, hits[i].Path, hits[i].Line)
 	}
 	return hits
 }
 
-// chunkLines splits source into overlapping line windows, tagged with the
-// 1-based start line for citation. Text is kept temporarily for embedding;
-// callers clear it before storing the chunk to save RAM.
 func chunkLines(src, path string) []sChunk {
 	lines := strings.Split(src, "\n")
 	var out []sChunk
@@ -336,9 +309,6 @@ func chunkLines(src, path string) []sChunk {
 	return out
 }
 
-// readChunkSnippet reads sindexChunkLines lines starting at startLine from
-// the workspace-relative relPath. Called only for top-K search hits so the
-// disk I/O is bounded (typically 8 reads per grep call).
 func readChunkSnippet(root, relPath string, startLine int) string {
 	abs := filepath.Join(root, filepath.FromSlash(relPath))
 	b, err := os.ReadFile(abs)

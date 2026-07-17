@@ -70,13 +70,11 @@ type Bus struct {
 	stopped atomic.Bool
 }
 
-// unboundedQueue is a goroutine-safe FIFO with no capacity limit.
-// Events are never dropped — the worker processes them in order.
 type unboundedQueue struct {
 	mu     sync.Mutex
 	items  []Event
-	signal chan struct{} // 1-buffered: poke the worker when items are added
-	done   chan struct{} // closed to stop the worker
+	signal chan struct{}
+	done   chan struct{}
 }
 
 func newUnboundedQueue() *unboundedQueue {
@@ -288,12 +286,6 @@ func (b *Bus) Append(ctx context.Context, ev Event) (uint64, error) {
 	return ev.Seq, nil
 }
 
-// AppendBlocking is identical to Append except it waits for queue space
-// when the shard is saturated. Returns ctx.Err() (typically
-// context.DeadlineExceeded) if the caller's context cancels before
-// space frees up. Use this for callers where event loss is unacceptable
-// (REST handlers, Socket.IO bridge). The non-blocking Append remains
-// available for telemetry-style fire-and-forget.
 func (b *Bus) AppendBlocking(ctx context.Context, ev Event) (uint64, error) {
 	if b.stopped.Load() {
 		return 0, ErrBusStopped
@@ -345,32 +337,6 @@ func (b *Bus) AppendBlocking(ctx context.Context, ev Event) (uint64, error) {
 	return ev.Seq, nil
 }
 
-// AppendDurable is the strongest write API : it waits for queue space
-// AND for the event to be fsynced to disk before returning. When the
-// call returns nil, the event survives kill -9 / power-loss.
-//
-// Use this for the REST/Socket.IO event-sourcing path where losing
-// committed events is unacceptable. For telemetry or fire-and-forget
-// writes, use Append. For latency-sensitive paths that can tolerate a
-// short window of write-behind loss, use AppendBlocking.
-//
-// Latency penalty over AppendBlocking : ~1 flush-interval + 1 fsync.
-// On a typical SSD with FlushInterval=2ms this means p50 ≈ 3-5ms,
-// p99 ≈ 10ms. Throughput is unchanged because events still batch ;
-// only the ack arrives after the batch's fsync.
-//
-// Requires DiskFlusher Fsync=true to guarantee on-disk durability ;
-// otherwise the call still synchronises with the OS page cache, which
-// survives process kill but not power loss.
-// AppendDurableBatch is the group-commit form of AppendDurable : it
-// persists every event in evs — which MUST share one SessionID — under a
-// single session-lock acquisition, enqueuing them all before waiting for
-// fsync. The N events ride one write batch, so the call costs ~one fsync
-// instead of N. Returns the assigned Seq per event (in order). On a
-// partial failure the committed events form a contiguous prefix; only the
-// durably-written events are applied to the in-memory state, keeping it in
-// lock-step with disk. Semantically identical to calling AppendDurable in
-// a loop, minus the per-event fsync stall.
 func (b *Bus) AppendDurableBatch(ctx context.Context, evs []Event) ([]uint64, error) {
 	if b.stopped.Load() {
 		return nil, ErrBusStopped
@@ -565,15 +531,6 @@ func (b *Bus) sessionLockFor(sid string) *sync.Mutex {
 	return actual.(*sync.Mutex)
 }
 
-// lockSessionValidated acquires the session's lock and guarantees it is still
-// the one registered in sessionLocks. Eviction deletes a session's lock while
-// holding it (evictLocked) ; without this validation a caller could grab a lock
-// that eviction is about to delete, then a NEXT caller would create a fresh lock
-// for the same sid — two "locks" for one session, breaking mutual exclusion and
-// racing the seq allocator (duplicate/skipped seqs). The loop retries with the
-// current lock if ours was evicted between fetch and acquire ; because eviction
-// must HOLD the lock to delete it, a validated holder keeps the registered lock
-// stable for its whole critical section, so no two holders ever run together.
 func (b *Bus) lockSessionValidated(sid string) *sync.Mutex {
 	for {
 		mu := b.sessionLockFor(sid)
@@ -581,7 +538,7 @@ func (b *Bus) lockSessionValidated(sid string) *sync.Mutex {
 		if cur, ok := b.sessionLocks.Load(sid); ok && cur.(*sync.Mutex) == mu {
 			return mu
 		}
-		mu.Unlock() // our lock was evicted/replaced — retry with the live one
+		mu.Unlock()
 	}
 }
 
@@ -595,19 +552,10 @@ func (b *Bus) DropFD(sid string) {
 	}
 }
 
-// Transcript returns the COMPLETE, lossless message history of a session —
-// rebuilt from disk (storage snapshot + JSONL message events), independent of
-// the bounded in-memory window. Use when the full history is needed (audit,
-// export, history view) rather than the model's view. Sound because messages are
-// written with AppendDurable (fsynced before they project), so disk is never
-// behind the live state.
 func (b *Bus) Transcript(sid string) ([]Message, error) {
 	return ReadTranscript(b.cfg.Paths, sid)
 }
 
-// FlushPending drains every queued write to disk (DiskFlusher.Flush). Compaction
-// calls it under LockSession before rewriting the JSONL so an event allocated
-// since the snapshot is persisted first. No-op when no flusher is wired.
 func (b *Bus) FlushPending(ctx context.Context) error {
 	if b.cfg.Flusher != nil {
 		return b.cfg.Flusher.Flush(ctx)
@@ -623,10 +571,6 @@ func (b *Bus) Compactor(opts CompactorConfig) *Compactor {
 	return NewCompactor(opts)
 }
 
-// Subscribe registers a per-session callback. The sid MUST be non-empty —
-// to subscribe to all sessions (Socket.IO bridge only), use SubscribeAll.
-// The callback runs on a dedicated goroutine with a buffered queue; slow
-// callbacks DROP events past the buffer rather than blocking the bus.
 func (b *Bus) Subscribe(sid string, cb func(Event)) (*Subscription, error) {
 	if sid == "" {
 		return nil, ErrEmptySIDSubscribe
@@ -640,10 +584,6 @@ func (b *Bus) Subscribe(sid string, cb func(Event)) (*Subscription, error) {
 	return b.subscribe(sid, cb), nil
 }
 
-// SubscribeAll registers a callback that receives EVERY event from EVERY
-// session. INTERNAL ONLY — intended exclusively for the Socket.IO bridge.
-// External code MUST use Subscribe(sid, cb) instead to prevent cross-session
-// event leaks.
 func (b *Bus) SubscribeAll(cb func(Event)) (*Subscription, error) {
 	if cb == nil {
 		return nil, ErrNilCallback
@@ -687,7 +627,6 @@ func (s *subscription) run(ctx context.Context) {
 }
 
 func (s *subscription) drainRemaining() {
-	// Unbounded queue: drain happens in uq.run cleanup; nothing to do here.
 }
 
 func (s *subscription) deliver(ev Event) {
@@ -814,23 +753,6 @@ func (b *Bus) evictIdleStates() {
 	}
 }
 
-// evictLocked drops a session's in-memory state under its session lock so it
-// never races an in-flight Append (see lockSessionValidated). Deleting the lock
-// WHILE HOLDING it is what makes the validated-lock scheme sound : a concurrent
-// Append either finished before we acquired, or will fail its post-lock check
-// and retry on a fresh lock — never two live holders at once.
-//
-// persist=true (idle eviction) flushes the accurate counters to meta.json and
-// then drops the seq allocator. The order is essential : SyncMetaToDisk writes
-// meta.LastSeq = state.LastSeq (the true high-water, including events still in
-// the flusher queue), so when the session is next touched, SeqRegistry.For →
-// RecoverSeq reads that high-water from meta and never reissues a seq. Dropping
-// the allocator without persisting first would reissue any seq not yet flushed
-// to the JSONL → duplicate seqs on disk.
-//
-// persist=false is for Drop(), which runs AFTER the session's on-disk files are
-// deleted : writing meta there would resurrect the session, and the caller drops
-// the seq allocator itself.
 func (b *Bus) evictLocked(sid string, persist bool) {
 	mu := b.lockSessionValidated(sid)
 	defer mu.Unlock()
@@ -846,11 +768,6 @@ func (b *Bus) evictLocked(sid string, persist bool) {
 	b.lastTouch.Delete(sid)
 }
 
-// SyncMetaToDisk writes the current in-memory state as meta.json so that
-// out-of-process readers (the list endpoint, future indexers) can see the
-// session without having to scan events.jsonl. Best-effort — failure is
-// logged but not propagated. Safe to call after Append() in a request
-// handler; safe to call concurrently with the flusher writing events.
 func (b *Bus) SyncMetaToDisk(sid string) error {
 	if sid == "" {
 		return ErrNoSessionID
@@ -881,11 +798,8 @@ func (b *Bus) SyncMetaToDisk(sid string) error {
 	return WriteMetaAtomic(dir, meta, false)
 }
 
-// Drop removes all in-memory state for sid (state, lock, lastTouch) and
-// drops the flusher's FD. Used after deleting a session from disk so the
-// Bus doesn't keep stale state.
 func (b *Bus) Drop(sid string) {
-	b.evictLocked(sid, false) // session files already deleted : don't re-persist meta
+	b.evictLocked(sid, false)
 	if b.cfg.Flusher != nil {
 		b.cfg.Flusher.DropFD(sid)
 	}

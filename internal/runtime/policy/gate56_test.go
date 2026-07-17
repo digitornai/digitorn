@@ -18,7 +18,7 @@ func TestGate5_Classification(t *testing.T) {
 		{"under", "public", "confidential", false},
 		{"no-cap", "restricted", "", false},
 		{"no-action", "", "public", false},
-		{"unknown-action-defaults-internal-over-public", "weird", "public", true}, // unknown→1 > public 0
+		{"unknown-action-defaults-internal-over-public", "weird", "public", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -53,12 +53,10 @@ func TestRateLimiter_SlidingWindow(t *testing.T) {
 	if lim.Check("m", "a") == "" {
 		t.Fatal("3rd call must be rate-limited")
 	}
-	// Advance past the window → budget refills.
 	now = now.Add(61 * time.Second)
 	if lim.Check("m", "a") != "" {
 		t.Fatal("after the window the call must be allowed again")
 	}
-	// An unconfigured key with no "*" default is unlimited.
 	for i := 0; i < 5; i++ {
 		if lim.Check("m", "b") != "" {
 			t.Fatalf("unconfigured key must be unlimited (#%d)", i)
@@ -77,13 +75,11 @@ func TestRateLimiter_DefaultAndUnlimitedAndNil(t *testing.T) {
 	if lim.Check("x", "y") == "" {
 		t.Fatal("second via default(1) must be limited")
 	}
-	// Explicit 0 = unlimited even when a "*" default exists.
 	for i := 0; i < 5; i++ {
 		if lim.Check("m", "free") != "" {
 			t.Fatalf("explicit-0 key must be unlimited (#%d)", i)
 		}
 	}
-	// NewRateLimiter(empty) is nil → Check is a no-op.
 	if NewRateLimiter(nil) != nil {
 		t.Fatal("empty limits must yield nil limiter")
 	}
@@ -109,7 +105,6 @@ func TestRunGates_Gate6RuntimeOnly(t *testing.T) {
 	if d := RunGates(inv, pc); d.Kind != DecisionDeny || d.Gate != GateRateLimit {
 		t.Fatalf("2nd call must be gate6 deny, got %+v", d)
 	}
-	// Schema-build path : no limiter wired → gate 6 never fires.
 	pcNoLim := PolicyContext{AppActive: true, Capabilities: caps, ToolSpec: spec}
 	for i := 0; i < 5; i++ {
 		if RunGates(inv, pcNoLim).Kind != DecisionAllow {
@@ -119,11 +114,9 @@ func TestRunGates_Gate6RuntimeOnly(t *testing.T) {
 }
 
 func TestRunGates_DeniedCallDoesNotConsumeRateBudget(t *testing.T) {
-	// gate 2 denies (risk over max) BEFORE gate 6 runs, so the rate window
-	// must NOT count the denied attempts.
 	caps := &schema.CapabilitiesConfig{DefaultPolicy: schema.CapAuto, MaxRiskLevel: schema.RiskLevel(tool.RiskLow)}
 	inv := Invocation{Caller: CallerLLM, Module: "m", Action: "a"}
-	spec := &tool.Spec{Name: "m.a", RiskLevel: tool.RiskHigh} // over max → gate2 deny
+	spec := &tool.Spec{Name: "m.a", RiskLevel: tool.RiskHigh}
 
 	lim := NewRateLimiter(map[string]int{"m.a": 1})
 	now := time.Unix(0, 0)
@@ -135,7 +128,6 @@ func TestRunGates_DeniedCallDoesNotConsumeRateBudget(t *testing.T) {
 			t.Fatalf("expected gate2 deny (#%d), got %+v", i, d)
 		}
 	}
-	// Now make it pass gate 2 : the limit-1 budget must still be intact.
 	spec.RiskLevel = tool.RiskLow
 	if d := RunGates(inv, pc); d.Kind != DecisionAllow {
 		t.Fatalf("denied calls must not consume rate budget, got %+v", d)

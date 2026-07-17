@@ -9,9 +9,6 @@ import (
 	"sync"
 )
 
-// safeEnvKeys is the inherited-env allow-list for a spawned stdio server.
-// NODE_PATH/PYTHONPATH are excluded (library-injection); Windows process
-// essentials are added so node/npx can spawn.
 var safeEnvKeys = map[string]bool{
 	"PATH": true, "HOME": true, "USER": true, "LANG": true, "LC_ALL": true,
 	"TERM": true, "SHELL": true, "TMPDIR": true, "TMP": true, "TEMP": true,
@@ -24,7 +21,6 @@ var safeEnvKeys = map[string]bool{
 	"NUMBER_OF_PROCESSORS": true, "PROCESSOR_ARCHITECTURE": true,
 }
 
-// blockedEnvKeys are dropped even if the app declares them (daemon secrets).
 var blockedEnvKeys = map[string]bool{
 	"DIGITORN_DB_URL": true, "DIGITORN_SECRET_KEY": true, "DATABASE_URL": true,
 	"DB_PASSWORD": true, "AWS_SECRET_ACCESS_KEY": true, "PRIVATE_KEY": true, "SSL_KEY": true,
@@ -55,11 +51,6 @@ func buildSafeEnv(declared map[string]string) []string {
 	return out
 }
 
-// ensureNodeOnPath guarantees the spawned server's PATH can find `node`/`npx`.
-// Most stdio MCP servers are npm packages run via npx; on machines using a node
-// version manager (nvm/fnm/volta) node lives OUTSIDE the daemon's inherited PATH,
-// so an npx server that works in a shell fails to spawn from the daemon with
-// "executable file not found". We locate node once and prepend its bin dir.
 func ensureNodeOnPath(env map[string]string) {
 	dir := nodeBinDir()
 	if dir == "" {
@@ -68,7 +59,7 @@ func ensureNodeOnPath(env map[string]string) {
 	path := env["PATH"]
 	for _, p := range filepath.SplitList(path) {
 		if strings.EqualFold(p, dir) {
-			return // already present
+			return
 		}
 	}
 	if path == "" {
@@ -83,9 +74,6 @@ var (
 	nodeBinVal  string
 )
 
-// nodeBinDir resolves the directory containing the node binary, checking the
-// daemon PATH first then common version-manager and standard install locations.
-// Cached for the daemon's lifetime ("" when node isn't found anywhere).
 func nodeBinDir() string {
 	nodeBinOnce.Do(func() { nodeBinVal = findNodeBinDir() })
 	return nodeBinVal
@@ -107,7 +95,6 @@ func findNodeBinDir() string {
 			filepath.Join(home, "AppData", "Local", "Volta", "bin"),
 			filepath.Join(home, "AppData", "Roaming", "npm"),
 		)
-		// nvm / fnm keep versioned installs — take the lexically-highest (latest).
 		globs := []string{
 			filepath.Join(home, ".nvm", "versions", "node", "*", "bin"),
 			filepath.Join(home, ".local", "share", "fnm", "node-versions", "*", "installation", "bin"),

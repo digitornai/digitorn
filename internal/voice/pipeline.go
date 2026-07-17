@@ -5,28 +5,20 @@ import (
 	"sync"
 )
 
-// PipelineEngine is the daemon-brained engine: STT → TurnRunner (the daemon turn)
-// → Segmenter → TTS. It keeps full agent power (tools, gates, memory) and hides
-// LLM latency via the clause-pipeline. Provider choice is injected (any STT/TTS).
 type PipelineEngine struct {
 	deps Deps
 }
 
-// Deps groups the pluggable parts of the pipeline so any provider combination can
-// be wired. STT/TTS are stateless factories; Runner is the per-call brain (one
-// PipelineEngine per call, so a single Runner per engine is correct).
 type Deps struct {
 	STT    STTEngine
 	TTS    TTSEngine
 	Runner TurnRunner
 }
 
-// NewPipelineEngine builds a pipeline engine from injected providers.
 func NewPipelineEngine(stt STTEngine, tts TTSEngine, runner TurnRunner) *PipelineEngine {
 	return &PipelineEngine{deps: Deps{STT: stt, TTS: tts, Runner: runner}}
 }
 
-// Session opens one call's pipeline.
 func (e *PipelineEngine) Session(ctx context.Context, opts SessionOpts) (Session, error) {
 	sctx, cancel := context.WithCancel(ctx)
 	stt, err := e.deps.STT.Open(sctx)
@@ -67,8 +59,8 @@ type pipelineSession struct {
 	cancelCh chan struct{}
 
 	mu         sync.Mutex
-	turnCancel context.CancelFunc // current turn's cancel, for barge-in
-	turns      sync.WaitGroup     // in-flight turns, so shutdown drains them before closing channels
+	turnCancel context.CancelFunc
+	turns      sync.WaitGroup
 	closeOnce  sync.Once
 }
 
@@ -98,14 +90,12 @@ func (s *pipelineSession) Close() error {
 	return nil
 }
 
-// loop is the session's single owner goroutine: it multiplexes inbound audio,
-// STT results, endpoint commits and barge-in cancels.
 func (s *pipelineSession) loop() {
 	results := s.stt.Results()
 	for {
 		select {
 		case <-s.ctx.Done():
-			s.turns.Wait() // let in-flight turns finish before closing channels (no send-on-closed)
+			s.turns.Wait()
 			close(s.out)
 			close(s.events)
 			return
@@ -118,7 +108,7 @@ func (s *pipelineSession) loop() {
 			}
 			if tr.Final {
 				s.emit(Event{Kind: EvFinal, Text: tr.Text})
-				s.abortTurn() // a new utterance supersedes any in-flight turn
+				s.abortTurn()
 				s.turns.Add(1)
 				go s.runTurn(tr.Text)
 			} else {
@@ -132,8 +122,6 @@ func (s *pipelineSession) loop() {
 	}
 }
 
-// runTurn drives one turn: brain deltas → segmenter → TTS → outbound audio. It runs
-// under a per-turn context so a barge-in cancels it instantly.
 func (s *pipelineSession) runTurn(text string) {
 	defer s.turns.Done()
 	tctx, cancel := context.WithCancel(s.ctx)
@@ -192,8 +180,6 @@ func (s *pipelineSession) runTurn(text string) {
 	}
 }
 
-// abortTurn is the hard barge-in: cancel the in-flight turn and tell the brain to
-// abort the daemon-side turn so no tokens are wasted.
 func (s *pipelineSession) abortTurn() {
 	s.mu.Lock()
 	c := s.turnCancel

@@ -17,36 +17,27 @@ import (
 	"gorm.io/gorm"
 )
 
-// canonicalPieceName normalises a connector id the same way the bridge does
-// when loading bundles (lowercase, hyphens to underscores). Credentials are
-// keyed by this canonical id so a connector stored from the hub catalog
-// ("telegram-bot") is found when the agent calls its tool, whose piece id is
-// the bridge's canonical form ("telegram_bot"). Without this, multi-word
-// connectors store and reveal under different keys and auth is never injected.
 func canonicalPieceName(s string) string {
 	return strings.ToLower(strings.ReplaceAll(s, "-", "_"))
 }
 
-// Store manages per-user installed piece credentials (sealed at rest).
 type Store struct {
 	db     *gorm.DB
 	sealer *mcpoauth.Sealer
 }
 
-// InstalledPieceView is the redacted view returned to callers (no raw secrets).
 type InstalledPieceView struct {
 	UserID    string
 	PieceName string
 	Version   string
 	AuthType  string
-	SecretKeys []string // names only, no values
+	SecretKeys []string
 	Enabled   bool
 	NeedsReconnect bool
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
 
-// APAuthWire is the _ap_auth format the bridge expects.
 type APAuthWire struct {
 	Type         string            `json:"type"`
 	Value        string            `json:"value,omitempty"`

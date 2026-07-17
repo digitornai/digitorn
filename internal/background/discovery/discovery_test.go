@@ -76,8 +76,8 @@ func writeApp(t *testing.T, dir, id, yaml string) {
 func TestScanApps(t *testing.T) {
 	dir := t.TempDir()
 	writeApp(t, dir, "support", channelApp)
-	writeApp(t, dir, "chat", plainApp)         // no channels → skipped
-	writeApp(t, dir, "broken", "{{{ not yaml") // malformed → skipped
+	writeApp(t, dir, "chat", plainApp)
+	writeApp(t, dir, "broken", "{{{ not yaml")
 
 	apps, err := ScanApps(dir)
 	if err != nil {
@@ -104,7 +104,6 @@ func TestBuildPlan(t *testing.T) {
 	}
 	plan := BuildPlan(apps, env, nil)
 
-	// disabled provider excluded; bad_sched dropped (warned); → 3 active triggers.
 	if len(plan.Triggers) != 3 {
 		t.Fatalf("triggers = %d, want 3 (gh_hook, nightly, bad_sched), got %+v", len(plan.Triggers), plan.Triggers)
 	}
@@ -121,7 +120,6 @@ func TestBuildPlan(t *testing.T) {
 	if len(plan.Crons) != 1 || plan.Crons[0].Name != "nightly" {
 		t.Fatalf("crons = %+v, want [nightly] (bad_sched dropped)", plan.Crons)
 	}
-	// bad cron schedule produced a warning, not a crash.
 	if len(plan.Warnings) == 0 {
 		t.Fatal("expected a warning for the bad cron schedule")
 	}
@@ -163,7 +161,6 @@ func TestArm_PersistsTriggers_Idempotent(t *testing.T) {
 		t.Fatalf("persisted triggers = %d, want 3", len(triggers))
 	}
 
-	// Re-arm (simulating a re-scan) must NOT duplicate (stable ids).
 	if _, _, err := Arm(context.Background(), st, plan, "", nil); err != nil {
 		t.Fatalf("re-arm: %v", err)
 	}
@@ -171,7 +168,6 @@ func TestArm_PersistsTriggers_Idempotent(t *testing.T) {
 	if len(triggers2) != 3 {
 		t.Fatalf("re-arm duplicated triggers: %d", len(triggers2))
 	}
-	// Stable id matches the expected derivation.
 	want := processor.TriggerID("support", "gh_hook")
 	found := false
 	for _, tr := range triggers2 {

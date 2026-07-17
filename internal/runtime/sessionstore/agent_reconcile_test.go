@@ -6,11 +6,6 @@ import (
 	"time"
 )
 
-// TestColdLoad_ReconcilesOrphanRunningAgents : if the daemon stops while a
-// sub-agent is running, only its agent_spawn(running) made it to disk — never a
-// terminal agent_result. On the next cold load no goroutine exists for it, so
-// it must be reconciled to "interrupted" (no eternal "running" zombie), while a
-// child that DID complete keeps its real terminal status.
 func TestColdLoad_ReconcilesOrphanRunningAgents(t *testing.T) {
 	dir := t.TempDir()
 	paths := NewPaths(dir)
@@ -25,10 +20,8 @@ func TestColdLoad_ReconcilesOrphanRunningAgents(t *testing.T) {
 	}
 	now := time.Now().UnixNano()
 	events := []Event{
-		// r1 : spawned, never finished (daemon died mid-run) → orphan.
 		{Seq: 1, TsUnixNano: now, Type: EventAgentSpawn, SessionID: sid,
 			Agent: &AgentPayload{RunID: "researcher#aaa", Kind: "researcher", Status: "running"}},
-		// r2 : spawned AND completed before the crash → must keep "completed".
 		{Seq: 2, TsUnixNano: now + 1, Type: EventAgentSpawn, SessionID: sid,
 			Agent: &AgentPayload{RunID: "writer#bbb", Kind: "writer", Status: "running", ParentRunID: "researcher#aaa", Depth: 1}},
 		{Seq: 3, TsUnixNano: now + 2, Type: EventAgentResult, SessionID: sid,
@@ -62,10 +55,6 @@ func TestColdLoad_ReconcilesOrphanRunningAgents(t *testing.T) {
 	}
 }
 
-// TestColdLoad_ReconcilesOrphanBackgroundTasks : a background_run task left
-// "running" when the daemon stopped is an orphan on cold load (its goroutine is
-// gone). It must be reconciled to "interrupted", while a task that completed
-// before the stop keeps its terminal state and outlives the registry.
 func TestColdLoad_ReconcilesOrphanBackgroundTasks(t *testing.T) {
 	dir := t.TempDir()
 	paths := NewPaths(dir)
@@ -80,10 +69,8 @@ func TestColdLoad_ReconcilesOrphanBackgroundTasks(t *testing.T) {
 	}
 	now := time.Now().UnixNano()
 	events := []Event{
-		// t1 : launched, never finished → orphan at cold load.
 		{Seq: 1, TsUnixNano: now, Type: EventBackgroundTask, SessionID: sid,
 			Background: &BackgroundTaskPayload{TaskID: "t1", Tool: "database.sql", State: "running"}},
-		// t2 : launched AND completed → keeps "completed".
 		{Seq: 2, TsUnixNano: now + 1, Type: EventBackgroundTask, SessionID: sid,
 			Background: &BackgroundTaskPayload{TaskID: "t2", Tool: "http.get", State: "running"}},
 		{Seq: 3, TsUnixNano: now + 2, Type: EventBackgroundTask, SessionID: sid,

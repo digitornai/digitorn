@@ -13,10 +13,6 @@ func (p *Pool) keyCounts() (users, apps int) {
 	return len(p.userSems), len(p.appSems)
 }
 
-// TestPool_EntriesReclaimedAfterRelease is the regression test for the
-// unbounded-map leak : the old Pool created a channel per distinct app/user id
-// and never removed it, so userSems grew forever. With refcounting, once the
-// last holder for a key releases (ref → 0) the entry is reclaimed.
 func TestPool_EntriesReclaimedAfterRelease(t *testing.T) {
 	p := NewPool(PoolConfig{GlobalCap: 1000, PerAppCap: 100, PerUserCap: 4})
 	const N = 5000
@@ -32,10 +28,6 @@ func TestPool_EntriesReclaimedAfterRelease(t *testing.T) {
 	}
 }
 
-// TestPool_EntryKeptWhileReferenced proves the refcount never deletes an entry
-// that another caller still holds : with one token open on (app, userA), many
-// acquire/release cycles on the SAME app must not reclaim the app entry, and it
-// must vanish only after the held token is released.
 func TestPool_EntryKeptWhileReferenced(t *testing.T) {
 	p := NewPool(PoolConfig{GlobalCap: 100, PerAppCap: 50, PerUserCap: 50})
 	held, err := p.Acquire(context.Background(), "app", "userA")
@@ -58,9 +50,6 @@ func TestPool_EntryKeptWhileReferenced(t *testing.T) {
 	}
 }
 
-// TestPool_NoLeakUnderConcurrency hammers acquire/release across many distinct
-// keys in parallel, then asserts the maps fully drain — proving the
-// decrement/delete path is race-free (no entry stranded, no double-delete).
 func TestPool_NoLeakUnderConcurrency(t *testing.T) {
 	p := NewPool(PoolConfig{GlobalCap: 256, PerAppCap: 64, PerUserCap: 8})
 	const (
@@ -73,7 +62,7 @@ func TestPool_NoLeakUnderConcurrency(t *testing.T) {
 		go func(w int) {
 			defer wg.Done()
 			for i := 0; i < each; i++ {
-				uid := fmt.Sprintf("u-%d-%d", w, i%17) // some key reuse → ref churn
+				uid := fmt.Sprintf("u-%d-%d", w, i%17)
 				tok, err := p.Acquire(context.Background(), fmt.Sprintf("app-%d", i%5), uid)
 				if err != nil {
 					t.Errorf("acquire: %v", err)

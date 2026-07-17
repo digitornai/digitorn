@@ -9,17 +9,10 @@ import (
 	"github.com/digitornai/digitorn/internal/compiler/schema"
 )
 
-// resolveServer turns a (possibly bare) server config into a full launch spec,
-// in tiers: smithery → explicit → static catalog → MCP registry (auto-config an
-// UNKNOWN server from registry.modelcontextprotocol.io). Any server a user
-// references gets configured automatically.
 func (m *Module) resolveServer(ctx context.Context, id string, sc schema.MCPServerConfig, autoInstall bool) (connectSpec, bool) {
 	return resolveServerSpec(ctx, id, sc, autoInstall)
 }
 
-// resolveServerSpec is the receiver-free resolution shared by the runtime path
-// and the management install resolver, so an installed server connects exactly
-// like a runtime-resolved one.
 func resolveServerSpec(ctx context.Context, id string, sc schema.MCPServerConfig, autoInstall bool) (connectSpec, bool) {
 	if sc.Via == "smithery" {
 		spec, err := resolveSmithery(id, sc)
@@ -34,9 +27,6 @@ func resolveServerSpec(ctx context.Context, id string, sc schema.MCPServerConfig
 	if entry, ok := catalogLookup(id); ok {
 		return resolveFromCatalog(entry, sc, autoInstall), true
 	}
-	// Tier 5 — the official MCP registry: an unknown server is fetched and
-	// mapped to a launch config, with the user's shorthand credentials wired to
-	// the server's declared env vars and OAuth auto-detected from those names.
 	if srv, ok := searchRegistry(ctx, id); ok {
 		if spec, _, ok := registryToConnectSpec(srv, sc); ok {
 			return spec, true

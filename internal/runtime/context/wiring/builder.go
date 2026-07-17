@@ -1,25 +1,3 @@
-// Package wiring is the glue that turns CB-1 to CB-5 into a single
-// runtime.ContextBuilder implementation the daemon plugs into the
-// Engine at boot.
-//
-// Responsibilities :
-//
-//   - Build the per-agent ToolIndex (CB-1) from the app's modules +
-//     the agent's restrictions, pre-filtered by the security gates
-//     (SG-3 BuildAgentToolset).
-//   - Run the adaptive injection planner (CB-2) to pick the mode
-//     and assemble the LLM tool list.
-//   - Assemble the system prompt with the 9 documented sections
-//     (CB-4), in the doc order, with the user's system_prompt
-//     LAST.
-//
-// The MetaDispatcher (CB-3) is wired separately on the Engine
-// (Engine.Dispatcher) because it intercepts dispatch ; this package
-// only owns the BuildFor side.
-//
-// CB-5 semantic search is opt-in : when an EmbeddingClient is
-// provided, every per-agent index gets a SemanticIndex attached so
-// the keyword scorer adds the hybrid contribution.
 package wiring
 
 import (
@@ -39,73 +17,30 @@ import (
 	"github.com/digitornai/digitorn/internal/runtime/policy"
 )
 
-// AvailableActions returns every (module, action, spec) tuple the
-// daemon knows about for a given app. Implemented outside this
-// package by the daemon's module catalog. Each Builder receives one
-// via the field below ; nil = empty universe (the agent sees no
-// tools, only the always-direct primitives).
 type AvailableActions interface {
-	// ForApp returns the actions the given app's loaded modules
-	// expose. The result is filtered later by SG-3 + CB-1 against
-	// the per-agent capabilities ; this method just emits the raw
-	// universe.
 	ForApp(appID string) []policy.AvailableAction
 }
 
-// PromptContributors gathers the system-prompt contributions of the modules
-// an agent is AUTHORIZED for. The concrete implementation (daemon side) wraps
-// the module registry and calls each authorized module's PromptContributor
-// methods. authorizedModules is the per-agent module set (the keys of the
-// SG-3-filtered index categories), so contributions are authorization-gated
-// at the source — an unauthorized module never contributes. nil source =
-// no module-contributed sections (test/dev default).
 type PromptContributors interface {
 	Gather(scope domainmodule.PromptScope, authorizedModules []string) ([]domainmodule.PromptSection, map[string]string)
 }
 
-// Builder implements runtime.ContextBuilder by composing CB-1 (index),
-// CB-2 (planner), CB-4 (prompt assembler) — and optionally CB-5
-// (semantic search) when EmbeddingClient is set.
-//
-// Construct via New() — direct field initialisation works for
-// tests but bypasses the safe defaults.
 type Builder struct {
-	// Contributors gathers module-contributed prompt sections + dynamic
-	// tool prompts for the agent's authorized modules. nil = none.
 	Contributors PromptContributors
 
-	// Actions is the daemon's source of the per-app action
-	// catalogue. Required ; if nil, the builder returns an empty
-	// tool list (only the always-direct meta-tools + primitives
-	// stay).
 	Actions AvailableActions
 
-	// IndexBuilder is the keyword + synonym builder (CB-1). Defaults
-	// to index.NewBuilder() if nil.
 	IndexBuilder *index.Builder
 
-	// Planner is the injection-mode picker (CB-2). Defaults to
-	// &injection.Planner{} if nil.
 	Planner *injection.Planner
 
-	// Assembler is the system-prompt builder (CB-4). Defaults to
-	// prompt.NewAssembler() if nil.
 	Assembler *prompt.Assembler
 
-	// EmbeddingClient is optional. When non-nil, every per-agent
-	// index gets a SemanticIndex attached for hybrid scoring. nil
-	// = keyword-only (CB-1 behaviour).
 	EmbeddingClient embeddings.EmbeddingClient
 
-	// cache stores per (app_id + agent_id) BuildFor results so a
-	// hot session doesn't rebuild the index every turn. The cache
-	// is invalidated on app version change via the appVersion key.
-	cache sync.Map // map[cacheKey]*cacheEntry
+	cache sync.Map
 }
 
-// New returns a Builder with default sub-components. Fluent setters
-// (WithEmbeddings, WithActions, etc.) are provided for the daemon
-// to fill the remaining fields before publishing.
 func New(actions AvailableActions) *Builder {
 	return &Builder{
 		Actions:      actions,

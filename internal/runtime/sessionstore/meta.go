@@ -29,15 +29,9 @@ type Meta struct {
 	Workdir        string `json:"workdir,omitempty"`
 	EntryAgent     string `json:"entry_agent,omitempty"`
 	ContextExtra   string `json:"context,omitempty"`
-	// Preview is a short snippet of the session's first user message, cached here
-	// so the list endpoint can label sessions by topic without reading each
-	// session's events file (the scaling bottleneck at thousands of sessions).
 	Preview string `json:"preview,omitempty"`
 }
 
-// CapPreview collapses whitespace and caps a preview snippet to a single short
-// line. Shared so meta-written previews and list-endpoint previews stay
-// byte-identical.
 func CapPreview(s string) string {
 	s = strings.Join(strings.Fields(s), " ")
 	if r := []rune(s); len(r) > 80 {

@@ -52,7 +52,6 @@ func TestReadBeforeEdit_WarnThenClearAfterRead(t *testing.T) {
 		t.Fatalf("editing an unread file must warn; got %+v", vios)
 	}
 
-	// Reading the file records it ; a subsequent edit is clean.
 	be.PostTool(sid, "filesystem.read", map[string]any{"file_path": "/x.go"}, nil)
 	vios = be.PreTool(sid, "filesystem.edit", map[string]any{"file_path": "/x.go"}, "")
 	if hasViolation(vios, "read_before_edit", "") {
@@ -71,7 +70,6 @@ func TestConfirmDestructive_Blocks(t *testing.T) {
 }
 
 func TestSearchBeforeRead_ThresholdFromProfile(t *testing.T) {
-	// coding: max_blind_reads=3 → the 4th blind read warns.
 	be := New(&schema.BehaviorConfig{Profile: "coding"})
 	const sid = "s1"
 	be.OnTurnStart(sid)
@@ -89,7 +87,7 @@ func TestSearchBeforeRead_ThresholdFromProfile(t *testing.T) {
 }
 
 func TestConsecutiveSameTool_LookaheadThreshold(t *testing.T) {
-	be := New(&schema.BehaviorConfig{Profile: "coding"}) // max_sequential_same_tool=8
+	be := New(&schema.BehaviorConfig{Profile: "coding"})
 	const sid = "s1"
 	be.OnTurnStart(sid)
 	args := map[string]any{"command": "echo hi"}
@@ -100,16 +98,12 @@ func TestConsecutiveSameTool_LookaheadThreshold(t *testing.T) {
 		}
 		be.PostTool(sid, "shell.bash", args, nil)
 	}
-	// 8th pre-check: lookahead = 7+1 = 8 >= 8 → fires.
 	vios := be.PreTool(sid, "shell.bash", args, "")
 	if !hasViolation(vios, "max_sequential_same_tool", "warn") {
 		t.Fatalf("the 8th consecutive call must warn; got %+v", vios)
 	}
 }
 
-// TestProfileSwap_PreservesStateChangesRules is the doc point-6 contract:
-// swapping the active profile re-resolves the rules while per-session
-// counters / sets / flags survive.
 func TestProfileSwap_PreservesStateChangesRules(t *testing.T) {
 	be := New(&schema.BehaviorConfig{Profile: "coding"})
 	const sid = "s1"
@@ -125,17 +119,14 @@ func TestProfileSwap_PreservesStateChangesRules(t *testing.T) {
 		t.Fatalf("read_files size = %d, want 4", got)
 	}
 
-	// Swap to research (search_before_read=false, max_blind_reads=10).
 	be.SetActiveProfile(sid, "research")
 
-	// State preserved across the swap.
 	if got := st.counter("reads_since_search"); got != 4 {
 		t.Errorf("counter not preserved across swap: %d, want 4", got)
 	}
 	if got := st.setLen("read_files"); got != 4 {
 		t.Errorf("set not preserved across swap: %d, want 4", got)
 	}
-	// Rules re-resolved: search_before_read no longer active.
 	if ruleActive(be.effectiveRuleDefs(st), "search_before_read") {
 		t.Error("after swap to research, search_before_read must be inactive")
 	}
@@ -145,23 +136,17 @@ func TestProfileSwap_PreservesStateChangesRules(t *testing.T) {
 	}
 }
 
-// TestPerSessionProfileIsolation proves the fix for the reference daemon's
-// global-clobber bug: one session's profile swap must not change another
-// session's active rules.
 func TestPerSessionProfileIsolation(t *testing.T) {
-	be := New(&schema.BehaviorConfig{Profile: "coding"}) // read_before_edit=true
+	be := New(&schema.BehaviorConfig{Profile: "coding"})
 	be.OnTurnStart("s1")
 	be.OnTurnStart("s2")
 
-	// s1 swaps to research (read_before_edit=false).
 	be.SetActiveProfile("s1", "research")
 
-	// s2 stays on coding → still enforces read_before_edit.
 	v2 := be.PreTool("s2", "filesystem.edit", map[string]any{"file_path": "/x"}, "")
 	if !hasViolation(v2, "read_before_edit", "warn") {
 		t.Errorf("s2 (coding) must still enforce read_before_edit; got %+v", v2)
 	}
-	// s1 (research) must NOT enforce it.
 	v1 := be.PreTool("s1", "filesystem.edit", map[string]any{"file_path": "/x"}, "")
 	if hasViolation(v1, "read_before_edit", "") {
 		t.Errorf("s1 (research) must not enforce read_before_edit; got %+v", v1)
@@ -173,7 +158,7 @@ func TestSetActiveProfile_NoOpAndFallback(t *testing.T) {
 	const sid = "s1"
 	st := be.getSession(sid)
 
-	be.SetActiveProfile(sid, "") // target == "" == activeProfile → no-op
+	be.SetActiveProfile(sid, "")
 	if st.ruleDefs != nil {
 		t.Error(`SetActiveProfile("") on a fresh session must stay on the default (nil ruleDefs)`)
 	}
@@ -183,7 +168,7 @@ func TestSetActiveProfile_NoOpAndFallback(t *testing.T) {
 		t.Fatalf("swap to dev must set per-session ruleDefs; activeProfile=%q", st.activeProfile)
 	}
 
-	be.SetActiveProfile(sid, "") // empty falls back to YAML default → share engine set
+	be.SetActiveProfile(sid, "")
 	if st.activeProfile != "" || st.ruleDefs != nil {
 		t.Errorf("empty profile must revert to YAML default (nil per-session ruleDefs)")
 	}

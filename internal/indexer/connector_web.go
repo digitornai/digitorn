@@ -19,10 +19,6 @@ import (
 
 func init() { Register(&webConnector{}) }
 
-// webConnector crawls a website (HTTrack-class) via Colly : sitemap-first
-// with link-crawl fallback, per-host rate-limiting + concurrency, robots.txt,
-// depth + page caps, and include/exclude URL filters. Each page → one
-// document (page body as markdown). Walk-only (a site has no change-stream).
 type webConnector struct{}
 
 func (*webConnector) Type() string         { return "web" }
@@ -129,8 +125,6 @@ func (*webConnector) Walk(ctx context.Context, spec SourceSpec, emit func(Docume
 	return nil
 }
 
-// fetchSitemap returns the page URLs listed in the site's sitemap.xml (and
-// nested sitemaps), empty on any failure — link-crawl then covers the site.
 func fetchSitemap(ctx context.Context, seed *url.URL, allowPrivate bool) []string {
 	root := seed.Scheme + "://" + seed.Host + "/sitemap.xml"
 	return sitemapURLs(ctx, root, 0, safehttp.Client(20*time.Second, allowPrivate, nil))

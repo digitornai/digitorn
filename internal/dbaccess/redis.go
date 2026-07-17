@@ -12,11 +12,6 @@ import (
 
 func init() { Register("redis", openRedis) }
 
-// redisDB fronts Redis on the uniform DB interface : the query string is a
-// Redis command ("GET k", "HGETALL h", "LRANGE l 0 -1", "SCAN 0 MATCH p:*"),
-// run via Do and normalized to Rows. read_only allows only read commands ;
-// destructive/admin commands are always denied. "Schema" describes the
-// keyspace by key prefix.
 type redisDB struct {
 	client *redis.Client
 	pol    SecurityPolicy

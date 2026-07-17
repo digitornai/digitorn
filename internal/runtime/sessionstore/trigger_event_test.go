@@ -2,9 +2,6 @@ package sessionstore
 
 import "testing"
 
-// TestTriggerEventPassthrough proves a structured inbound event attached to a
-// user message survives projection → snapshot → cold restore (the webhook →
-// flow path).
 func TestTriggerEventPassthrough(t *testing.T) {
 	trigger := map[string]any{
 		"provider": "glpi",

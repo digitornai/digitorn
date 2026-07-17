@@ -48,20 +48,16 @@ func (c *memCursors) SetCursor(_ context.Context, k, v string) error {
 
 func item(id string) Item { return Item{ID: id, Payload: map[string]any{"id": id}} }
 
-// TestPollOnce_CursorLifecycle proves the durable-cursor semantics: first arm
-// records the newest WITHOUT replaying history; a later round emits only items
-// newer than the cursor and advances it; a repeat round emits nothing.
 func TestPollOnce_CursorLifecycle(t *testing.T) {
 	ctx := context.Background()
 	f := &fakeFetcher{}
-	f.set(item("g3"), item("g2"), item("g1")) // newest-first
+	f.set(item("g3"), item("g2"), item("g1"))
 	cur := &memCursors{m: map[string]string{}}
 	p := Provider{Name: "feed", Adapter: "rss", CursorKey: "k", Fetcher: f}
 
 	var got []adapter.Event
 	sink := func(_ context.Context, ev adapter.Event) error { got = append(got, ev); return nil }
 
-	// 1. First arm: no replay, cursor set to newest.
 	pollOnce(ctx, p, cur, sink, nil)
 	if len(got) != 0 {
 		t.Fatalf("first arm replayed history: %d", len(got))
@@ -70,7 +66,6 @@ func TestPollOnce_CursorLifecycle(t *testing.T) {
 		t.Fatalf("cursor not set to newest, got %q", cur.Cursor(ctx, "k"))
 	}
 
-	// 2. A new item arrives → only it is emitted; cursor advances.
 	f.set(item("g4"), item("g3"), item("g2"))
 	pollOnce(ctx, p, cur, sink, nil)
 	if len(got) != 1 || got[0].DedupKey != "g4" {
@@ -80,14 +75,12 @@ func TestPollOnce_CursorLifecycle(t *testing.T) {
 		t.Fatalf("cursor should advance to g4, got %q", cur.Cursor(ctx, "k"))
 	}
 
-	// 3. No change → nothing emitted.
 	got = nil
 	pollOnce(ctx, p, cur, sink, nil)
 	if len(got) != 0 {
 		t.Fatalf("repeat poll emitted %d", len(got))
 	}
 
-	// 4. Two new items at once → both emitted, in feed order.
 	got = nil
 	f.set(item("g6"), item("g5"), item("g4"))
 	pollOnce(ctx, p, cur, sink, nil)

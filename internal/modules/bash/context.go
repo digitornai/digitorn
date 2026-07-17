@@ -15,11 +15,6 @@ import (
 	"github.com/digitornai/digitorn/internal/modules/bash/goshell"
 )
 
-// enrich attaches cwd/duration/files-changed/git context to a finished command
-// so the agent sees its effect without a follow-up probe. No-op when disabled.
-// All collection is bounded (see filesChangedSince / gitContext) and order is
-// deliberate: detect file changes first, then let that drive whether git's dirty
-// counts are recomputed or served from cache — a read-only command pays nothing.
 func (m *Module) enrich(res *cmdResult, root string, started time.Time) {
 	if !m.collectCtx {
 		return
@@ -35,8 +30,6 @@ func (m *Module) enrich(res *cmdResult, root string, started time.Time) {
 	res.Git = m.gitContext(root, len(res.FilesChanged) > 0)
 }
 
-// gitInfo is the cheap git snapshot attached to a result so a coding agent sees
-// the EFFECT of its command (which branch, how dirty) without running git itself.
 type gitInfo struct {
 	Branch    string `json:"branch,omitempty"`
 	Staged    int    `json:"staged,omitempty"`
@@ -44,8 +37,6 @@ type gitInfo struct {
 	Untracked int    `json:"untracked,omitempty"`
 }
 
-// dirsToSkip are the heavy / noisy trees a "what did my command touch" scan must
-// never descend into — they'd blow the time budget and bury the real changes.
 var dirsToSkip = map[string]bool{
 	".git": true, "node_modules": true, ".venv": true, "venv": true,
 	"vendor": true, "dist": true, "build": true, "target": true,
@@ -59,10 +50,6 @@ const (
 	gitStatusTimeout = 400 * time.Millisecond
 )
 
-// filesChangedSince returns the workspace-relative paths of files modified at or
-// after `since` (i.e. by the command that just ran), with a note when the scan
-// hit its cap or time budget so a bounded list never reads as "complete". One
-// pass, heavy dirs pruned, hard-capped — it stays cheap even in a big repo.
 func filesChangedSince(root string, since time.Time) ([]string, string) {
 	if root == "" {
 		return nil, ""
@@ -104,11 +91,6 @@ func filesChangedSince(root string, since time.Time) ([]string, string) {
 	return files, note
 }
 
-// gitContext returns the repo's branch plus dirty counts for root. The dirty
-// counts come from `git status` — recomputed only when this command actually
-// changed files (or on a cold cache), else served from the per-workspace cache.
-// So a read-only command pays nothing; the branch (a tiny file read) is always
-// fresh, catching a checkout. nil when root isn't inside a git repo.
 func (m *Module) gitContext(root string, changed bool) *gitInfo {
 	gitRoot := findGitDir(root)
 	if gitRoot == "" {
@@ -121,7 +103,7 @@ func (m *Module) gitContext(root string, changed bool) *gitInfo {
 	m.gitMu.Unlock()
 	if cached != nil && !changed {
 		c := *cached
-		c.Branch = branch // cheap refresh; keep the cached dirty counts
+		c.Branch = branch
 		return &c
 	}
 
@@ -138,8 +120,6 @@ func (m *Module) gitContext(root string, changed bool) *gitInfo {
 	return &cp
 }
 
-// findGitDir ascends from start until it finds a .git entry, returning that
-// directory (the repo root). "" if none within a bounded climb.
 func findGitDir(start string) string {
 	dir := start
 	for i := 0; i < 40 && dir != ""; i++ {
@@ -155,9 +135,6 @@ func findGitDir(start string) string {
 	return ""
 }
 
-// gitBranch reads the current branch straight from .git/HEAD (no subprocess). A
-// detached HEAD yields the short commit; a .git file (worktree/submodule) falls
-// back to asking git so we still get a sensible name.
 func gitBranch(repoRoot string) string {
 	b, err := os.ReadFile(filepath.Join(repoRoot, ".git", "HEAD"))
 	if err != nil {
@@ -167,7 +144,7 @@ func gitBranch(repoRoot string) string {
 	if ref, ok := strings.CutPrefix(s, "ref: refs/heads/"); ok {
 		return ref
 	}
-	if len(s) >= 7 { // detached HEAD: a raw commit sha
+	if len(s) >= 7 {
 		return s[:7]
 	}
 	return gitBranchViaCmd(repoRoot)
@@ -183,9 +160,6 @@ func gitBranchViaCmd(repoRoot string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// gitDirtyCounts fills staged / modified / untracked from `git status --porcelain`.
-// Bounded by a short timeout; if git is absent or slow the counts stay zero and
-// only the branch is reported — git context is best-effort, never blocking.
 func gitDirtyCounts(root string, g *gitInfo) {
 	ctx, cancel := context.WithTimeout(context.Background(), gitStatusTimeout)
 	defer cancel()
@@ -199,7 +173,7 @@ func gitDirtyCounts(root string, g *gitInfo) {
 		if len(line) < 2 {
 			continue
 		}
-		x, y := line[0], line[1] // index (staged) and worktree status columns
+		x, y := line[0], line[1]
 		switch {
 		case x == '?' && y == '?':
 			g.Untracked++
@@ -214,10 +188,6 @@ func gitDirtyCounts(root string, g *gitInfo) {
 	}
 }
 
-// terminalSnapshot is the one-shot host description baked into the tool prompt:
-// OS/arch, which shell backend is live, and which common dev tools are on PATH.
-// Computed once at Init so the agent starts the session already knowing its
-// terrain — zero per-command cost.
 func (m *Module) terminalSnapshot() string {
 	var backend string
 	switch {
@@ -241,8 +211,6 @@ func (m *Module) terminalSnapshot() string {
 	return strings.Join(parts, "; ")
 }
 
-// detectTools lists which common dev tools resolve on PATH (cheap LookPath, no
-// subprocess). The agent reads this once and avoids guessing what's installed.
 func detectTools() string {
 	var found []string
 	for _, t := range []string{"git", "node", "npm", "python", "python3", "go", "docker", "make", "cargo", "rustc", "java", "rg"} {

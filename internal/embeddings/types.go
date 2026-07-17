@@ -10,24 +10,13 @@ type EmbedRequest struct {
 
 	Model string `json:"model,omitempty"`
 
-	// Role hints retrieval intent for models that prepend a prefix
-	// (e.g. nomic : "search_query:" / "search_document:"). One of
-	// "query", "document", or "" (no prefix). Ignored by models
-	// without prefixes.
 	Role string `json:"role,omitempty"`
 
-	// Normalize, when true (default), L2-normalises every vector
-	// before returning. Required for cosine similarity ; set to
-	// false only if the caller needs raw pooled vectors.
 	Normalize bool `json:"normalize"`
 
-	// Timeout caps the call. The worker enforces it cooperatively
-	// (per-batch checkpoint) ; 0 = no timeout. The gRPC layer
-	// also has its own deadline.
 	Timeout time.Duration `json:"timeout,omitempty"`
 }
 
-// Retrieval roles for EmbedRequest.Role.
 const (
 	RoleQuery    = "query"
 	RoleDocument = "document"

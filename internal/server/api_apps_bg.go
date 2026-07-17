@@ -18,11 +18,6 @@ func (d *Daemon) pushTriggersToBackground(ctx context.Context, app *appmgr.App) 
 	d.pushTriggersAs(ctx, app, "", "")
 }
 
-// purgeTriggersFromBackground tells the background service to disarm and delete
-// every trigger/job/run for an uninstalled app (DELETE /ops/triggers?app=<id>).
-// Best-effort : a background service that's down or slow must never fail the
-// uninstall — the durable rows are harmless once the app row is gone, and a
-// later restart's config discovery won't re-arm an app that no longer exists.
 func (d *Daemon) purgeTriggersFromBackground(ctx context.Context, appID string) {
 	if d.cfg.Background.OpsURL == "" || appID == "" {
 		return
@@ -45,10 +40,6 @@ func (d *Daemon) purgeTriggersFromBackground(ctx context.Context, appID string) 
 	d.logger.Info("background: triggers purged", slog.String("app", appID), slog.Int("status", resp.StatusCode))
 }
 
-// pushTriggersAs pushes an app's channel triggers, attaching the owner + their
-// auth refresh token so the background service can mint fresh per-user access
-// tokens for this app's turns (gateway needs a real UserJWT). owner/refresh may
-// be empty (install-time push with no user context).
 func (d *Daemon) pushTriggersAs(ctx context.Context, app *appmgr.App, owner, refreshToken string) {
 	if d.cfg.Background.OpsURL == "" {
 		return

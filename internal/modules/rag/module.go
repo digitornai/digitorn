@@ -1,6 +1,3 @@
-// Package rag implements per-app knowledge bases on the app's own vector
-// server, with chunking, semantic search and citations. Worker-hosted :
-// embeddings come from the daemon gateway, per-app config from the call ctx.
 package rag
 
 import (
@@ -23,24 +20,20 @@ import (
 	"github.com/digitornai/digitorn/pkg/module"
 )
 
-// engEntry is one cached per-(app,config) engine plus the sources it
-// registered (to deregister on eviction) and its last-use time (for LRU).
 type engEntry struct {
 	eng    *Engine
 	specs  []indexer.SourceSpec
 	usedAt time.Time
 }
 
-// engineTTL evicts an engine idle for this long (frees its backend
-// connection + stops its source syncs). The hard size bound is maxEngines.
 const engineTTL = 30 * time.Minute
 
 type Module struct {
 	module.Base
 	mu         sync.Mutex
-	engines    map[string]*engEntry // (app, config) -> engine, LRU+TTL bounded
+	engines    map[string]*engEntry
 	maxEngines int
-	idx        *indexer.Service // shared indexation service (connectors + triggers)
+	idx        *indexer.Service
 }
 
 func New() *Module {
@@ -159,8 +152,6 @@ func New() *Module {
 	return m
 }
 
-// Stop drains the indexation service (waits for in-flight syncs, cancels watch
-// streams) and closes every cached engine before the base teardown.
 func (m *Module) Stop(ctx context.Context) error {
 	m.idx.Shutdown(ctx)
 	m.mu.Lock()
@@ -220,11 +211,6 @@ func (m *Module) engineFor(ctx context.Context) (*Engine, error) {
 	return e, nil
 }
 
-// evictLocked bounds the engine cache : TTL-evicts idle engines, then evicts
-// the least-recently-used until <= maxEngines. Eviction deregisters the
-// engine's source syncs and closes its backend — so 100k apps cost only the
-// hot working set of connections/indexes, not 100k live engines. Caller
-// holds m.mu ; the just-added engine (usedAt=now) is never evicted.
 func (m *Module) evictLocked(now time.Time) {
 	for k, ent := range m.engines {
 		if now.Sub(ent.usedAt) > engineTTL {
@@ -414,7 +400,7 @@ func (m *Module) ingestDirectory(ctx context.Context, raw json.RawMessage) (tool
 	files, chunks := 0, 0
 	walkErr := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return nil // skip unreadable entries
+			return nil
 		}
 		if d.IsDir() {
 			if !recursive && path != root {
@@ -431,7 +417,7 @@ func (m *Module) ingestDirectory(ctx context.Context, raw json.RawMessage) (tool
 		}
 		loaded, lerr := LoadFile(path)
 		if lerr != nil {
-			return nil // skip files that fail extraction
+			return nil
 		}
 		rel, _ := filepath.Rel(root, path)
 		n, ierr := eng.Ingest(ctx, kb, loaded.Text, filepath.ToSlash(rel))
@@ -478,7 +464,7 @@ func (m *Module) query(ctx context.Context, raw json.RawMessage) (tool.Result, e
 	for _, kb := range kbs {
 		h, err := eng.Query(ctx, kb, p.Query, topK)
 		if err != nil {
-			continue // a KB that doesn't exist / errors is skipped, not fatal
+			continue
 		}
 		for i := range h {
 			if h[i].Meta == nil {
@@ -512,10 +498,6 @@ func (m *Module) query(ctx context.Context, raw json.RawMessage) (tool.Result, e
 	return tool.Result{Success: true, Data: data, Display: &tool.DisplayHint{Type: "json", Title: "RAG: " + p.Query}}, nil
 }
 
-// reindex invokes the indexation service to (re)sync every configured source
-// of the calling app now (Walk connectors : web/file/database). Stream-only
-// sources (kafka, cdc) run continuously and are reported as such. This is the
-// service's explicit, on-demand invocation surface (admin / control-plane).
 func (m *Module) reindex(ctx context.Context, _ json.RawMessage) (tool.Result, error) {
 	cfg, err := ParseConfig(module.ModuleConfigFrom(ctx))
 	if err != nil {

@@ -1,9 +1,3 @@
-// Package database is the agent-facing universal database module : three
-// tools — connect / disconnect / query — over the shared dbaccess socle, so an
-// agent can read (and, when allowed, write) ANY database (SQL or NoSQL) behind
-// a configurable, layered security policy. Connections are pooled by the
-// service (worker-hosted), so the daemon is never blocked, and config-declared
-// connections are usable by `query` without ever calling `connect`.
 package database
 
 import (
@@ -69,7 +63,6 @@ func New() *Module {
 	return m
 }
 
-// Stop closes every pooled connection on module teardown.
 func (m *Module) Stop(ctx context.Context) error {
 	m.mgr.Shutdown()
 	return m.Base.Stop(ctx)
@@ -115,7 +108,7 @@ func (m *Module) connect(ctx context.Context, raw json.RawMessage) (tool.Result,
 	}
 	cc := dbaccess.ConnConfig{
 		Kind: p.Kind, DSN: dsn, SampleValues: true,
-		Security: dbaccess.SecurityPolicy{Mode: "read_only", Egress: "guarded"}, // safe default for ad-hoc
+		Security: dbaccess.SecurityPolicy{Mode: "read_only", Egress: "guarded"},
 	}
 	id, db, err := m.mgr.Open(ctx, app, cc)
 	if err != nil {

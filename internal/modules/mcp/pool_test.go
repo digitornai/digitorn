@@ -149,7 +149,6 @@ func TestPoolReconnectSwaps(t *testing.T) {
 
 func TestPoolReconnectRetriesThenFails(t *testing.T) {
 	p := fastPool(func(context.Context, connectSpec) (mcpConn, error) { return nil, errors.New("down") })
-	// seed an entry so reconnect has something to recover
 	ok := &fakeConn{}
 	p.dialFn = func(context.Context, connectSpec) (mcpConn, error) { return ok, nil }
 	p.connect(context.Background(), "srv", connectSpec{})

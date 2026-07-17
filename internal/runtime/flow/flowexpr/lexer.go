@@ -132,7 +132,7 @@ func (l *lexer) peek(n int) byte {
 
 func (l *lexer) lexString(quote byte) (token, error) {
 	start := l.pos
-	l.pos++ // skip opening quote
+	l.pos++
 	var sb strings.Builder
 	for l.pos < len(l.src) {
 		ch := l.src[l.pos]

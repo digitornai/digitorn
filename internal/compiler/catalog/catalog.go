@@ -8,7 +8,6 @@ import (
 	"github.com/digitornai/digitorn/pkg/module"
 )
 
-// ManifestSource yields module manifests.
 type ManifestSource interface {
 	Manifests() ([]module.Manifest, error)
 }

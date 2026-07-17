@@ -60,8 +60,6 @@ func syncOf(t *testing.T, r any) map[string]any {
 	return s
 }
 
-// Writing a fragment composes immediately and reports composed_ok in the
-// tool result — the LSP-like happy path.
 func TestSentinel_FragmentWriteComposes(t *testing.T) {
 	m, ctx, root := docModule(t)
 	composed := seedDoc(t, root)
@@ -82,8 +80,6 @@ func TestSentinel_FragmentWriteComposes(t *testing.T) {
 	}
 }
 
-// A broken fragment returns diagnostics IN the write result and leaves the
-// composed document untouched.
 func TestSentinel_BrokenFragmentDiagnosed(t *testing.T) {
 	m, ctx, root := docModule(t)
 	composed := seedDoc(t, root)
@@ -109,7 +105,6 @@ func TestSentinel_BrokenFragmentDiagnosed(t *testing.T) {
 	}
 }
 
-// A dangling reference returns the closest-id hint in the write result.
 func TestSentinel_DanglingRefHint(t *testing.T) {
 	m, ctx, root := docModule(t)
 	seedDoc(t, root)
@@ -124,8 +119,6 @@ func TestSentinel_DanglingRefHint(t *testing.T) {
 	}
 }
 
-// Writing the composed file directly (the app's canvas save goes through the
-// same filesystem.write) decomposes back onto fragments.
 func TestSentinel_ComposedWriteDecomposes(t *testing.T) {
 	m, ctx, root := docModule(t)
 	seedDoc(t, root)
@@ -150,7 +143,6 @@ func TestSentinel_ComposedWriteDecomposes(t *testing.T) {
 	}
 }
 
-// Deleting a fragment recomposes without the element.
 func TestSentinel_DeleteFragmentRecomposes(t *testing.T) {
 	m, ctx, root := docModule(t)
 	composed := seedDoc(t, root)

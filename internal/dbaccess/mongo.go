@@ -16,11 +16,6 @@ import (
 
 func init() { Register("mongodb", openMongo) }
 
-// mongoDB fronts MongoDB on the uniform DB interface. The query string is a
-// JSON spec — {collection, filter|pipeline, projection, sort, limit} — so the
-// agent expresses a Mongo query natively and gets back documents as Rows. A
-// schemaless collection is "introspected" by sampling documents for their
-// fields.
 type mongoDB struct {
 	client *mongo.Client
 	db     *mongo.Database
@@ -113,7 +108,7 @@ func (m *mongoDB) Query(ctx context.Context, q string, _ ...any) (*Result, error
 		}
 	} else {
 		opt := options.Find()
-		lim := max + 1 // one extra to detect truncation
+		lim := max + 1
 		if spec.Limit > 0 && spec.Limit < lim {
 			lim = spec.Limit
 		}

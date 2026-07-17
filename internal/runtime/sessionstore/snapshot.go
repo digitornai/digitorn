@@ -69,9 +69,6 @@ type SessionSnapshot struct {
 	Interrupted           bool                      `json:"interrupted,omitempty"`
 	LastUserMessage       string                    `json:"last_user_message,omitempty"`
 
-	// CurrentTurn* mirrors the SessionState fields ; populated when a
-	// turn is in flight, cleared when EventTurnEnded fires. Used by
-	// recovery to detect mid-flight turns at boot.
 	CurrentTurnID            string `json:"current_turn_id,omitempty"`
 	CurrentTurnPhase         string `json:"current_turn_phase,omitempty"`
 	CurrentTurnStartedAtNano int64  `json:"current_turn_started_at,omitempty"`
@@ -158,8 +155,6 @@ func WriteSnapshotAtomic(dir string, snap SessionSnapshot, format SnapshotFormat
 	}
 	cleanup = false
 
-	// Drop the alternate-format file if it exists — a session has a single
-	// canonical snapshot. Failure to remove is non-fatal.
 	if _, err := os.Stat(alt); err == nil {
 		_ = os.Remove(alt)
 	}

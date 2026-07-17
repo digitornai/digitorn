@@ -12,41 +12,36 @@ import (
 	"unicode/utf8"
 )
 
-// Sym is one symbol extracted from a source file.
 type Sym struct {
 	Key     string
 	Name    string
 	Kind    string
 	File    string
 	Sig     string
-	Fields  string // first 2-3 lines of a struct/interface body, for richer display
-	Package string // Go package name (or lang equivalent)
-	Line    int    // 1-based start line
-	EndLine int    // 1-based end line (0 = unknown); enables edit(start_line, end_line) without a read
+	Fields  string
+	Package string
+	Line    int
+	EndLine int
 }
 
-// Graph is a set of symbols with call edges between them.
 type Graph struct {
 	Syms  []Sym
-	Calls map[string][]string // sym key → slice of callee symbol names
+	Calls map[string][]string
 }
 
-// WalkEntry is one file discovered during a directory walk.
 type WalkEntry struct {
 	Abs     string
-	Rel     string // workspace-relative slash path
+	Rel     string
 	ModTime time.Time
 	Size    int64
 }
 
-// FileSyms is the treesitter (or regex) parse result for one file.
 type FileSyms struct {
-	Package string // package / module name of this file
+	Package string
 	Syms    []Sym
-	Calls   map[string][]string // sym key → callee names
+	Calls   map[string][]string
 }
 
-// fileCacheEntry pairs a file's parse result with the mtime it was parsed at.
 type fileCacheEntry struct {
 	ModTime time.Time
 	FileSyms
@@ -54,15 +49,9 @@ type fileCacheEntry struct {
 
 const (
 	maxRoots    = 4
-	ttl         = 30 * time.Second // short fallback for changes outside the filesystem module (bash writes, git ops)
-	// budgetChars is generous: the agent needs file paths + line numbers for
-	// every key symbol so it can jump directly with Read(path, offset=N) and
-	// Edit without grep/glob. At ~4 chars/token this costs ~10k tokens in the
-	// system prompt — well within 128k+ context windows.
+	ttl         = 30 * time.Second
 	budgetChars = 3000
 )
-
-// ── PageRank ────────────────────────────────────────────────────────────────
 
 func pagerank(adj [][]int, iters int, damp float64) []float64 {
 	n := len(adj)
@@ -101,26 +90,6 @@ func pagerank(adj [][]int, iters int, damp float64) []float64 {
 	return rank
 }
 
-// ── Render ──────────────────────────────────────────────────────────────────
-
-// Render turns a Graph into a rich LLM-readable codebase map ranked by
-// Render builds a two-phase codebase map within budget bytes.
-//
-// Phase 1 — file index: one line per file (always complete, never truncated).
-// Phase 2 — symbols: top files by PageRank score, each capped so no single
-// file monopolises the budget. Result: the agent always sees the full file
-// tree and detailed symbols for the most important files.
-//
-// Format:
-//
-//	# 47 files · 892 symbols
-//	internal/runtime/engine.go [runtime]
-//	internal/server/bootstrap.go [server]
-//	...
-//
-//	## internal/runtime/engine.go
-//	  L1562        func (e *Engine) freshContextView(...)
-//	  L1853-L1899  func (e *Engine) guardContextPressure(...)
 func Render(g Graph, budget int) string {
 	n := len(g.Syms)
 	if n == 0 {
@@ -130,7 +99,6 @@ func Render(g Graph, budget int) string {
 		budget = budgetChars
 	}
 
-	// Build adjacency for PageRank.
 	byKey := make(map[string]int, n)
 	byName := make(map[string][]int, n)
 	for i, s := range g.Syms {
@@ -151,7 +119,6 @@ func Render(g Graph, budget int) string {
 	}
 	rank := pagerank(adj, 20, 0.85)
 
-	// Group symbols by file, accumulate file score.
 	type fileEntry struct {
 		file    string
 		pkg     string
@@ -171,7 +138,6 @@ func Render(g Graph, budget int) string {
 		files[fi].symIdxs = append(files[fi].symIdxs, i)
 	}
 
-	// Sort files by score desc, path asc.
 	sort.SliceStable(files, func(a, b int) bool {
 		if files[a].score != files[b].score {
 			return files[a].score > files[b].score
@@ -179,7 +145,6 @@ func Render(g Graph, budget int) string {
 		return files[a].file < files[b].file
 	})
 
-	// Sort symbols within each file by rank desc, then line asc.
 	for fi := range files {
 		idxs := files[fi].symIdxs
 		sort.SliceStable(idxs, func(a, b int) bool {
@@ -193,7 +158,6 @@ func Render(g Graph, budget int) string {
 
 	var b strings.Builder
 
-	// ── Phase 1: compact file index (always complete) ────────────────────────
 	b.WriteString(fmt.Sprintf("# %d files · %d symbols\n", len(files), n))
 	for _, fe := range files {
 		line := fe.file
@@ -204,9 +168,6 @@ func Render(g Graph, budget int) string {
 	}
 	used := b.Len()
 
-	// ── Phase 2: symbols for top files ──────────────────────────────────────
-	// Per-file cap: at most 1/4 of the remaining symbol budget, so no single
-	// file can crowd out the rest. Floor: 300 chars (a few symbols minimum).
 	symBudget := budget - used
 	if symBudget <= 0 {
 		return strings.TrimRight(b.String(), "\n")
@@ -232,7 +193,6 @@ func Render(g Graph, budget int) string {
 			break
 		}
 
-		// Collect symbol lines for this file up to perFileCap.
 		var fileBuf strings.Builder
 		fileBuf.WriteString(fileHdr)
 		fileUsed := len(fileHdr)
@@ -265,8 +225,6 @@ func Render(g Graph, budget int) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
-// ── Cache entry ─────────────────────────────────────────────────────────────
-
 type entry struct {
 	root     string
 	mu       sync.Mutex
@@ -277,14 +235,9 @@ type entry struct {
 	usedAt   time.Time
 	dirty    bool
 
-	// Per-file parse cache keyed by workspace-relative slash path.
-	// Only files whose mtime changed are re-parsed on a stale refresh.
 	files map[string]fileCacheEntry
 }
 
-// buildIncremental walks the workspace, re-parses only new/changed files,
-// assembles the full graph from the cache, and writes the rendered result.
-// Must only be called from a single goroutine at a time (guarded by e.building).
 func (e *entry) buildIncremental(
 	walk func(root string) []WalkEntry,
 	parse func(rel string, content []byte) (FileSyms, bool),
@@ -295,14 +248,12 @@ func (e *entry) buildIncremental(
 	if e.files == nil {
 		e.files = make(map[string]fileCacheEntry, len(current))
 	}
-	// Snapshot the file cache so we can diff without holding the lock.
 	cachedSnapshot := make(map[string]fileCacheEntry, len(e.files))
 	for k, v := range e.files {
 		cachedSnapshot[k] = v
 	}
 	e.mu.Unlock()
 
-	// Find new/modified files.
 	type job struct {
 		abs string
 		rel string
@@ -317,7 +268,6 @@ func (e *entry) buildIncremental(
 		}
 	}
 
-	// Parse new/modified files in parallel (without holding e.mu).
 	type result struct {
 		rel string
 		mod time.Time
@@ -357,31 +307,23 @@ func (e *entry) buildIncremental(
 		}
 	}
 
-	// Update the file cache under the lock.
 	e.mu.Lock()
-	// Remove deleted files.
 	for rel := range e.files {
 		if _, ok := seen[rel]; !ok {
 			delete(e.files, rel)
 		}
 	}
-	// Store new/updated parse results.
 	for _, r := range parsed {
 		if r.ok {
 			e.files[r.rel] = fileCacheEntry{ModTime: r.mod, FileSyms: r.fs}
 		}
-		// If not parseable: remove from cache so it gets retried next build.
-		// (If a previous entry existed, the mtime mismatch will keep triggering
-		// retries — correct, since the file changed to something unparseable.)
 	}
-	// Take a local copy of the whole file cache for graph assembly.
 	fileCopy := make(map[string]fileCacheEntry, len(e.files))
 	for k, v := range e.files {
 		fileCopy[k] = v
 	}
 	e.mu.Unlock()
 
-	// Assemble graph from all cached files (no lock needed — fileCopy is local).
 	g := Graph{Calls: make(map[string][]string)}
 	for _, fe := range fileCopy {
 		g.Syms = append(g.Syms, fe.Syms...)
@@ -400,26 +342,20 @@ func (e *entry) buildIncremental(
 	e.mu.Unlock()
 }
 
-// ── Global registry ─────────────────────────────────────────────────────────
-
 var (
 	mgrMu    sync.Mutex
 	entries  = map[string]*entry{}
-	provider func(root string) Graph   // legacy full-graph provider
+	provider func(root string) Graph
 	walkerFn func(root string) []WalkEntry
 	parserFn func(rel string, content []byte) (FileSyms, bool)
 )
 
-// Register sets a full-graph provider (legacy, used when treesitter is absent).
 func Register(fn func(root string) Graph) {
 	mgrMu.Lock()
 	provider = fn
 	mgrMu.Unlock()
 }
 
-// RegisterIncremental registers per-file walker and parser functions.
-// The repomap package owns the mtime cache and incremental graph assembly.
-// When both are set, incremental mode is used over the legacy provider.
 func RegisterIncremental(
 	walk func(root string) []WalkEntry,
 	parse func(rel string, content []byte) (FileSyms, bool),
@@ -430,8 +366,6 @@ func RegisterIncremental(
 	mgrMu.Unlock()
 }
 
-// MarkDirty invalidates the per-file cache entry for absPath so the next
-// build re-parses only that file (all other files use their cached parse).
 func MarkDirty(absPath string) {
 	mgrMu.Lock()
 	es := make([]*entry, 0, len(entries))
@@ -453,8 +387,6 @@ func MarkDirty(absPath string) {
 	}
 }
 
-// relUnder returns the path of abs relative to root (lexical, no symlink
-// resolution). Returns ok=false when abs is not under root.
 func relUnder(root, abs string) (string, bool) {
 	if root == "" {
 		return "", false
@@ -470,9 +402,6 @@ func filepathToSlash(p string) string {
 	return strings.ReplaceAll(p, "\\", "/")
 }
 
-// Get returns the latest rendered codebase map for root. The build always
-// runs in the background (never blocks the caller). Returns "" when no
-// build has completed yet; the result lands on the next call after completion.
 func Get(root string) string {
 	if root == "" {
 		return ""
@@ -545,9 +474,6 @@ func evictOldestLocked() {
 	}
 }
 
-// LookupFileSyms returns the cached parse result for a workspace-relative slash
-// path under root. Returns ok=false when the file is not in the cache yet (build
-// hasn't completed or the file is not parseable). Never triggers a build.
 func LookupFileSyms(root, rel string) (FileSyms, bool) {
 	mgrMu.Lock()
 	e := entries[root]

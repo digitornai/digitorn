@@ -47,7 +47,6 @@ func TestStore_SetGetDelete(t *testing.T) {
 		t.Fatalf("round-trip mismatch: got %+v want %+v", got, want)
 	}
 
-	// Upsert replaces in place (no duplicate row).
 	want2 := &Token{AccessToken: "acc2", RefreshToken: "ref2"}
 	if err := s.Set(ctx, "user-A", "google", want2); err != nil {
 		t.Fatalf("upsert: %v", err)

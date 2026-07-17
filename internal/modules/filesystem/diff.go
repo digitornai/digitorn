@@ -7,42 +7,25 @@ import (
 	"github.com/digitornai/digitorn/internal/domain/tool"
 )
 
-// diff.go : a small, dependency-free unified-diff generator for the client-only
-// display payload of edit/write. It is NEVER shown to the LLM (the dispatch
-// adapter forwards only the text Parts) — it exists so a client can render
-// insertions/deletions, matching the legacy daemon's tool-result shape
-// (diff / unified_diff / previous_content / new_content).
-//
-// Cost is bounded on purpose : the common prefix/suffix is trimmed so the O(n·m)
-// LCS only runs on the changed middle, the middle itself falls back to a coarse
-// block when it is too large, and the whole computation is skipped (counts only)
-// for files past the content cap so a multi-MB write can never blow the socket
-// or the session log.
-
 const (
-	diffContext    = 3         // lines of context emitted around each hunk
-	diffContentCap = 256 << 10 // ≤ this (both sides) → full diff + carried contents
-	diffMaxLCS     = 2000      // changed-middle lines above which we use a coarse block
+	diffContext    = 3
+	diffContentCap = 256 << 10
+	diffMaxLCS     = 2000
 )
 
-// fileDiff is the client-only display payload for one edit/write.
 type fileDiff struct {
-	Unified  string // standard unified diff (parseable) ; "" when capped out
-	Summary  string // short human-readable summary
-	Previous string // full content before ; "" when capped out
-	New      string // full content after ; "" when capped out
+	Unified  string
+	Summary  string
+	Previous string
+	New      string
 	Added    int
 	Removed  int
 }
 
-// empty reports whether there is nothing to show (no change).
 func (d fileDiff) empty() bool {
 	return d.Added == 0 && d.Removed == 0 && d.Unified == "" && d.Summary == ""
 }
 
-// diffView builds the client-only tool.DiffView for a mutation, or nil when
-// nothing changed. The caller attaches it to tool.Result.Diff — it is forwarded
-// to the UI and never shown to the LLM.
 func diffView(path, oldStr, newStr string) *tool.DiffView {
 	d := computeDiff(path, oldStr, newStr)
 	if d.empty() {
@@ -58,7 +41,6 @@ func diffView(path, oldStr, newStr string) *tool.DiffView {
 	}
 }
 
-// computeDiff builds the display payload between oldStr and newStr for path.
 func computeDiff(path, oldStr, newStr string) fileDiff {
 	if oldStr == newStr {
 		return fileDiff{}
@@ -66,8 +48,6 @@ func computeDiff(path, oldStr, newStr string) fileDiff {
 	oldLines := splitLines(oldStr)
 	newLines := splitLines(newStr)
 
-	// Trim the common prefix and suffix — a typical edit touches a few lines in
-	// an otherwise unchanged file, so this shrinks the LCS input dramatically.
 	p := 0
 	for p < len(oldLines) && p < len(newLines) && oldLines[p] == newLines[p] {
 		p++
@@ -80,8 +60,6 @@ func computeDiff(path, oldStr, newStr string) fileDiff {
 	midOld := oldLines[p : len(oldLines)-s]
 	midNew := newLines[p : len(newLines)-s]
 
-	// Past the cap : counts + a compact summary only. No LCS, no unified diff,
-	// no carried contents — bounded cost regardless of file size.
 	if len(oldStr) > diffContentCap || len(newStr) > diffContentCap {
 		return fileDiff{
 			Summary: fmt.Sprintf("large change: +%d −%d lines (diff omitted, file over %d KB)", len(midNew), len(midOld), diffContentCap>>10),
@@ -92,7 +70,7 @@ func computeDiff(path, oldStr, newStr string) fileDiff {
 
 	var ops []dop
 	if len(midOld) > diffMaxLCS || len(midNew) > diffMaxLCS {
-		ops = coarseOps(midOld, midNew) // bounded : whole middle removed then added
+		ops = coarseOps(midOld, midNew)
 	} else {
 		ops = lcsOps(midOld, midNew)
 	}
@@ -121,15 +99,11 @@ func summarize(added, removed int) string {
 	}
 }
 
-// dop is one diff operation over a single line.
 type dop struct {
-	kind byte // '=' keep, '-' delete, '+' add
+	kind byte
 	text string
 }
 
-// coarseOps treats the whole middle as a delete-block then an add-block. Used
-// when the changed region is too large for an O(n·m) LCS — still a valid diff,
-// just not minimal.
 func coarseOps(a, b []string) []dop {
 	ops := make([]dop, 0, len(a)+len(b))
 	for _, l := range a {
@@ -141,8 +115,6 @@ func coarseOps(a, b []string) []dop {
 	return ops
 }
 
-// lcsOps returns the minimal-ish edit script via a classic LCS DP + backtrack.
-// Memory is O(len(a)·len(b)) — bounded by diffMaxLCS at the call site.
 func lcsOps(a, b []string) []dop {
 	na, nb := len(a), len(b)
 	dp := make([][]int, na+1)
@@ -185,18 +157,13 @@ func lcsOps(a, b []string) []dop {
 	return ops
 }
 
-// rec is an op annotated with its 1-based line numbers in old/new.
 type rec struct {
 	kind         byte
 	text         string
 	oldNo, newNo int
 }
 
-// formatUnified assembles a standard unified diff from the trimmed-prefix/suffix
-// split plus the middle ops, grouping changes into hunks with diffContext lines
-// of surrounding context.
 func formatUnified(path string, oldLines, newLines []string, p, s int, midOps []dop) (unified string, added, removed int) {
-	// Reconstruct the full op list : prefix '=', middle ops, suffix '='.
 	full := make([]dop, 0, p+len(midOps)+s)
 	for i := 0; i < p; i++ {
 		full = append(full, dop{'=', oldLines[i]})
@@ -236,13 +203,10 @@ func formatUnified(path string, oldLines, newLines []string, p, s int, midOps []
 			i++
 			continue
 		}
-		// Hunk start : diffContext lines before the first change.
 		hs := i - diffContext
 		if hs < 0 {
 			hs = 0
 		}
-		// Extend while changes keep coming, allowing up to diffContext context
-		// lines between them before closing the hunk.
 		last := i
 		j := i
 		gap := 0
@@ -269,7 +233,6 @@ func formatUnified(path string, oldLines, newLines []string, p, s int, midOps []
 	return b.String(), added, removed
 }
 
-// emitHunk writes one @@ -os,oc +ns,nc @@ hunk for recs[start:end).
 func emitHunk(b *strings.Builder, recs []rec, start, end int) {
 	var oldCount, newCount int
 	for _, r := range recs[start:end] {
@@ -283,7 +246,7 @@ func emitHunk(b *strings.Builder, recs []rec, start, end int) {
 	oldStart := recs[start].oldNo
 	newStart := recs[start].newNo
 	if oldCount == 0 {
-		oldStart-- // git convention for a pure-insertion hunk
+		oldStart--
 	}
 	if newCount == 0 {
 		newStart--

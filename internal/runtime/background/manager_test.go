@@ -15,8 +15,6 @@ import (
 	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
 )
 
-// launch is a test shim over the LaunchRequest-based Manager.Launch so the
-// existing call sites stay terse.
 func launch(m *background.Manager, sid, tool string, args map[string]any) (string, error) {
 	return m.Launch(context.Background(), meta.LaunchRequest{SessionID: sid, Tool: tool, Args: args})
 }
@@ -41,7 +39,6 @@ func (s *simpleDispatcher) Dispatch(ctx context.Context, c runtime.ToolInvocatio
 	}
 }
 
-// instantDispatcher returns a constant result without delay.
 func instantDispatcher(text string) *simpleDispatcher {
 	return &simpleDispatcher{
 		body: func(_ context.Context, _ runtime.ToolInvocation) (string, error) {
@@ -50,7 +47,6 @@ func instantDispatcher(text string) *simpleDispatcher {
 	}
 }
 
-// blockingDispatcher waits on release/ctx.
 func blockingDispatcher(release <-chan struct{}) *simpleDispatcher {
 	return &simpleDispatcher{
 		body: func(ctx context.Context, _ runtime.ToolInvocation) (string, error) {
@@ -64,7 +60,6 @@ func blockingDispatcher(release <-chan struct{}) *simpleDispatcher {
 	}
 }
 
-// waitFor polls until cond is true or timeout fires.
 func waitFor(t *testing.T, cond func() bool, msg string) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -77,10 +72,6 @@ func waitFor(t *testing.T, cond func() bool, msg string) {
 	t.Fatalf("timeout waiting for %s", msg)
 }
 
-// =====================================================================
-// 1. Dispatcher attachment
-// =====================================================================
-
 func TestManager_LaunchWithoutDispatcher(t *testing.T) {
 	m := background.New()
 	_, err := launch(m, "s", "x.y", nil)
@@ -88,10 +79,6 @@ func TestManager_LaunchWithoutDispatcher(t *testing.T) {
 		t.Error("expected error when dispatcher not attached")
 	}
 }
-
-// =====================================================================
-// 2. Basic launch + status
-// =====================================================================
 
 func TestManager_LaunchAndStatus(t *testing.T) {
 	m := background.New()
@@ -106,7 +93,6 @@ func TestManager_LaunchAndStatus(t *testing.T) {
 		t.Fatal("Launch returned empty id")
 	}
 
-	// Wait for the task to complete.
 	waitFor(t, func() bool {
 		st, _ := m.Status(context.Background(), "s", id)
 		return st.State == "completed"
@@ -130,10 +116,6 @@ func TestManager_LaunchAndStatus(t *testing.T) {
 	}
 }
 
-// =====================================================================
-// 3. Errored task
-// =====================================================================
-
 func TestManager_TaskError(t *testing.T) {
 	disp := &simpleDispatcher{
 		body: func(_ context.Context, _ runtime.ToolInvocation) (string, error) {
@@ -154,10 +136,6 @@ func TestManager_TaskError(t *testing.T) {
 		t.Errorf("err = %q", st.Error)
 	}
 }
-
-// =====================================================================
-// 4. Wait : blocks then returns
-// =====================================================================
 
 func TestManager_WaitReturnsCompletion(t *testing.T) {
 	release := make(chan struct{})
@@ -190,7 +168,7 @@ func TestManager_WaitTimeout(t *testing.T) {
 
 	id, _ := launch(m, "s", "x", nil)
 
-	st, err := m.Wait(context.Background(), "s", id, 0.05) // 50ms
+	st, err := m.Wait(context.Background(), "s", id, 0.05)
 	if err == nil {
 		t.Error("expected timeout error")
 	}
@@ -198,10 +176,6 @@ func TestManager_WaitTimeout(t *testing.T) {
 		t.Errorf("state on timeout = %q", st.State)
 	}
 }
-
-// =====================================================================
-// 5. Cancel
-// =====================================================================
 
 func TestManager_Cancel(t *testing.T) {
 	release := make(chan struct{})
@@ -211,7 +185,6 @@ func TestManager_Cancel(t *testing.T) {
 	m.AttachDispatcher(disp)
 
 	id, _ := launch(m, "s", "x", nil)
-	// Give the task a moment to register the goroutine.
 	time.Sleep(10 * time.Millisecond)
 
 	if err := m.Cancel(context.Background(), "s", id); err != nil {
@@ -232,8 +205,6 @@ func TestManager_CancelUnknownTask(t *testing.T) {
 	}
 }
 
-// TestManager_CancelAllForSession : a session abort must stop EVERY running
-// background task in that session — and leave other sessions untouched.
 func TestManager_CancelAllForSession(t *testing.T) {
 	release := make(chan struct{})
 	defer close(release)
@@ -242,8 +213,8 @@ func TestManager_CancelAllForSession(t *testing.T) {
 
 	a, _ := launch(m, "s1", "x", nil)
 	b, _ := launch(m, "s1", "y", nil)
-	keep, _ := launch(m, "s2", "z", nil) // different session : must survive
-	time.Sleep(10 * time.Millisecond)    // let goroutines register
+	keep, _ := launch(m, "s2", "z", nil)
+	time.Sleep(10 * time.Millisecond)
 
 	if n := m.CancelAllForSession("s1"); n != 2 {
 		t.Fatalf("CancelAllForSession stopped %d tasks, want 2", n)
@@ -258,16 +229,11 @@ func TestManager_CancelAllForSession(t *testing.T) {
 		t.Errorf("task in another session must survive, got %q", st.State)
 	}
 
-	// Unknown session : harmless no-op.
 	if n := m.CancelAllForSession("nope"); n != 0 {
 		t.Errorf("CancelAllForSession on unknown session = %d, want 0", n)
 	}
-	m.CancelAllForSession("s2") // cleanup
+	m.CancelAllForSession("s2")
 }
-
-// =====================================================================
-// 6. List + reap
-// =====================================================================
 
 func TestManager_ListAllTasks(t *testing.T) {
 	m := background.New()
@@ -302,16 +268,11 @@ func TestManager_ReapsOldCompletedTasks(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	// List should reap the completed task.
 	tasks, _ := m.List(context.Background(), "s")
 	if len(tasks) != 0 {
 		t.Errorf("reap failed, got %d remaining", len(tasks))
 	}
 }
-
-// =====================================================================
-// 7. Per-session isolation
-// =====================================================================
 
 func TestManager_SessionIsolation(t *testing.T) {
 	m := background.New()
@@ -328,14 +289,10 @@ func TestManager_SessionIsolation(t *testing.T) {
 	}
 }
 
-// =====================================================================
-// 8. Per-session cap
-// =====================================================================
-
 func TestManager_PerSessionCap(t *testing.T) {
 	release := make(chan struct{})
 	defer close(release)
-	disp := blockingDispatcher(release) // tasks stay running so cap is hit
+	disp := blockingDispatcher(release)
 	m := background.New()
 	m.AttachDispatcher(disp)
 	m.MaxTasksPerSession = 3
@@ -351,10 +308,6 @@ func TestManager_PerSessionCap(t *testing.T) {
 		t.Error("4th launch should hit cap")
 	}
 }
-
-// =====================================================================
-// 9. Concurrency
-// =====================================================================
 
 func TestManager_ConcurrentLaunches(t *testing.T) {
 	m := background.New()
@@ -380,14 +333,6 @@ func TestManager_ConcurrentLaunches(t *testing.T) {
 	}
 }
 
-// =====================================================================
-// 10. Wait on already-finished task returns immediately
-// =====================================================================
-
-// =====================================================================
-// 11. Auto-notification (doc 04c-primitives.md)
-// =====================================================================
-
 func TestManager_EmitsNotificationOnCompletion(t *testing.T) {
 	m := background.New()
 	m.AttachDispatcher(instantDispatcher("ok"))
@@ -396,7 +341,6 @@ func TestManager_EmitsNotificationOnCompletion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Wait for the task to finish.
 	waitFor(t, func() bool {
 		return len(m.DrainNotificationsPeek("s")) > 0
 	}, "notification emitted")

@@ -2,12 +2,6 @@ package sessionstore
 
 import "testing"
 
-// TestMetaPassthrough proves the channel passthrough fields (entry_agent +
-// extra context) survive the full durable path: projection from the
-// EventSessionStarted event → live state → snapshot → cold-load restore → and a
-// disk round-trip in both snapshot formats. This is what lets a background
-// channel trigger's chosen agent + context apply to EVERY turn of the session,
-// including after a daemon restart.
 func TestMetaPassthrough(t *testing.T) {
 	s := &SessionState{SessionID: "sess1"}
 	Apply(s, &Event{
@@ -24,14 +18,12 @@ func TestMetaPassthrough(t *testing.T) {
 		t.Fatalf("snapshot lost fields: %+v", snap)
 	}
 
-	// Cold-load restore (the daemon-restart path).
 	fresh := &SessionState{}
 	hydrateFromSnapshot(fresh, &snap)
 	if fresh.EntryAgent != "vip" || fresh.ContextExtra != "Answer tersely." {
 		t.Fatalf("restore lost fields: %q / %q", fresh.EntryAgent, fresh.ContextExtra)
 	}
 
-	// Disk round-trip, both formats.
 	for _, format := range []SnapshotFormat{SnapshotJSON, SnapshotBinary} {
 		dir := t.TempDir()
 		if _, err := WriteSnapshotAtomic(dir, snap, format, false); err != nil {
@@ -47,8 +39,6 @@ func TestMetaPassthrough(t *testing.T) {
 	}
 }
 
-// TestMetaPassthrough_AbsentByDefault proves the fields are empty for ordinary
-// sessions (no Meta override) — behaviour is byte-identical to before.
 func TestMetaPassthrough_AbsentByDefault(t *testing.T) {
 	s := &SessionState{SessionID: "s2"}
 	Apply(s, &Event{Type: EventSessionStarted, SessionID: "s2", Meta: &MetaPayload{Title: "Chat"}})

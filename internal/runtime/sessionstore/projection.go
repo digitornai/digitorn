@@ -6,9 +6,6 @@ import (
 	"time"
 )
 
-// maxKeyFacts caps the per-session key-fact list so a chatty agent can't grow
-// it without bound (the Python store declared a limit but never enforced one).
-// Oldest facts are evicted first.
 const maxKeyFacts = 200
 
 func Apply(s *SessionState, ev *Event) {
@@ -17,9 +14,6 @@ func Apply(s *SessionState, ev *Event) {
 	applyLocked(s, ev)
 }
 
-// previewFromMessages returns a capped snippet of the first user message in the
-// projected log — the session's topic label, cached into meta.json. Empty when
-// there's no user message yet (an empty session).
 func previewFromMessages(msgs []Message) string {
 	for i := range msgs {
 		if msgs[i].Role != "user" {
@@ -37,17 +31,6 @@ func previewFromMessages(msgs []Message) string {
 }
 
 func applyLocked(s *SessionState, ev *Event) {
-	// Idempotent projection : an event is applied AT MOST ONCE per state.
-	// AppendDurable enqueues to the write-behind flusher (async disk
-	// write) and then cold-loads the session on first access — if the
-	// flusher already raced the event onto disk, Load projects it and
-	// the subsequent Apply would re-project the SAME seq, duplicating the
-	// opening message (and double-counting EventCount). Guarding on seq
-	// also makes recovery/replay safe : re-feeding an already-incorporated
-	// event is a clean no-op. Events arrive with strictly increasing seq
-	// (allocated monotonically under the session lock), so this never
-	// drops a legitimate event — only re-applies of an incorporated one.
-	// Seq 0 (unsequenced) events are always applied (best-effort).
 	if ev.Seq != 0 && ev.Seq <= s.LastSeq {
 		return
 	}
@@ -93,16 +76,12 @@ func applyLocked(s *SessionState, ev *Event) {
 		})
 		if ev.Type == EventUserMessage {
 			s.TurnCount++
-			// Record the idempotency key so a re-delivery of the same client message
-			// (a background-job retry, a client resend) is detected and skipped.
 			if ev.Message.ClientMessageID != "" {
 				if s.SeenClientMsgIDs == nil {
 					s.SeenClientMsgIDs = make(map[string]uint64)
 				}
 				s.SeenClientMsgIDs[ev.Message.ClientMessageID] = ev.Seq
 			}
-			// Track last user message verbatim — survives compaction, always
-			// reflects what the agent must currently answer.
 			txt := content
 			if txt == "" {
 				for _, p := range parts {
@@ -119,8 +98,6 @@ func applyLocked(s *SessionState, ev *Event) {
 				s.LastUserMessage = txt
 			}
 		}
-		// A mode-switch directive binds the session's active mode, so it is
-		// reconstructed verbatim on cold-load / replay.
 		if ev.Type == EventSystemMessage && ev.Message.Extra != nil {
 			if src, _ := ev.Message.Extra["source"].(string); src == "mode_switch" {
 				if mid, ok := ev.Message.Extra["mode_id"].(string); ok {
@@ -169,13 +146,8 @@ func applyLocked(s *SessionState, ev *Event) {
 		if tc.DurationMs == 0 && tc.StartedAt > 0 && tc.CompletedAt > 0 {
 			tc.DurationMs = (tc.CompletedAt - tc.StartedAt) / int64(time.Millisecond)
 		}
-		// Also append the result as a "tool" role Message so the LLM
-		// adapter can include it in the next turn's context. Without
-		// this projection the agent loop would lose every tool result
-		// between rounds.
 		resultParts := ev.Tool.Parts
 		if len(resultParts) == 0 && ev.Tool.Output != nil {
-			// Legacy text-only path : synthesise a single text part.
 			resultParts = []MessagePart{{Type: PartTypeText, Text: formatOutput(ev.Tool.Output)}}
 		}
 		toolMsg := Message{
@@ -193,7 +165,7 @@ func applyLocked(s *SessionState, ev *Event) {
 			}},
 		}
 		if len(resultParts) > 0 && resultParts[0].Type == PartTypeText {
-			toolMsg.Content = resultParts[0].Text // legacy single-string view
+			toolMsg.Content = resultParts[0].Text
 		}
 		s.Messages = append(s.Messages, toolMsg)
 
@@ -252,9 +224,6 @@ func applyLocked(s *SessionState, ev *Event) {
 		if ev.Memory == nil || ev.Memory.Fact == "" {
 			return
 		}
-		// Dedup case/whitespace-insensitively — a re-remember of the same fact
-		// is a no-op (fixes the duplicate-facts bug). Then cap the list so it
-		// can't grow unbounded (fixes the never-enforced-limit bug).
 		needle := strings.ToLower(strings.TrimSpace(ev.Memory.Fact))
 		for _, f := range s.Facts {
 			if strings.ToLower(strings.TrimSpace(f)) == needle {
@@ -436,7 +405,6 @@ func applyLocked(s *SessionState, ev *Event) {
 				break
 			}
 		}
-		// Auto-clear goal when all todos are done — the objective was reached.
 		if s.Goal != "" && len(s.Todos) > 0 {
 			allDone := true
 			for _, t := range s.Todos {
@@ -454,7 +422,6 @@ func applyLocked(s *SessionState, ev *Event) {
 		if ev.Meta != nil && ev.Meta.Workspace != "" {
 			s.Workspace = ev.Meta.Workspace
 		}
-		// Goal carried via Message.Content for simplicity in v1.
 		if ev.Message != nil {
 			s.Goal = ev.Message.Content
 		}
@@ -463,20 +430,11 @@ func applyLocked(s *SessionState, ev *Event) {
 		if ev.Cost == nil {
 			return
 		}
-		// COST : cumulative over the whole session (billing).
 		s.TokensIn += ev.Cost.TokensIn
 		s.TokensOut += ev.Cost.TokensOut
 		s.UsdTotal += ev.Cost.UsdTotal
-		// OCCUPANCY : last-value-wins gauge of how full the window is, set to
-		// this round's provider-reported (prompt+completion). NOT summed — it
-		// is the size of the context as of the last LLM call, the authoritative
-		// number context_pressure divides by MaxTokens (CTX-7).
 		if ctxTok := int(ev.Cost.TokensIn + ev.Cost.TokensOut); ctxTok > 0 {
 			s.ContextTokens = ctxTok
-			// The provider's EXACT count for the current context — the ground truth
-			// the background recount calibrates the tokenizer against (per session,
-			// any provider). Distinct from ContextTokens, which a later tokenizer
-			// recount overwrites with its (calibrated) value.
 			s.ContextProviderTokens = ctxTok
 		}
 
@@ -486,8 +444,6 @@ func applyLocked(s *SessionState, ev *Event) {
 		}
 
 	case EventModelChanged:
-		// Set OR clear the per-agent model override (empty Model = revert that
-		// agent to its Brain default).
 			if ev.Meta != nil {
 				if ev.Meta.Model == "" {
 					delete(s.ModelOverrides, ev.Meta.AgentID)
@@ -498,9 +454,6 @@ func applyLocked(s *SessionState, ev *Event) {
 						s.ModelOverrides = map[string]string{}
 					}
 					s.ModelOverrides[ev.Meta.AgentID] = ev.Meta.Model
-					// Cross-provider pin (e.g. a local model): remember its provider
-					// so BYOK resolves the right vault credential; clear it otherwise
-					// so a same-provider switch never carries a stale provider.
 					if ev.Meta.Provider != "" {
 						if s.ProviderOverrides == nil {
 							s.ProviderOverrides = map[string]string{}
@@ -509,7 +462,6 @@ func applyLocked(s *SessionState, ev *Event) {
 					} else {
 						delete(s.ProviderOverrides, ev.Meta.AgentID)
 					}
-					// Per-model max generation override (BYOK models w/ unknown limits).
 					if ev.Meta.MaxOutputTokens > 0 {
 						if s.OutputTokenOverrides == nil {
 							s.OutputTokenOverrides = map[string]int{}
@@ -527,8 +479,6 @@ func applyLocked(s *SessionState, ev *Event) {
 						s.EffortOverrides = map[string]string{}
 					}
 					s.EffortOverrides[ev.Meta.AgentID] = ev.Meta.ReasoningEffort
-					// Keep the legacy session-wide value mirroring the ENTRY agent so
-					// the composer EffortPill + session-detail endpoint stay correct.
 					if s.EntryAgent == "" || ev.Meta.AgentID == s.EntryAgent {
 						s.ReasoningEffort = ev.Meta.ReasoningEffort
 					}
@@ -576,9 +526,6 @@ func applyLocked(s *SessionState, ev *Event) {
 		})
 
 	case EventContextTokens:
-		// EXACT background recompute (CTX-7) : set the occupancy gauge + the
-		// system/tools/messages breakdown. Only ever real tokenizer counts —
-		// never an estimate.
 		if ev.CtxTokens != nil && ev.CtxTokens.Total > 0 {
 			s.ContextTokens = ev.CtxTokens.Total
 			s.ContextSystemTokens = ev.CtxTokens.System
@@ -587,10 +534,6 @@ func applyLocked(s *SessionState, ev *Event) {
 		}
 
 	case EventContextSummaryPrepared:
-		// A background-prepared high-fidelity LLM summary CANDIDATE (CTX-8). Store
-		// the latest; only ever advance coverage (a replayed/older event never
-		// regresses it). This does NOT change the model's view — the compaction
-		// gate applies it instantly, off the LLM hot path.
 		if ev.CtxSummary == nil || ev.CtxSummary.CoversSeq == 0 || strings.TrimSpace(ev.CtxSummary.Summary) == "" {
 			return
 		}
@@ -604,34 +547,17 @@ func applyLocked(s *SessionState, ev *Event) {
 		}
 
 	case EventContextCompacting:
-		// START marker : a compaction has begun but not finished. Flag it
-		// so a state-snapshot reader knows to show "compacting…" until the
-		// paired EventContextCompacted clears it.
 		s.CompactionInflight = true
 
 	case EventContextCompacted:
-		// END marker : whatever the outcome, the compaction is no longer in
-		// flight.
 		s.CompactionInflight = false
 		if ev.CtxCompact == nil {
 			return
 		}
-		// A cutoff of 0 means the compaction ended WITHOUT applying anything — it
-		// was aborted by the user (abort cancels in-flight compaction) or was a
-		// no-op. Only the in-flight flag is cleared : the context, the provider
-		// anchor, and any prior compaction marker are left exactly as they were.
 		if ev.CtxCompact.CutoffSeq == 0 {
 			return
 		}
-		// Real compaction : the provider has NOT seen the compacted context, so
-		// invalidate the anchor for tokenizer calibration ; the next turn's
-		// token_usage re-establishes it.
 		s.ContextProviderTokens = 0
-		// The occupancy gauge is NOT set here : it drops to the EXACT new size
-		// via the background Context Service recompute (EventContextTokens),
-		// never an estimate.
-		// Latest compaction wins ; cutoff only ever moves forward so a
-		// replayed older event never regresses the view.
 		if s.ContextCompaction == nil || ev.CtxCompact.CutoffSeq >= s.ContextCompaction.CutoffSeq {
 			s.ContextCompaction = &ContextCompactionState{
 				CutoffSeq:  ev.CtxCompact.CutoffSeq,
@@ -641,16 +567,8 @@ func applyLocked(s *SessionState, ev *Event) {
 				AtSeq:      ev.Seq,
 				TsUnixNano: ev.TsUnixNano,
 			}
-			// Bound the in-memory window to the model's view : drop messages at or
-			// below the cutoff. They stay on disk (events + lossless snapshot) for
-			// the full transcript ; memory and the per-turn snapshot copy stay
-			// bounded regardless of session age. This is what makes the LLM context
-			// load "from the last compaction", not from all of history.
 			s.Messages = MessagesAfterCutoff(s.Messages, ev.CtxCompact.CutoffSeq)
 		}
-		// A prepared summary consumed by this compaction (its coverage is now at or
-		// below the applied cutoff) is no longer a pending candidate — clear it so a
-		// stale one is never re-applied. A deeper prepared summary (rare) survives.
 		if s.PreparedSummary != nil && ev.CtxCompact.CutoffSeq >= s.PreparedSummary.CoversSeq {
 			s.PreparedSummary = nil
 		}
@@ -683,8 +601,6 @@ func applyLocked(s *SessionState, ev *Event) {
 		if ev.Turn == nil || ev.Turn.Phase == "" {
 			return
 		}
-		// Phase changes for a previous turn (race condition during
-		// recovery) must not overwrite the current turn's marker.
 		if ev.Turn.TurnID != "" && s.CurrentTurnID != "" && ev.Turn.TurnID != s.CurrentTurnID {
 			return
 		}
@@ -710,10 +626,6 @@ func orDefault(v, def string) string {
 	return v
 }
 
-// formatOutput converts a tool's Output (legacy `any` field) to a
-// human-readable string for inclusion in the LLM context. Strings pass
-// through ; everything else gets fmt.Sprintf("%v", ...). Used only on
-// the projection path when ToolPayload.Parts is empty.
 func formatOutput(v any) string {
 	if v == nil {
 		return ""

@@ -77,10 +77,30 @@ func (c *fetchCache) clear() {
 }
 
 type fetchParams struct {
-	URL     string   `json:"url"`
-	Format  string   `json:"format"`
-	Extract flexjson.Bool `json:"extract"`
-	Prompt  string   `json:"prompt"`
+	URL        string        `json:"url"`
+	Format     string        `json:"format"`
+	Extract    flexjson.Bool `json:"extract"`
+	Prompt     string        `json:"prompt"`
+	Actions    []actionSpec  `json:"actions"`
+	Screenshot     flexjson.Bool `json:"screenshot"`
+	Live           flexjson.Bool `json:"live"`
+	Crawl          *crawlSpec    `json:"crawl"`
+	ApprovedSubmit flexjson.Bool `json:"approved_submit"`
+	Profile        flexjson.Bool `json:"profile"`
+}
+
+// actionSpec is one interaction the agent asks the browser to perform on the
+// page's live DOM before it is re-perceived. Elements are targeted by the ref
+// the last perception stamped (data-dgn-ref).
+type actionSpec struct {
+	Do   string `json:"do"`   // click | type | press | select | upload | scroll | wait
+	Ref  string `json:"ref"`  // target element ref (click/type/select/upload)
+	Text string `json:"text"` // type: text to enter; select: option label to pick
+	Key  string `json:"key"`  // press: enter|tab|escape|…
+	Path string `json:"path"` // upload: file path inside the session workspace
+	To   string `json:"to"`   // scroll: top|bottom (default: one viewport down)
+	For  string `json:"for"`  // wait: networkidle | <css-selector>
+	MS   int    `json:"ms"`   // wait: fixed milliseconds
 }
 
 // fetch retrieves a URL and returns its content as text/markdown/html. It is
@@ -91,12 +111,18 @@ func (m *Module) fetch(ctx context.Context, raw json.RawMessage) (tool.Result, e
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return errResult(err), err
 	}
-	target, err := normalizeURL(p.URL)
-	if err != nil {
-		return errResult(err), err
-	}
-	if err := m.checkDomain(target.Hostname()); err != nil {
-		return errResult(err), err
+	// url is optional when actions are given: the agent acts on the page already
+	// open in this session's live tab.
+	var urlStr string
+	if strings.TrimSpace(p.URL) != "" {
+		target, err := normalizeURL(p.URL)
+		if err != nil {
+			return errResult(err), err
+		}
+		if err := m.checkDomain(target.Hostname()); err != nil {
+			return errResult(err), err
+		}
+		urlStr = target.String()
 	}
 
 	format := p.Format
@@ -107,25 +133,129 @@ func (m *Module) fetch(ctx context.Context, raw json.RawMessage) (tool.Result, e
 	}
 
 	cfg, client, _, cache := m.snapshot()
-	urlStr := target.String()
 
-	htmlDoc, cached := cache.get(urlStr)
+	sessionKey := "default"
+	if id, ok := tool.IdentityFromContext(ctx); ok && id.SessionID != "" {
+		sessionKey = id.SessionID
+	}
+	rt := defaultTimeout
+	if cfg.FetchTimeoutSecs > 0 {
+		rt = time.Duration(cfg.FetchTimeoutSecs * float64(time.Second))
+	}
+	wantShot := bool(p.Screenshot)
+	wantLive := bool(p.Live)
+	wantProfile := bool(p.Profile)
+
+	// Crawl: bounded BFS over a site, returning a compact model per page.
+	if p.Crawl != nil {
+		if urlStr == "" {
+			return errResult(fmt.Errorf("crawl requires a url to start from")), nil
+		}
+		return m.crawlSite(ctx, sessionKey, urlStr, *p.Crawl, cfg, client, rt), nil
+	}
+
+	var htmlDoc, screenshot, note string
 	finalURL := urlStr
-	if !cached {
-		doc, ferr := m.download(ctx, client, urlStr)
-		if ferr != nil {
-			return errResult(ferr), ferr
+	cached := false
+
+	switch {
+	case len(p.Actions) > 0:
+		// Interactive path: drive the session's persistent live tab. Navigate
+		// first only when a url is given; otherwise act on the page already open
+		// (state — cookies, scroll, JS — persists across calls).
+		if m.browser == nil {
+			return errResult(fmt.Errorf("browser engine unavailable for actions")), nil
 		}
-		if doc.binaryNote != "" {
-			return tool.Result{Success: true, Data: map[string]any{
-				"url":          urlStr,
-				"content":      doc.binaryNote,
-				"is_binary":    true,
-				"content_type": doc.contentType,
-			}}, nil
+		if strings.TrimSpace(p.URL) != "" {
+			if _, rerr := m.browser.navigate(ctx, sessionKey, urlStr, cfg.AllowPrivateHosts, rt, m.checkDomain, false, wantLive, wantProfile); rerr != nil {
+				return errResult(rerr), nil
+			}
+		} else if !m.browser.hasTab(ctx, sessionKey, wantProfile) {
+			// The agent wants to act but nothing is open in the live browser
+			// (its refs came from a quick HTTP read). Open the last page so the
+			// refs become live; re-perceive and hand them back rather than
+			// clicking a stale ref.
+			last, _ := m.lastURL.Load(sessionKey)
+			lastU, _ := last.(string)
+			if lastU == "" {
+				return errResult(fmt.Errorf("no page is open in the live browser yet — fetch the url first, then act")), nil
+			}
+			if _, nerr := m.browser.navigate(ctx, sessionKey, lastU, cfg.AllowPrivateHosts, rt, m.checkDomain, wantShot, wantLive, wantProfile); nerr != nil {
+				return errResult(nerr), nil
+			}
+			rr, _ := m.browser.act(ctx, sessionKey, nil, cfg.AllowPrivateHosts, rt, m.checkDomain, wantShot, wantLive, false, wantProfile)
+			htmlDoc, finalURL, screenshot = rr.html, firstNonEmpty(rr.finalURL, lastU), rr.shot
+			note = "Opened the page in the live browser. Your earlier refs came from a quick read and don't apply here — use the refs in this page model and resend your action."
+			break
 		}
-		htmlDoc, finalURL = doc.body, doc.finalURL
-		cache.set(urlStr, htmlDoc)
+		rr, rerr := m.browser.act(ctx, sessionKey, p.Actions, cfg.AllowPrivateHosts, rt, m.checkDomain, wantShot, wantLive, bool(p.ApprovedSubmit), wantProfile)
+		if rerr != nil {
+			// A stale ref (page re-rendered, or refs from a prior HTTP read):
+			// re-perceive and return fresh refs with a note instead of a bare error.
+			if isStaleRef(rerr) {
+				if rr2, perr := m.browser.act(ctx, sessionKey, nil, cfg.AllowPrivateHosts, rt, m.checkDomain, wantShot, wantLive, false, wantProfile); perr == nil {
+					htmlDoc, finalURL, screenshot = rr2.html, firstNonEmpty(rr2.finalURL, urlStr), rr2.shot
+					note = "That ref didn't resolve (the page changed since you read it). Here is the current page with fresh refs — resend your action using these."
+					break
+				}
+			}
+			return errResult(rerr), nil
+		}
+		htmlDoc, finalURL, screenshot = rr.html, firstNonEmpty(rr.finalURL, urlStr), rr.shot
+
+	case urlStr == "":
+		// No url and no actions: re-perceive the page already open. Never
+		// reloads, so a form the agent just filled survives. Clear error if
+		// nothing is open in this session.
+		if m.browser == nil {
+			return errResult(fmt.Errorf("url is required (no page is open in this session yet)")), nil
+		}
+		rr, rerr := m.browser.act(ctx, sessionKey, nil, cfg.AllowPrivateHosts, rt, m.checkDomain, wantShot, wantLive, false, wantProfile)
+		if rerr != nil {
+			return errResult(rerr), nil
+		}
+		htmlDoc, finalURL, screenshot = rr.html, rr.finalURL, rr.shot
+
+	default:
+		// Read path: cache → HTTP → headless fallback. Screenshot/live bypass the
+		// cache so a real browser tab actually runs.
+		if !wantShot && !wantLive {
+			htmlDoc, cached = cache.get(urlStr)
+		}
+		if !cached {
+			doc, ferr := m.download(ctx, client, urlStr)
+			if ferr != nil {
+				return errResult(ferr), ferr
+			}
+			if doc.binaryNote != "" {
+				return tool.Result{Success: true, Data: map[string]any{
+					"url":          urlStr,
+					"content":      doc.binaryNote,
+					"is_binary":    true,
+					"content_type": doc.contentType,
+				}}, nil
+			}
+			htmlDoc, finalURL = doc.body, doc.finalURL
+
+			needBrowser := wantShot || wantLive // live needs a real tab to screencast
+			if !needBrowser && m.browser != nil {
+				visible := ""
+				if probe := parseHTML(htmlDoc); probe != nil {
+					visible = render(probe, false)
+				}
+				needBrowser = looksLikeJSShell(htmlDoc, visible)
+			}
+			if needBrowser && m.browser != nil {
+				if rr, rerr := m.browser.navigate(ctx, sessionKey, finalURL, cfg.AllowPrivateHosts, rt, m.checkDomain, wantShot, wantLive, wantProfile); rerr == nil && strings.TrimSpace(rr.html) != "" {
+					htmlDoc = rr.html
+					finalURL = firstNonEmpty(rr.finalURL, finalURL)
+					screenshot = rr.shot
+				}
+			}
+			if !wantShot && !wantLive { // never cache screenshot/dynamic/live results
+				cache.set(urlStr, htmlDoc)
+			}
+		}
 	}
 
 	maxLen := cfg.MaxContentLength
@@ -147,8 +277,9 @@ func (m *Module) fetch(ctx context.Context, raw json.RawMessage) (tool.Result, e
 		content = applyPromptFilter(content, p.Prompt, maxLen)
 	}
 
+	effectiveURL := firstNonEmpty(finalURL, urlStr) // acting on an open page has no urlStr
 	data := map[string]any{
-		"url":     urlStr,
+		"url":     effectiveURL,
 		"content": content,
 		"length":  len(content),
 		"format":  format,
@@ -161,9 +292,23 @@ func (m *Module) fetch(ctx context.Context, raw json.RawMessage) (tool.Result, e
 		if d := extractMetaDescription(root); d != "" {
 			data["description"] = d
 		}
+		// Full page model: structure + navigation affordances (links = where to
+		// go, actions = what to click) so the agent can navigate, not just read.
+		if pm := buildPageModel(root, firstNonEmpty(finalURL, urlStr)); !pm.empty() {
+			data["page"] = pm
+		}
 	}
-	if finalURL != "" && finalURL != urlStr {
+	if finalURL != "" && urlStr != "" && finalURL != urlStr {
 		data["final_url"] = finalURL
+	}
+	if screenshot != "" {
+		data["screenshot"] = screenshot
+	}
+	if note != "" {
+		data["note"] = note
+	}
+	if effectiveURL != "" {
+		m.lastURL.Store(sessionKey, effectiveURL)
 	}
 	if m.detectInjection() {
 		if w := scanForInjection(content); w != "" {
@@ -174,7 +319,7 @@ func (m *Module) fetch(ctx context.Context, raw json.RawMessage) (tool.Result, e
 	return tool.Result{
 		Success: true,
 		Data:    data,
-		Display: &tool.DisplayHint{Type: "markdown", Title: urlStr},
+		Display: &tool.DisplayHint{Type: "markdown", Title: effectiveURL},
 	}, nil
 }
 
@@ -265,6 +410,12 @@ func normalizeURL(raw string) (*url.URL, error) {
 		return nil, fmt.Errorf("url has no host")
 	}
 	return u, nil
+}
+
+// isStaleRef reports whether an action failed because its ref no longer
+// resolves — the cue to re-perceive and hand the agent fresh refs.
+func isStaleRef(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "not found on current page")
 }
 
 func firstNonEmpty(vs ...string) string {

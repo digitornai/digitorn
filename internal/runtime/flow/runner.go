@@ -26,7 +26,6 @@ const (
 	approvalResultApprovedAlways = approval.ResultApprovedAlways
 )
 
-// Deps holds the external capabilities the flow runner needs.
 type Deps struct {
 	Sessions  SessionSink
 	RunAgent  func(ctx context.Context, spec AgentSpec) (AgentResult, error)
@@ -49,18 +48,15 @@ type runInput struct {
 	secretLookup func(key string) (string, bool)
 }
 
-// RunInput builds a runInput for callers outside the package.
 func RunInput(appID, sessionID, userID, userJWT, turnID string) runInput {
 	return runInput{appID: appID, sessionID: sessionID, userID: userID, userJWT: userJWT, turnID: turnID}
 }
 
-// WithEvent attaches the triggering event payload, exposed as `event.*`.
 func (in runInput) WithEvent(event map[string]any) runInput {
 	in.event = event
 	return in
 }
 
-// WithSecretLookup resolves {{secret.X}} in flow templates at runtime.
 func (in runInput) WithSecretLookup(fn func(key string) (string, bool)) runInput {
 	in.secretLookup = fn
 	return in
@@ -71,9 +67,6 @@ type runState struct {
 	maxIter int
 }
 
-// Runner executes a compiled FlowConfig over the runtime primitives, following
-// the documented routes-based model: each node executes, then its routes decide
-// the next node. Isolated from the turn loop; invoked from engine.runFlow.
 type Runner struct {
 	deps     Deps
 	nodeByID map[string]*schema.FlowNode
@@ -94,7 +87,6 @@ func New(flow *schema.FlowConfig, deps Deps, idGen func() string) *Runner {
 	return &Runner{deps: deps, nodeByID: nodeByID, flowID: flowID, idGen: idGen}
 }
 
-// Run executes the flow to completion and returns the terminating path's output.
 func (r *Runner) Run(ctx context.Context, flow *schema.FlowConfig, in runInput) (*FlowResult, error) {
 	r.emit(ctx, in, sessionstore.EventFlowStarted, "", "", "running", "", "", 0)
 
@@ -123,9 +115,6 @@ func (r *Runner) Run(ctx context.Context, flow *schema.FlowConfig, in runInput) 
 	return &FlowResult{Content: out.text}, nil
 }
 
-// runPath follows routes from startID until a terminal node, an `end` route, a
-// dead end (no matching route), or an error. Used for the main flow and for
-// each parallel branch (with a cloned context).
 func (r *Runner) runPath(ctx context.Context, startID string, fc *fctx, in runInput, rs *runState) (execResult, error) {
 	currentID := startID
 	var last execResult
@@ -180,9 +169,6 @@ func (r *Runner) runPath(ctx context.Context, startID string, fc *fctx, in runIn
 	return last, nil
 }
 
-// nextNode evaluates a node's routes to pick the successor. Decision nodes
-// switch on the value of `expr`; all other nodes evaluate each `when` as a
-// boolean expression. Returns "" or endSentinel to stop the path.
 func (r *Runner) nextNode(node schema.FlowNode, fc *fctx) (string, error) {
 	if len(node.Routes) == 0 {
 		return "", nil
@@ -205,8 +191,6 @@ func (r *Runner) nextNode(node schema.FlowNode, fc *fctx) (string, error) {
 	return "", nil
 }
 
-// decisionRoute evaluates node.Expr to a value, then matches each route's `when`
-// literally against that value (switch/case), with `default` as catch-all.
 func (r *Runner) decisionRoute(node schema.FlowNode, fc *fctx) (string, error) {
 	value := ""
 	if node.Expr != "" {

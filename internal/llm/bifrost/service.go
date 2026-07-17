@@ -20,8 +20,6 @@ import (
 	"github.com/digitornai/digitorn/internal/llm"
 )
 
-// llmRequestLog is set once at startup. Set DIGITORN_LOG_LLM_REQUEST=1 to
-// dump every outgoing chat request (messages, tools, system) to stderr.
 var llmRequestLog = os.Getenv("DIGITORN_LOG_LLM_REQUEST") == "1"
 
 func logLLMRequest(req *llm.ChatRequest, _ *schemas.BifrostChatRequest) {
@@ -70,17 +68,11 @@ func logLLMRequest(req *llm.ChatRequest, _ *schemas.BifrostChatRequest) {
 	fmt.Fprintf(os.Stderr, "\n[LLM_REQUEST]\n%s\n", b)
 }
 
-// Service implements llm.Service by delegating to a Bifrost client.
 type Service struct {
 	client  *bifrost.Bifrost
 	cfg     Config
 	plugins *PluginSet
 
-	// admission bounds concurrent in-flight requests to BufferSize and
-	// returns codes.ResourceExhausted on overflow. Without it, Bifrost
-	// silently drops above InitialPoolSize (DropExcessRequests=true).
-	// Acquire respects ctx, so a request waiting in the queue cancels
-	// cleanly when its own ctx expires.
 	admission *semaphore.Weighted
 }
 
@@ -114,9 +106,6 @@ func NewService(ctx context.Context, cfg Config) (*Service, error) {
 	}, nil
 }
 
-// admit acquires one admission slot honouring ctx cancellation. Returns
-// codes.ResourceExhausted when the slot can't be acquired before ctx
-// expires. Hot path = ~10 ns when slots are free.
 func (s *Service) admit(ctx context.Context) error {
 	if err := s.admission.Acquire(ctx, 1); err != nil {
 		return status.Errorf(codes.ResourceExhausted,
@@ -126,12 +115,9 @@ func (s *Service) admit(ctx context.Context) error {
 	return nil
 }
 
-// Plugins exposes the plugin set so the worker binary can dump stats.
 func (s *Service) Plugins() *PluginSet { return s.plugins }
 
 func (s *Service) Shutdown() { s.client.Shutdown() }
-
-// ---- llm.Service implementation ----
 
 func (s *Service) Chat(ctx context.Context, req *llm.ChatRequest) (*llm.ChatResponse, error) {
 	if err := s.admit(ctx); err != nil {
@@ -164,10 +150,6 @@ func (s *Service) ChatStream(ctx context.Context, req *llm.ChatRequest, sink llm
 	defer releaseRouteInfo(route)
 	breq := s.buildChatRequest(req)
 	logLLMRequest(req, breq)
-	// Gateway TTFT : the worker side of the split. Compared with the engine-side
-	// provider_ttft this isolates the engine→worker gRPC IPC (their tiny
-	// difference) from the gateway+provider prefill (this number) — so "is it the
-	// gateway?" is answered with data, not a hunch.
 	gwStart := time.Now()
 	stream, berr := s.client.ChatCompletionStreamRequest(bctx, breq)
 	if berr != nil {
@@ -179,25 +161,15 @@ func (s *Service) ChatStream(ctx context.Context, req *llm.ChatRequest, sink llm
 	ecStream := errCtxForChat(req)
 	firstSent := false
 	for chunk := range stream {
-		// Mid-stream errors: log with the same structured shape as the
-		// initial-dispatch failure so dashboards can see "the upstream
-		// hung up at chunk 47" without trawling raw bytes. The chunk's
-		// `Error` field still propagates downstream verbatim (no
-		// behaviour change) — this is observability only.
 		if chunk != nil && chunk.BifrostError != nil {
 			s.logBifrostError(chunk.BifrostError, ecStream, "chat_stream_mid")
 		}
-		// Accumulate any tool_call fragments this chunk carries — they
-		// are incremental and only usable once merged by index.
 		acc.add(rawDeltaToolCalls(chunk))
 
 		out := mapChatChunk(chunk)
 		if out == nil {
 			continue
 		}
-		// Skip empty carrier chunks. A tool_call-fragment chunk is NOT empty
-		// anymore : its fragments are surfaced via ToolCallDeltas so the client
-		// can render the streaming call, so keep those.
 		if out.Delta == "" && out.ReasoningDelta == "" && out.FinishReason == "" &&
 			out.Usage == nil && out.Error == "" && len(out.ToolCallDeltas) == 0 {
 			continue
@@ -214,8 +186,6 @@ func (s *Service) ChatStream(ctx context.Context, req *llm.ChatRequest, sink llm
 			}
 		}
 	}
-	// Flush the merged tool calls as a final chunk so the engine's
-	// stream consumer sees complete, decoded calls exactly once.
 	if merged := acc.merged(); len(merged) > 0 {
 		if err := sink.Send(&llm.ChatChunk{ToolCalls: merged}); err != nil {
 			return err
@@ -248,8 +218,6 @@ func (s *Service) Embed(ctx context.Context, req *llm.EmbedRequest) (*llm.EmbedR
 		s.logBifrostError(berr, ec, "embed")
 		return nil, translateError(berr, ec)
 	}
-	// Preallocate Embeddings capacity from response length — eliminates
-	// 1-2 reallocations on typical embed batch sizes (≥4 inputs).
 	out := &llm.EmbedResponse{
 		Model:      resp.Model,
 		Embeddings: make([][]float64, 0, len(resp.Data)),
@@ -269,9 +237,6 @@ func (s *Service) Embed(ctx context.Context, req *llm.EmbedRequest) (*llm.EmbedR
 }
 
 func (s *Service) CountTokens(ctx context.Context, req *llm.CountTokensRequest) (*llm.CountTokensResponse, error) {
-	// Bifrost's CountTokens takes a ResponsesRequest. For V1 we approximate
-	// by serving a basic estimate ; the worker's plugin can later wire the
-	// real provider-specific token counter.
 	return &llm.CountTokensResponse{
 		Model:  req.Model,
 		Tokens: uint64(estimateTokens(req.Messages)),
@@ -296,10 +261,6 @@ func (s *Service) ListProviders(ctx context.Context, _ *llm.ListProvidersRequest
 	return out, nil
 }
 
-// Speak synthesizes text to streamed audio through the gateway (bifrost
-// SpeechStreamRequest). Audio deltas are forwarded as raw frames the instant they
-// arrive — the latency-critical "time to first audio" path — terminated by a Done
-// frame. Routing, admission, and error translation mirror Chat.
 func (s *Service) Speak(ctx context.Context, req *llm.SpeechRequest, sink llm.AudioSink) error {
 	if err := s.admit(ctx); err != nil {
 		return err
@@ -332,9 +293,6 @@ func (s *Service) Speak(ctx context.Context, req *llm.SpeechRequest, sink llm.Au
 	ec := errCallContext{Provider: req.Provider, Model: req.Model, BYOK: req.BYOK,
 		CorrelationID: req.CorrelationID, SessionID: req.SessionID, UserID: req.UserID, AgentID: req.AgentID}
 
-	// The digitorn gateway's /v1/audio/speech returns the full audio in one
-	// response (non-SSE), so use the unary SpeechRequest and chunk the result into
-	// frames for smooth downstream playback.
 	resp, berr := s.client.SpeechRequest(bctx, sp)
 	if berr != nil {
 		s.logBifrostError(berr, ec, "speak")
@@ -342,7 +300,7 @@ func (s *Service) Speak(ctx context.Context, req *llm.SpeechRequest, sink llm.Au
 	}
 	if resp != nil {
 		audio := resp.Audio
-		const chunk = 9600 // ~200 ms of PCM16 @ 24 kHz
+		const chunk = 9600
 		for off := 0; off < len(audio); off += chunk {
 			end := off + chunk
 			if end > len(audio) {
@@ -356,10 +314,6 @@ func (s *Service) Speak(ctx context.Context, req *llm.SpeechRequest, sink llm.Au
 	return sink.Send(llm.DoneFrame())
 }
 
-// Transcribe turns an utterance's audio into streamed transcript frames through the
-// gateway (bifrost TranscriptionStreamRequest). The utterance is VAD-delimited by the
-// caller, so the request carries a bounded audio buffer; delta events are forwarded as
-// TextFrame (interim) and the done event as a FinalFrame.
 func (s *Service) Transcribe(ctx context.Context, req *llm.TranscribeRequest, sink llm.AudioSink) error {
 	if err := s.admit(ctx); err != nil {
 		return err
@@ -391,8 +345,6 @@ func (s *Service) Transcribe(ctx context.Context, req *llm.TranscribeRequest, si
 	ec := errCallContext{Provider: req.Provider, Model: req.Model, BYOK: req.BYOK,
 		CorrelationID: req.CorrelationID, SessionID: req.SessionID, UserID: req.UserID, AgentID: req.AgentID}
 
-	// The gateway's /v1/audio/transcriptions returns the full transcript in one
-	// (non-SSE) response, so use the unary TranscriptionRequest.
 	resp, berr := s.client.TranscriptionRequest(bctx, tr)
 	if berr != nil {
 		s.logBifrostError(berr, ec, "transcribe")
@@ -406,8 +358,6 @@ func (s *Service) Transcribe(ctx context.Context, req *llm.TranscribeRequest, si
 	return sink.Send(llm.DoneFrame())
 }
 
-// audioExt maps a wire format name to a filename extension (providers infer the
-// codec from it). Defaults to wav for unknown/empty formats.
 func audioExt(format string) string {
 	switch format {
 	case "", "pcm", "pcm16", "l16", "wav":
@@ -421,7 +371,6 @@ func audioExt(format string) string {
 	}
 }
 
-// audioRoute carries the routing + identity fields common to the audio RPCs.
 type audioRoute struct {
 	BYOK    bool
 	APIKey  string
@@ -436,8 +385,6 @@ type audioRoute struct {
 	AgentID       string
 }
 
-// buildAudioContext mirrors buildContext for the audio RPCs: pooled route info,
-// gateway passthrough when not BYOK, and per-request trace identity.
 func (s *Service) buildAudioContext(parent context.Context, r audioRoute) (*schemas.BifrostContext, context.CancelFunc, *routeInfo) {
 	timeout := r.Timeout
 	if timeout <= 0 {
@@ -461,14 +408,11 @@ func (s *Service) buildAudioContext(parent context.Context, r audioRoute) (*sche
 	if r.AgentID != "" {
 		bc.SetTraceAttribute("agent_id", r.AgentID)
 	}
-	// Same gateway attribution as buildContext — audio calls are billed too.
 	if !r.BYOK {
 		setAttributionHeaders(bc, r.AppID, r.SessionID, r.AgentID, r.CorrelationID)
 	}
 	return bc, cancel, route
 }
-
-// ---- translation helpers ----
 
 func (s *Service) buildContext(parent context.Context, req *llm.ChatRequest) (*schemas.BifrostContext, context.CancelFunc, *routeInfo) {
 	timeout := req.Timeout
@@ -476,27 +420,15 @@ func (s *Service) buildContext(parent context.Context, req *llm.ChatRequest) (*s
 		timeout = 600 * time.Second
 	}
 	bc, cancel := schemas.NewBifrostContextWithTimeout(parent, timeout)
-	// Single ctx.Value entry : keeps the lookup chain at depth 1 inside
-	// Bifrost's account callbacks (O(1), one map probe). The routeInfo
-	// is pooled — the caller MUST releaseRouteInfo(route) after the
-	// request completes.
 	route := acquireRouteInfo(req.BYOK, req.APIKey, req.UserJWT, req.BaseURL)
 	bc.SetValue(ctxKeyRoute, route)
 	applyProviderProtocol(bc, req.Provider, req.BYOK)
-	// Gateway mode carries max_tokens through ExtraParams (buildChatRequest) ;
-	// Bifrost only merges ExtraParams into the outgoing body when passthrough
-	// is enabled. Direct mode promotes its knobs to native fields, so it never
-	// needs this.
 	if !req.BYOK {
 		bc.SetValue(schemas.BifrostContextKeyPassthroughExtraParams, true)
 	}
 	if req.CorrelationID != "" {
 		bc.SetTraceAttribute("correlation_id", req.CorrelationID)
 	}
-	// Per-request caller identity attributed to the gateway/provider : every
-	// LLM call is traceable to a session, a user, and a specific agent
-	// instance (entry agent id or a distinct sub-agent RunID). Same channel
-	// as correlation_id.
 	if req.SessionID != "" {
 		bc.SetTraceAttribute("session_id", req.SessionID)
 	}
@@ -506,21 +438,12 @@ func (s *Service) buildContext(parent context.Context, req *llm.ChatRequest) (*s
 	if req.AgentID != "" {
 		bc.SetTraceAttribute("agent_id", req.AgentID)
 	}
-	// GATEWAY attribution : the gateway reads X-Digitorn-* headers
-	// (chatAttribution) to stamp app_id / external_sid / agent_id / run_id
-	// on every gateway_usage_events row — the basis for per-app billing,
-	// quotas and audit. Gateway-only: never leak identity headers to
-	// direct providers (BYOK). Disjoint from applyProviderProtocol's
-	// Copilot headers (BYOK-only), so the single ExtraHeaders slot is safe.
 	if !req.BYOK {
 		setAttributionHeaders(bc, req.AppID, req.SessionID, req.AgentID, req.CorrelationID)
 	}
 	return bc, cancel, route
 }
 
-// setAttributionHeaders installs the X-Digitorn-* identity headers Bifrost
-// forwards verbatim on the outgoing HTTP request (BifrostContextKeyExtraHeaders).
-// Only non-empty dimensions are sent.
 func setAttributionHeaders(bc *schemas.BifrostContext, appID, sessionID, agentID, runID string) {
 	hdrs := make(map[string][]string, 4)
 	if appID != "" {
@@ -541,20 +464,9 @@ func setAttributionHeaders(bc *schemas.BifrostContext, appID, sessionID, agentID
 	bc.SetValue(schemas.BifrostContextKeyExtraHeaders, hdrs)
 }
 
-// missingReasoningPlaceholder is sent as reasoning_content for an assistant
-// message that carries tool_calls but for which no thinking-mode trace was
-// captured (an interrupted or trivial tool call). Reasoning providers (DeepSeek
-// thinking mode) require a non-empty reasoning_content on such messages or they
-// reject the next request; this keeps the field present and non-empty without
-// fabricating a real rationale.
 const missingReasoningPlaceholder = "(no reasoning trace recorded for this step)"
 
 func (s *Service) buildChatRequest(req *llm.ChatRequest) *schemas.BifrostChatRequest {
-	// Apply Anthropic-style prompt-cache breakpoints on the stable
-	// prefix BEFORE wire-format translation. Provider-agnostic: the
-	// gateway-go strips cache_control for providers that don't accept it
-	// (OpenAI auto-caches, DeepSeek strips, Mistral no-op). See
-	// cache_hints.go for the strategy.
 	markStablePrefixCacheable(req)
 
 	out := &schemas.BifrostChatRequest{
@@ -567,16 +479,6 @@ func (s *Service) buildChatRequest(req *llm.ChatRequest) *schemas.BifrostChatReq
 		bm := schemas.ChatMessage{
 			Role: schemas.ChatMessageRole(m.Role),
 		}
-		// Always emit a `content` field, even empty. An assistant message that
-		// only carries tool_calls has no text — most providers tolerate the
-		// field being absent, but DeepSeek's strict deserializer rejects the
-		// whole request ("missing field `content`"). An empty string is
-		// accepted by every OpenAI-compatible provider.
-		//
-		// Cache control path : if THIS message carries a cache hint OR
-		// any of its parts does, we have to switch from the cheap string
-		// `content` to the richer block-array form — Anthropic only
-		// reads cache_control off content BLOCKS, not the bare string.
 		if needsContentBlocks(m) {
 			bm.Content = &schemas.ChatMessageContent{ContentBlocks: buildContentBlocks(m)}
 		} else {
@@ -587,18 +489,10 @@ func (s *Service) buildChatRequest(req *llm.ChatRequest) *schemas.BifrostChatReq
 			name := m.Name
 			bm.Name = &name
 		}
-		// Tool result message : role=tool, ToolCallID identifies which
-		// assistant tool_call this output answers (OpenAI shape).
 		if m.Role == "tool" && m.ToolCallID != "" {
 			id := m.ToolCallID
 			bm.ChatToolMessage = &schemas.ChatToolMessage{ToolCallID: &id}
 		}
-		// Prior assistant turn : forward its tool_calls (so the provider can
-		// stitch the multi-round conversation) AND its reasoning_content.
-		// Reasoning models (DeepSeek thinking mode, xAI) REQUIRE the prior
-		// assistant reasoning to be passed back or they reject the request ;
-		// bifrost serialises Reasoning as `reasoning_content` for those
-		// providers, so this is provider-agnostic — nothing DeepSeek-specific.
 		if m.Role == "assistant" && (len(m.ToolCalls) > 0 || m.ReasoningContent != "") {
 			am := &schemas.ChatAssistantMessage{}
 			if len(m.ToolCalls) > 0 {
@@ -609,15 +503,6 @@ func (s *Service) buildChatRequest(req *llm.ChatRequest) *schemas.BifrostChatReq
 				rc := m.ReasoningContent
 				am.Reasoning = &rc
 			case len(m.ToolCalls) > 0:
-				// DeepSeek thinking mode REJECTS the next request unless every
-				// assistant message that carries tool_calls also carries a NON-EMPTY
-				// reasoning_content ("...must be passed back to the API") — even when
-				// no trace was captured for this turn (an interrupted/quick tool
-				// call). An empty string isn't enough (the provider — or a gateway
-				// in front of it — treats it as absent), so emit a minimal
-				// placeholder. A plain assistant message with no tool_calls and no
-				// reasoning keeps the field absent, so a strict provider never sees
-				// an empty key.
 				rc := missingReasoningPlaceholder
 				am.Reasoning = &rc
 			}
@@ -626,8 +511,6 @@ func (s *Service) buildChatRequest(req *llm.ChatRequest) *schemas.BifrostChatReq
 		out.Input = append(out.Input, bm)
 	}
 
-	// Params bundles tools + sampling knobs. Build it lazily so non-tool,
-	// no-knob requests don't pay the allocation.
 	var params *schemas.ChatParameters
 	if tools := buildBifrostTools(req.Tools); len(tools) > 0 {
 		params = &schemas.ChatParameters{

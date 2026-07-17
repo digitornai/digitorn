@@ -8,7 +8,7 @@ import (
 
 func TestAskUserSchemaDeclared(t *testing.T) {
 	var spec *struct {
-		params  map[string]string // name → type
+		params  map[string]string
 		formSub map[string]bool
 		desc    string
 	}
@@ -72,7 +72,6 @@ func TestAskUserPromptPushesToAsk(t *testing.T) {
 		"ALWAYS ask", "does NOT end the turn", "ambiguous",
 		"\"choices\"", "\"allow_multiple\": true", "\"allow_custom\": false",
 		"\"content\"", "\"form\"", "\"multiselect\"", "\"boolean\"",
-		// an example exercising every field type + validation + bounded multi-select
 		"\"email\"", "\"url\"", "\"password\"", "\"date\"", "\"number\"",
 		"\"range\"", "\"rating\"", "\"pattern\"", "min_select", "max_select",
 	} {

@@ -6,19 +6,7 @@ import (
 	"testing"
 )
 
-// These tests lock down the cross-platform fix for sub-agent session
-// directories. The live daemon failed on Windows with :
-//
-//	mkdir ...\sessions\a1\<uuid>::agent::researcher#<hash>:
-//	The filename, directory name, or volume label syntax is incorrect.
-//
-// because a sub-agent session ID contains ':' (illegal in a Windows path
-// component). The encoder escapes only the unsafe characters and leaves normal
-// IDs untouched (no migration of existing on-disk sessions).
-
 func TestEncodeSessionDir_IdentityForNormalSids(t *testing.T) {
-	// Real UUIDs and ordinary IDs MUST pass through unchanged — otherwise
-	// every already-persisted session would move and become unreadable.
 	for _, sid := range []string{
 		"bd79cee8-c650-472f-b444-9c7cf7127680",
 		"a1",
@@ -54,9 +42,9 @@ func TestEncodeDecode_RoundTrip(t *testing.T) {
 		"x",
 		"a:b",
 		"root::agent::researcher#abc",
-		"root::agent::w#1::agent::deep#2", // nested delegation
+		"root::agent::w#1::agent::deep#2",
 		"already has %25 percent",
-		"héllo-wörld", // multi-byte UTF-8 escaped byte-wise
+		"héllo-wörld",
 		"trailing:",
 		":leading",
 	} {
@@ -70,9 +58,6 @@ func TestEncodeDecode_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestSessionDir_SubAgent_MkdirSucceeds reproduces the EXACT live failure and
-// proves the fix : creating a sub-agent session directory now works on every
-// OS, and distinct sub-agents never collide on one directory.
 func TestSessionDir_SubAgent_MkdirSucceeds(t *testing.T) {
 	p := NewPaths(t.TempDir())
 	sid := "bd79cee8-c650-472f-b444-9c7cf7127680::agent::researcher#a396c996de"
@@ -90,7 +75,6 @@ func TestSessionDir_SubAgent_MkdirSucceeds(t *testing.T) {
 		t.Fatal("distinct sub-agent sids collided on one directory")
 	}
 
-	// The leaf component must be free of OS-illegal characters.
 	leaf := encodeSessionDir(sid)
 	if strings.ContainsAny(leaf, `:<>"/\|?*`) {
 		t.Errorf("session dir leaf %q contains an OS-illegal character", leaf)

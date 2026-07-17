@@ -46,8 +46,6 @@ func newTestManager(d runtime.ToolDispatcher) *Manager {
 	return m
 }
 
-// A command that finishes within the threshold returns its result transparently,
-// with no promotion and no completion notification (the waiter suppresses it).
 func TestPromote_FastIsTransparent(t *testing.T) {
 	fd := &fakeDispatcher{bashFn: func(ctx context.Context) runtime.ToolOutcome { return okOutcome("BUILD DONE") }}
 	mgr := newTestManager(fd)
@@ -65,8 +63,6 @@ func TestPromote_FastIsTransparent(t *testing.T) {
 	}
 }
 
-// A command still running at the threshold is moved to the background: the agent
-// gets a handoff with the task_id immediately, and the task notifies on completion.
 func TestPromote_SlowMovesToBackground(t *testing.T) {
 	fd := &fakeDispatcher{bashFn: func(ctx context.Context) runtime.ToolOutcome {
 		select {
@@ -91,7 +87,6 @@ func TestPromote_SlowMovesToBackground(t *testing.T) {
 		t.Fatalf("metadata.promoted not set: %+v", out.Metadata)
 	}
 
-	// The task keeps running and notifies when it finishes.
 	deadline := time.Now().Add(2 * time.Second)
 	for len(mgr.DrainNotificationsPeek("s2")) == 0 {
 		if time.Now().After(deadline) {
@@ -105,7 +100,6 @@ func TestPromote_SlowMovesToBackground(t *testing.T) {
 	}
 }
 
-// A non-bash tool passes straight through to the inner dispatcher, untouched.
 func TestPromote_NonBashPassthrough(t *testing.T) {
 	fd := &fakeDispatcher{}
 	pd := NewPromotingDispatcher(fd, newTestManager(fd), 50*time.Millisecond)
@@ -115,7 +109,6 @@ func TestPromote_NonBashPassthrough(t *testing.T) {
 	}
 }
 
-// An explicit background_run (ctx already marked background) is never re-promoted.
 func TestPromote_AlreadyBackgroundPassthrough(t *testing.T) {
 	fd := &fakeDispatcher{bashFn: func(ctx context.Context) runtime.ToolOutcome { return okOutcome("DIRECT") }}
 	pd := NewPromotingDispatcher(fd, newTestManager(fd), 50*time.Millisecond)
@@ -125,7 +118,6 @@ func TestPromote_AlreadyBackgroundPassthrough(t *testing.T) {
 	}
 }
 
-// A nil manager disables promotion: everything dispatches directly.
 func TestPromote_NilManagerPassthrough(t *testing.T) {
 	fd := &fakeDispatcher{bashFn: func(ctx context.Context) runtime.ToolOutcome { return okOutcome("PLAIN") }}
 	pd := NewPromotingDispatcher(fd, nil, 50*time.Millisecond)

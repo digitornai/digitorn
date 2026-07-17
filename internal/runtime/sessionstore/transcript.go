@@ -2,18 +2,6 @@ package sessionstore
 
 import "sort"
 
-// ReadTranscript reconstructs the COMPLETE, lossless message transcript of a
-// session straight from disk — the storage snapshot's messages (everything up
-// to its cutoff) followed by the message events appended since. It deliberately
-// ignores LLM-context compaction: no cutoff trim, no summary injection. It is
-// the source of truth for the human transcript (REST /history) and for the
-// lossless snapshot rebuild, kept independent of the live in-memory state, whose
-// message slice is bounded to the model's window.
-//
-// Sound because every message is written with AppendDurable (fsynced before it
-// is projected in memory), so disk is never behind the in-memory view.
-//
-// Empty (not an error) when the session has no snapshot and no events.
 func ReadTranscript(p Paths, sid string) ([]Message, error) {
 	if sid == "" {
 		return nil, nil
@@ -27,11 +15,6 @@ func ReadTranscript(p Paths, sid string) ([]Message, error) {
 	return TranscriptFromParts(snap, jres.Events), jerr
 }
 
-// MessagesAfterCutoff returns the messages that survive an LLM-context
-// compaction at cutoff — those with Seq > cutoff, plus any unsequenced (Seq 0,
-// freshly appended) ones, matching contextcompact.ApplyView's keep rule. It
-// ALLOCATES a fresh slice when it trims, so the large pre-cutoff backing array
-// is released (bounding memory) rather than retained. cutoff 0 is a no-op.
 func MessagesAfterCutoff(msgs []Message, cutoff uint64) []Message {
 	if cutoff == 0 {
 		return msgs
@@ -54,13 +37,6 @@ func MessagesAfterCutoff(msgs []Message, cutoff uint64) []Message {
 	return out
 }
 
-// MergeMessagesBySeq returns the lossless union of two message lists, deduped
-// by Seq and sorted ascending. Used where neither source is guaranteed complete
-// on its own — e.g. the storage snapshot, which must hold the full transcript
-// even if disk lags the bounded in-memory window (or vice versa). Seq-0
-// (unsequenced) messages can't be deduped, so the first list's are kept and the
-// second's are dropped (the second list is always the disk rebuild, which only
-// ever carries sequenced messages).
 func MergeMessagesBySeq(a, b []Message) []Message {
 	bySeq := make(map[uint64]Message, len(a)+len(b))
 	var zero []Message
@@ -89,11 +65,6 @@ func MergeMessagesBySeq(a, b []Message) []Message {
 	return append(out, zero...)
 }
 
-// TranscriptFromParts builds the full message transcript from an optional
-// storage snapshot and a slice of events — pure, no I/O. snap.Messages cover
-// every message up to snap.CutoffSeq ; events contribute the message events with
-// Seq beyond that cutoff (an untruncated JSONL may still carry <= cutoff ones,
-// which are skipped to avoid duplicates). Non-message events are ignored.
 func TranscriptFromParts(snap *SessionSnapshot, events []Event) []Message {
 	var out []Message
 	var cutoff uint64

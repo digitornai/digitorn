@@ -13,13 +13,8 @@ import (
 	"github.com/digitornai/digitorn/internal/compiler/diagnostic"
 )
 
-// repoManifestsDir locates the repository's manifests/ directory from the
-// test binary's CWD (internal/compiler/). Returns "" if not found — tests
-// will then fall back to the compiler's default discovery.
 func repoManifestsDir(t *testing.T) string {
 	t.Helper()
-	// Walk up from CWD looking for a directory that contains both
-	// "manifests/" and "go.mod" (the repo root sentinel).
 	wd, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("getwd: %v", err)
@@ -42,9 +37,6 @@ func repoManifestsDir(t *testing.T) string {
 	return ""
 }
 
-// newCompilerForFixtures returns a compiler wired with the repo's
-// manifest directory so fixtures can reference the real modules
-// (filesystem, llm_provider, …) declared at the repo root.
 func newCompilerForFixtures(t *testing.T) *compiler.Compiler {
 	t.Helper()
 	c := compiler.New()
@@ -54,23 +46,15 @@ func newCompilerForFixtures(t *testing.T) *compiler.Compiler {
 	return c
 }
 
-// expectations declares what a fixture should produce.
-// A fixture is "valid" if Codes is empty and AllowWarnings is true (or the
-// fixture produces zero warnings). A fixture is "invalid" if Codes lists
-// the diagnostic codes that MUST appear (others are tolerated unless
-// Strict is set, in which case the set must match exactly).
 type expectations struct {
 	Description    string   `json:"description,omitempty"`
-	Codes          []string `json:"codes,omitempty"`           // required codes (errors or warnings)
-	ForbiddenCodes []string `json:"forbidden_codes,omitempty"` // codes that must NOT appear
-	AllowWarnings  bool     `json:"allow_warnings,omitempty"`  // valid fixture : tolerate warnings
-	Strict         bool     `json:"strict,omitempty"`          // strict mode : Codes must equal observed set
-	BuildOK        bool     `json:"build_ok,omitempty"`        // also exercise codegen.Build and assert it succeeds
+	Codes          []string `json:"codes,omitempty"`
+	ForbiddenCodes []string `json:"forbidden_codes,omitempty"`
+	AllowWarnings  bool     `json:"allow_warnings,omitempty"`
+	Strict         bool     `json:"strict,omitempty"`
+	BuildOK        bool     `json:"build_ok,omitempty"`
 }
 
-// TestFixtures walks internal/compiler/testdata/{valid,invalid}/* and
-// compiles each one, comparing diagnostics to the fixture's expect.json
-// (or default expectations if absent). One subdirectory = one test case.
 func TestFixtures(t *testing.T) {
 	for _, category := range []string{"valid", "invalid"} {
 		category := category
@@ -116,14 +100,12 @@ func runFixture(t *testing.T, category, fixDir string) {
 	gotErrors := codeSet(res.Diagnostics.Errors())
 	gotWarnings := codeSet(res.Diagnostics.Warnings())
 
-	// Required codes : each must appear at least once.
 	for _, code := range want.Codes {
 		if !got[code] {
 			t.Errorf("%s: missing expected code %s\nobserved: %v",
 				fixDir, code, sortedKeys(got))
 		}
 	}
-	// Forbidden codes : none may appear.
 	for _, code := range want.ForbiddenCodes {
 		if got[code] {
 			t.Errorf("%s: forbidden code %s appeared\nobserved: %v",
@@ -131,7 +113,6 @@ func runFixture(t *testing.T, category, fixDir string) {
 		}
 	}
 
-	// Category invariants.
 	switch category {
 	case "valid":
 		if len(gotErrors) > 0 {

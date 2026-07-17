@@ -9,9 +9,6 @@ import (
 	"github.com/digitornai/digitorn/internal/runtime/context/meta"
 )
 
-// agentManagerAdapter bridges the concrete agent.Manager to the
-// meta.AgentManager interface the `agent` delegation tool drives — converting
-// the LLM's float seconds to a Duration and agent.Snapshot to meta.AgentSnapshot.
 type agentManagerAdapter struct{ m *agent.Manager }
 
 func (a agentManagerAdapter) Spawn(ctx context.Context, req meta.AgentSpawnRequest) (string, error) {
@@ -87,8 +84,6 @@ func toMetaSnap(s agent.Snapshot) meta.AgentSnapshot {
 	}
 }
 
-// newCoordinatorLookup gates the `agent` tool : only an agent whose role is
-// "coordinator" may delegate. Reads the lock-free app snapshot.
 func newCoordinatorLookup(apps appmgr.Manager) func(appID, agentID string) bool {
 	return func(appID, agentID string) bool {
 		ra, err := apps.Get(context.Background(), appID)

@@ -1,7 +1,3 @@
-// Package projectsettings loads per-project overrides from .digitorn/settings.yaml.
-// Only the permissions block is supported in phase 1. The file is optional;
-// a missing file is silently ignored. Nothing in this package mutates shared
-// app state — it always returns a fresh CapabilitiesConfig to merge.
 package projectsettings
 
 import (
@@ -29,8 +25,6 @@ type PermissionsBlock struct {
 	Approve []string `yaml:"approve,omitempty"`
 }
 
-// Load reads .digitorn/settings.yaml from workdir. Returns nil, nil when the
-// file is absent (no override). Returns an error only on malformed YAML.
 func Load(workdir string) (*Settings, error) {
 	if workdir == "" {
 		return nil, nil
@@ -38,7 +32,7 @@ func Load(workdir string) (*Settings, error) {
 	path := filepath.Join(workdir, FileName)
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, nil // missing = no override
+		return nil, nil
 	}
 	var s Settings
 	if err := yaml.Unmarshal(data, &s); err != nil {
@@ -47,9 +41,6 @@ func Load(workdir string) (*Settings, error) {
 	return &s, nil
 }
 
-// Capabilities converts the permissions block into a CapabilitiesConfig that
-// can be merged with the app-level caps. Returns nil when no permissions are
-// declared.
 func (s *Settings) Capabilities() *schema.CapabilitiesConfig {
 	if s == nil {
 		return nil
@@ -65,8 +56,6 @@ func (s *Settings) Capabilities() *schema.CapabilitiesConfig {
 	}
 }
 
-// Allow appends a signature to permissions.allow in .digitorn/settings.yaml,
-// creating the file if it doesn't exist. Thread-safe.
 func Allow(workdir, signature string) error {
 	if workdir == "" || signature == "" {
 		return nil
@@ -97,10 +86,6 @@ func Allow(workdir, signature string) error {
 	return os.WriteFile(path, data, 0644)
 }
 
-// parseGrants converts ["bash.run", "filesystem.write"] into CapabilityGrant
-// slices. Entries without a dot are treated as module-level (all tools).
-// Parenthetical argument patterns like "bash.run(go test *)" are accepted but
-// the filter part is stripped — argument-level matching is not yet implemented.
 func parseGrants(entries []string) []schema.CapabilityGrant {
 	if len(entries) == 0 {
 		return nil
@@ -111,11 +96,9 @@ func parseGrants(entries []string) []schema.CapabilityGrant {
 		if e == "" {
 			continue
 		}
-		// Strip argument patterns: "bash.run(go test *)" → "bash.run"
 		if i := strings.Index(e, "("); i > 0 {
 			e = e[:i]
 		}
-		// Strip arg suffix from signatures: "bash.run:go test ./..." → "bash.run"
 		if i := strings.Index(e, ":"); i > 0 {
 			e = e[:i]
 		}

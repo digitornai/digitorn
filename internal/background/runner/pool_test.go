@@ -60,7 +60,6 @@ func waitFor(t *testing.T, d time.Duration, cond func() bool, msg string) {
 	t.Fatalf("timeout waiting for: %s", msg)
 }
 
-// fast pool options for tests
 func fastOpts(workers int) Options {
 	return Options{Workers: workers, LeaseTTL: 5 * time.Second, PollMin: 5 * time.Millisecond, PollMax: 20 * time.Millisecond}
 }
@@ -86,8 +85,6 @@ func TestPool_DrainsAll(t *testing.T) {
 	seed(t, s, 50)
 	p := New(s, procFunc(func(_ context.Context, _ store.Job) error { return nil }), fastOpts(8))
 	runPool(t, p)
-	// Wait on the durable outcome (Completed), not the processor's own counter,
-	// which would race ahead of the store.Complete write.
 	waitFor(t, 5*time.Second, func() bool { return p.Stats().Completed == 50 }, "all 50 completed")
 }
 
@@ -119,7 +116,7 @@ func TestPool_RetryThenSucceed(t *testing.T) {
 	s := newStore(t)
 	seed(t, s, 1)
 	p := New(s, procFunc(func(_ context.Context, j store.Job) error {
-		if j.Attempts < 2 { // fails the first claim, succeeds on the retry
+		if j.Attempts < 2 {
 			return Retry(errors.New("transient"), 10*time.Millisecond)
 		}
 		return nil
@@ -141,11 +138,8 @@ func TestPool_TerminalFail(t *testing.T) {
 	waitFor(t, 5*time.Second, func() bool { return p.Stats().Failed == 1 }, "terminally failed")
 }
 
-// A processor that panics must NOT take down its worker or the pool: the other
-// jobs still drain.
 func TestPool_PanicShielded(t *testing.T) {
 	s := newStore(t)
-	// one poison job + 6 good ones
 	_, _, _ = s.Enqueue(context.Background(), store.NewJob{AppID: "a", Provider: "p", DedupKey: "boom", Payload: []byte(`{}`)})
 	for i := 0; i < 6; i++ {
 		_, _, _ = s.Enqueue(context.Background(), store.NewJob{AppID: "a", Provider: "p", DedupKey: fmt.Sprintf("ok-%d", i), Payload: []byte(`{}`)})
@@ -157,7 +151,6 @@ func TestPool_PanicShielded(t *testing.T) {
 		return nil
 	}), fastOpts(3))
 	runPool(t, p)
-	// the 6 good jobs complete despite the panicking one
 	waitFor(t, 5*time.Second, func() bool { return p.Stats().Completed == 6 }, "6 good jobs drained past the panic")
 	if p.Stats().Processed < 7 {
 		t.Fatalf("the poison job should have been processed (and shielded), processed=%d", p.Stats().Processed)

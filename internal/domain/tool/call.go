@@ -7,7 +7,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// Call is an LLM-issued tool invocation request.
 type Call struct {
 	ID       string          `json:"id"`
 	ModuleID string          `json:"module_id"`
@@ -15,7 +14,6 @@ type Call struct {
 	Params   json.RawMessage `json:"params"`
 }
 
-// CallRecord is the persisted record of a tool call, used for audit/replay.
 type CallRecord struct {
 	ID         uuid.UUID       `json:"id"`
 	SessionID  uuid.UUID       `json:"session_id"`

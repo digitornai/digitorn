@@ -17,9 +17,6 @@ func ctxWith(sess, app, user string) context.Context {
 	return tool.WithIdentity(context.Background(), tool.Identity{SessionID: sess, AppID: app, UserID: user})
 }
 
-// TestSchedule_PostsToBackground proves the tool bridges to the bg ops API: it
-// reads session/app/user from ctx and POSTs the schedule + payload, forwarding
-// the bearer token, and surfaces next_run to the model.
 func TestSchedule_PostsToBackground(t *testing.T) {
 	var gotBody map[string]any
 	var gotAuth, gotPath string
@@ -59,9 +56,6 @@ func TestSchedule_PostsToBackground(t *testing.T) {
 	}
 }
 
-// TestSchedule_PerAppConfigFromCtx proves the per-app config (delivered in ctx,
-// the only correct path for a shared in-proc singleton) overrides the Init-time
-// default — the bug that made every app hit the wrong background port.
 func TestSchedule_PerAppConfigFromCtx(t *testing.T) {
 	var hit bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -72,9 +66,7 @@ func TestSchedule_PerAppConfigFromCtx(t *testing.T) {
 	defer srv.Close()
 
 	m := New()
-	// Init points at a DEAD url (simulates the singleton's stale default)…
 	_ = m.Init(context.Background(), map[string]any{"background_url": "http://127.0.0.1:1"})
-	// …but the calling app's per-module config in ctx points at the live server.
 	ctx := module.WithModuleConfig(ctxWith("s", "a", "u"), map[string]any{"background_url": srv.URL})
 
 	res, err := m.schedule(ctx, json.RawMessage(`{"schedule":"* * * * *","message":"x"}`))
@@ -86,7 +78,6 @@ func TestSchedule_PerAppConfigFromCtx(t *testing.T) {
 	}
 }
 
-// Default reply applies when the agent omits it.
 func TestSchedule_DefaultReply(t *testing.T) {
 	var gotBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -117,13 +108,11 @@ func TestSchedule_Validations(t *testing.T) {
 	if res, _ := m.schedule(ctxWith("s", "a", "u"), json.RawMessage(`{"schedule":"* * * * *"}`)); res.Success {
 		t.Error("missing message must fail")
 	}
-	// No session context (tool called outside a session) → refuse.
 	if res, _ := m.schedule(context.Background(), json.RawMessage(`{"schedule":"* * * * *","message":"x"}`)); res.Success {
 		t.Error("missing session context must fail")
 	}
 }
 
-// A bg refusal (e.g. bad cron) is surfaced to the model, not swallowed.
 func TestSchedule_BackgroundError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(422)

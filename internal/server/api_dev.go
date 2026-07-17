@@ -10,10 +10,6 @@ import (
 	"github.com/digitornai/digitorn/internal/module/proxy"
 )
 
-// devInvokeRequest is what POST /api/_dev/invoke accepts. Used by
-// operators + integration tests to dispatch a tool call from outside
-// the daemon, ahead of the runtime being fully wired. ONLY active when
-// cfg.Auth.DevMode is true.
 type devInvokeRequest struct {
 	ModuleID string          `json:"module_id"`
 	Tool     string          `json:"tool"`
@@ -21,25 +17,14 @@ type devInvokeRequest struct {
 	UserID   string          `json:"user_id,omitempty"`
 }
 
-// devInvokeResponse exposes the dispatched tool.Result PLUS metadata
-// about where the call went : "in-proc" or "worker:<pool-id>". This
-// makes it possible to verify from the outside that a configured
-// worker pool is actually serving its modules.
 type devInvokeResponse struct {
 	Success    bool   `json:"success"`
 	Data       any    `json:"data,omitempty"`
 	Error      string `json:"error,omitempty"`
 	DurationMs int64  `json:"duration_ms"`
-	Via        string `json:"via"` // "in-proc" or "worker:<kind>"
+	Via        string `json:"via"`
 }
 
-// devInvoke implements POST /api/_dev/invoke. Validates the input,
-// looks up the module in the servicebus to determine its execution
-// path (in-proc module vs ProxyModule pointing at a worker), then
-// dispatches via bus.Call and returns the typed response.
-//
-// Note : the route is gated to dev_mode at mount-time (routes.go),
-// so production deployments never expose it.
 func (d *Daemon) devInvoke(w http.ResponseWriter, r *http.Request) {
 	var req devInvokeRequest
 	if err := readJSON(r, &req); err != nil {
@@ -51,10 +36,6 @@ func (d *Daemon) devInvoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Lookup the module to label its execution path (proxy vs
-	// in-proc). The bus is the source of truth — same instance
-	// the runtime will call, no second source of routing info to
-	// keep in sync.
 	via := "unknown"
 	if sb, ok := d.bus.(*servicebus.Bus); ok {
 		if mod, found := sb.Get(req.ModuleID); found {
@@ -68,8 +49,6 @@ func (d *Daemon) devInvoke(w http.ResponseWriter, r *http.Request) {
 
 	params := []byte(req.Params)
 	if len(params) == 0 {
-		// servicebus.Bus.Call already tolerates nil ; we just keep
-		// the wire shape stable for callers using `params: {}`.
 		params = []byte(`{}`)
 	}
 

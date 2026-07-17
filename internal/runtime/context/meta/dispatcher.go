@@ -14,135 +14,44 @@ import (
 	"github.com/digitornai/digitorn/internal/runtime/toolname"
 )
 
-// MetaDispatcher implements runtime.ToolDispatcher by intercepting
-// the 5 context_builder meta-tools (search_tools, get_tool,
-// execute_tool, list_categories, browse_category) and forwarding
-// everything else to an Inner dispatcher (the production
-// ModuleDispatcher / D1).
-//
-// Auto-routing : when the LLM calls a domain tool by its short
-// FQN (e.g. "filesystem.read"), the dispatcher receives that
-// canonical name directly and forwards to Inner — no special-case
-// handling needed. This is the documented behaviour from
-// docs-site/docs/language/04-tools.md "Auto-routing direct calls" :
-//
-//	"If the LLM calls a tool by its short name directly
-//	 (filesystem.read({...}) instead of execute_tool(...)), the
-//	 agent loop transparently routes it through execute_tool."
-//
-// Our version is even simpler : the dispatcher accepts both forms
-// (canonical FQN and execute_tool wrapper) and produces the same
-// outcome ; no extra hop through execute_tool when the name is
-// already a domain tool FQN.
 type MetaDispatcher struct {
-	// IndexLookup resolves the per-agent ToolIndex (built by CB-1
-	// and cached by wiring.Builder) at dispatch time. The contract
-	// is strict : a (appID, agentID) tuple identifies exactly one
-	// agent within one app, and exactly one ToolIndex was built
-	// for that pair when the engine called Context.BuildFor at the
-	// start of the turn. The lookup MUST hit the same cache entry,
-	// guaranteeing the meta-tools see the same tool universe the
-	// LLM was offered.
-	//
-	// Returning nil is the agreed-upon "no index" signal — every
-	// handler degrades gracefully (empty hits, empty categories,
-	// "tool not found"). The dispatcher NEVER panics on a nil
-	// lookup ; it errors cleanly so the LLM sees the failure and
-	// can recover.
-	//
-	// Required for meta-tool handlers (search_tools, get_tool,
-	// list_categories, browse_category). execute_tool re-enters
-	// Dispatch and works regardless.
 	IndexLookup func(appID, agentID string) *index.ToolIndex
 
-	// Inner is the dispatcher that actually executes domain tools.
-	// In production this is the ModuleDispatcher (D1) wrapped via
-	// runtime.ToolDispatcher ; in tests a stub. nil = every domain
-	// tool returns "tool dispatcher not wired" (the doc-default
-	// behaviour for unconfigured runtimes).
 	Inner runtime.ToolDispatcher
 
-	// BrowsePageSize sets the number of tools per page returned by
-	// browse_category. 0 = use DefaultBrowsePageSize.
 	BrowsePageSize int
 
-	// AskUser bridges context_builder.ask_user to the daemon's
-	// approval / human-input mechanism. nil = ask_user returns
-	// "not wired" so the LLM can fall back.
 	AskUser AskUserBridge
 
-	// Background routes background_run's 5 modes to a manager.
-	// nil = background_run returns "not wired".
 	Background BackgroundManager
 
-	// Agents routes the `agent` delegation tool's modes (spawn / wait /
-	// status / list / cancel) to the multi-agent orchestrator. nil = the
-	// `agent` tool returns "not wired".
 	Agents AgentManager
 
-	// KV is the shared key-value store accessible to all agents of the same
-	// root session. nil = the kv tool returns "not wired".
 	KV AgentKVStore
 
-	// CoordinatorLookup reports whether (appID, agentID) is a coordinator —
-	// only coordinators may call the `agent` tool. nil = no role gate (the
-	// tool is open ; the daemon wires this from the app manager).
 	CoordinatorLookup func(appID, agentID string) bool
 
-	// Memory persists the agent's durable working-memory mutations (set_goal,
-	// remember, task_create, task_update) as session events. The daemon wires
-	// the engine here. nil = the memory tools return "not wired".
 	Memory MemoryWriter
 
-	// Progress, when set, receives a per-child completion event from run_parallel
-	// as EACH action finishes (an EventToolProgress), so the client is informed
-	// incrementally instead of only at the barrier. It does NOT change the
-	// combined result the agent gets, and the event is not projected into the
-	// agent's history — purely an observability signal. Emitted from the fan-in,
-	// so it covers every tool the same way, present and future. nil = no-op.
 	Progress func(ctx context.Context, ev sessionstore.Event)
 
-	// SkillLoader resolves use_skill's name → markdown lookups.
-	// nil = use_skill returns "not wired".
 	SkillLoader SkillLoader
 
-	// AppCaller invokes other deployed apps for call_app. nil =
-	// call_app returns "not wired".
 	AppCaller AppCaller
 
-	// Gate evaluates a domain sub-tool reached through a meta path
-	// (execute_tool, run_parallel, background_run launch) before it
-	// executes, so capabilities.deny / approve apply no matter how
-	// the model reached it. nil = no enforcement on these paths
-	// (dev/test). The daemon wires the engine here.
 	Gate SubToolGate
 
-	// Logger records internal anomalies that are converted into tool
-	// errors rather than surfaced as crashes — e.g. a sub-tool panic
-	// recovered during run_parallel (the stack trace would otherwise be
-	// lost). nil = no logging (dev/test default).
 	Logger *slog.Logger
 }
 
-// CallAppWired / AskUserWired / UseSkillWired report whether the optional
-// context_builder primitive bridges are wired. The engine queries these (via a
-// structural interface) so it offers call_app / ask_user / use_skill ONLY when
-// they can actually run — never a "not wired" tool that small models mis-pick.
 func (m *MetaDispatcher) CallAppWired() bool  { return m != nil && m.AppCaller != nil }
 func (m *MetaDispatcher) AskUserWired() bool  { return m != nil && m.AskUser != nil }
 func (m *MetaDispatcher) UseSkillWired() bool { return m != nil && m.SkillLoader != nil }
 
-// SubToolGate is the chokepoint hook : it gates a domain sub-tool
-// resolved inside a meta handler. Returns nil to allow the call, or an
-// errored outcome to short-circuit (deny / approval refused). The
-// engine satisfies this structurally via Engine.GateSubTool.
 type SubToolGate interface {
 	GateSubTool(ctx context.Context, inv runtime.ToolInvocation) *runtime.ToolOutcome
 }
 
-// gateTarget runs Gate on the resolved sub-tool when a gate is wired.
-// Returns the blocking outcome (deny / approval refused) or nil to
-// proceed. Centralised so every meta handler gates identically.
 func (m *MetaDispatcher) gateTarget(ctx context.Context, target runtime.ToolInvocation) *runtime.ToolOutcome {
 	if m.Gate == nil {
 		return nil
@@ -150,9 +59,6 @@ func (m *MetaDispatcher) gateTarget(ctx context.Context, target runtime.ToolInvo
 	return m.Gate.GateSubTool(ctx, target)
 }
 
-// resolveIndex returns the per-agent ToolIndex for the given call,
-// or nil if the lookup is missing or returns nil. Centralised so
-// every handler has the same nil-safe behaviour.
 func (m *MetaDispatcher) resolveIndex(call runtime.ToolInvocation) *index.ToolIndex {
 	if m == nil || m.IndexLookup == nil {
 		return nil
@@ -160,8 +66,6 @@ func (m *MetaDispatcher) resolveIndex(call runtime.ToolInvocation) *index.ToolIn
 	return m.IndexLookup(call.AppID, call.AgentID)
 }
 
-// IndexFQNs exposes the per-agent tool index's FQN list for external
-// inspection (the dogfooding surface endpoint). Nil when no index was built.
 func (m *MetaDispatcher) IndexFQNs(appID, agentID string) []string {
 	if m == nil || m.IndexLookup == nil {
 		return nil
@@ -173,9 +77,6 @@ func (m *MetaDispatcher) IndexFQNs(appID, agentID string) []string {
 	return idx.FQNList()
 }
 
-// ResolveToolName qualifies a possibly-bare tool name to its canonical FQN using
-// the same steps Dispatch applies, so callers that run BEFORE Dispatch (the
-// security gate) evaluate the real tool, not a bare action with an empty module.
 func (m *MetaDispatcher) ResolveToolName(appID, agentID, name string) string {
 	canonical := ResolveAlias(Canonicalize(name))
 	if strings.Contains(canonical, ".") || m == nil || m.IndexLookup == nil {
@@ -193,19 +94,9 @@ func (m *MetaDispatcher) ResolveToolName(appID, agentID, name string) string {
 	return canonical
 }
 
-// DefaultBrowsePageSize matches the reference daemon's
-// browse_category default (actions_meta.py).
 const DefaultBrowsePageSize = 20
 
-// Dispatch is the ToolDispatcher entry point. Routes meta-tools to
-// internal handlers and forwards everything else to Inner.
 func (m *MetaDispatcher) Dispatch(ctx context.Context, call runtime.ToolInvocation) (out runtime.ToolOutcome) {
-	// A panic in ANY tool handler — a buggy module, a worker-side decode, or a
-	// meta-handler edge case (a bad limit/page) — must NEVER crash the daemon.
-	// The foreground turn goroutines (engine.dispatchToolsParallel) and the
-	// background task goroutine both funnel through here with no recover of their
-	// own, so this is the single chokepoint that converts a panic into an errored
-	// outcome the agent can see and recover from.
 	defer func() {
 		if r := recover(); r != nil {
 			logger := m.Logger

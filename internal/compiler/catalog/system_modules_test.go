@@ -8,7 +8,7 @@ import (
 
 
 func TestSystemModulesSeeded(t *testing.T) {
-	cat := catalog.Empty() // no external sources — only the built-in seed
+	cat := catalog.Empty()
 
 	cases := []struct {
 		module string

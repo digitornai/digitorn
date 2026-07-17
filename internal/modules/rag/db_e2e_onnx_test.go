@@ -16,13 +16,6 @@ import (
 	"github.com/digitornai/digitorn/internal/indexer"
 )
 
-// End-to-end : index a REAL remote MySQL product catalog through the shared
-// dbaccess socle → chunk+embed with REAL minilm → store in REAL Qdrant → a
-// natural-language query retrieves the right product. This is the "index a
-// long MySQL database, then ask a question" case, proven live.
-//
-//	ONNXRUNTIME_LIB=bin/onnxruntime.dll go test -tags onnx ./internal/modules/rag/ \
-//	  -run TestRAG_MySQLIndex_E2E -v
 func TestRAG_MySQLIndex_E2E(t *testing.T) {
 	native := os.Getenv("DBACCESS_MYSQL_NATIVE")
 	if native == "" {

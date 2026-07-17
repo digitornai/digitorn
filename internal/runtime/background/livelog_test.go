@@ -41,11 +41,9 @@ func TestLiveLog_TailLines_NLargerThanContent(t *testing.T) {
 }
 
 func TestLiveLog_TailLines_BoundedBy64KB(t *testing.T) {
-	// Write more than the cap, verify the tail respects maxLiveLog and the
-	// line-count slicing is consistent with what's still in the buffer.
 	var l liveLog
 	long := strings.Repeat("x", 200)
-	for range 500 { // 500 * 201 = 100.5 KB → triggers the 2× cap trim
+	for range 500 {
 		_, _ = l.Write([]byte(long + "\n"))
 	}
 	full := l.tail()
@@ -58,7 +56,6 @@ func TestLiveLog_TailLines_BoundedBy64KB(t *testing.T) {
 	}
 }
 
-// itoa avoids importing strconv just for tests.
 func itoa(n int) string {
 	if n == 0 {
 		return "0"

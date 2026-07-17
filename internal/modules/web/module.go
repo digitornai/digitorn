@@ -57,11 +57,13 @@ type Module struct {
 	client  *http.Client // SSRF-guarded; used for LLM-supplied URLs (fetch)
 	backend *http.Client // plain; used for operator-configured search endpoints
 	cache   *fetchCache
+	browser *browserEngine // lazy headless renderer for JS-heavy pages
+	lastURL sync.Map       // session id → last fetched url (to reopen for interaction)
 }
 
 // New constructs the web module with its tools wired.
 func New() *Module {
-	m := &Module{}
+	m := &Module{browser: newBrowserEngine()}
 	m.Base = module.Base{
 		ID:          "web",
 		Version:     "1.0.0",
@@ -79,7 +81,8 @@ func New() *Module {
 
 	m.RegisterTool(module.Tool{
 		Name:        "search",
-		Description: "Search the web and return ranked results. Each result carries title, URL, snippet AND (by default) the page's main content rendered as clean Markdown — headings, links and lists preserved — so you can usually answer without a separate fetch. Set fetch_content=false for snippet-only.",
+		Description: "Search the web and return ranked results. Each result carries title, URL, snippet AND (by default) the page's main content rendered as clean Markdown — headings, links and lists preserved — so you can usually answer without a separate fetch. Set fetch_content=false for snippet-only. " +
+			"ALWAYS use this to search — never open google.com/bing in the browser and drive their search box: they block automated browsers with a CAPTCHA. Use the browser (web fetch) to navigate and interact with a page, not to run a search.",
 		Params: []tool.ParamSpec{
 			{Name: "query", Type: "string", Description: "Search query. Be specific (include version/year for current info).", Required: true},
 			{Name: "limit", Type: "integer", Description: "Max results (1-25, default 10).", Default: 10},
@@ -96,14 +99,24 @@ func New() *Module {
 
 	m.RegisterTool(module.Tool{
 		Name: "fetch",
-		Description: "Fetch a web page and return its content as clean text (default), markdown, or raw html. " +
-			"Set extract=true to keep only the main article body (strips nav/ads/footer). " +
-			"Set prompt to focus the returned content on a topic. Results are cached briefly.",
+		Description: "Open and read a web page like a human — JavaScript-rendered content included. Returns the clean text PLUS a page model: the heading outline, every link (where you can go), and every action (buttons, forms, tabs — what you can click), each with a stable `ref`. " +
+			"To NAVIGATE: pass `actions` to click/type/scroll on the page's live elements (target them by their `ref`), then the page is re-read and returned so you see the new state — the tab keeps its state (cookies, login, scroll) across calls. Omit `url` to act on the page already open. " +
+			"Set extract=true for the main article body only, prompt to focus on a topic, format for markdown/html, screenshot=true to also get a picture of the page. " +
+				"The page model also flags blockers you must handle: if it reports `captcha` (recaptcha/hcaptcha/turnstile/…), you CANNOT solve it — re-open the page with profile:true so a real window shows on the user's screen, tell the user to solve the CAPTCHA (or log in) there, wait for them to confirm, then continue. If it reports `modal`, a dialog is covering the page: act on THAT dialog's own buttons/fields first (complete or close it); elements behind it are inert and clicking them does nothing.",
 		Params: []tool.ParamSpec{
-			{Name: "url", Type: "string", Description: "URL to fetch.", Required: true},
+			{Name: "url", Type: "string", Description: "URL to open. Omit to act on (or re-read) the page already open in this session — filling a form then calling with NO url re-perceives the CURRENT state without reloading. Passing a url navigates: to a new page it loads it; to the page you're already on it stays put (no reload, your form input is kept). Never re-pass the url just to take a screenshot — omit it, optionally with screenshot:true."},
 			{Name: "format", Type: "string", Description: "Output format.", Default: "text", Enum: []any{"text", "markdown", "html"}},
 			{Name: "extract", Type: "boolean", Description: "Return only the main content (article body).", Default: false},
 			{Name: "prompt", Type: "string", Description: "Optional topic to focus extraction on; leave empty for the full page."},
+			{Name: "actions", Type: "array", Description: "Interactions to perform on the live page before re-reading it. Each: {do:\"click|type|press|select|check|hover|upload|scroll|wait\", ref:\"e42\" (from a prior page model), text:\"…\" (type: text to enter; select: visible label of the option), key:\"enter|tab|escape\" (press), path:\"cv.pdf\" (upload: a file from the session workspace), to:\"top|bottom\" (scroll), for:\"networkidle|<css>\" or ms:1500 (wait)}. " +
+				"For a radio button or checkbox use do:\"check\" (NOT click) — it reliably ticks the option and fires the events React/Vue forms need, even when the ref is on the styled label rather than the hidden input. Use do:\"hover\" to open menus that appear on mouse-over. " +
+				"To submit a search box or form, TYPE then {do:\"press\", key:\"enter\"} — that is far more reliable than clicking the submit button. " +
+				"Refs come from the LAST page model: a page that re-renders (typing in a live search box, opening a menu) replaces elements, so an old ref stops resolving. If a response carries a `note` saying your refs were stale, the page model in that same response has the fresh refs — just resend your action using them (do NOT add the url). To CLICK a link and move to another page, send only the click action (no url) with the ref from the latest page model; do not re-pass the url, which reloads instead of navigating."},
+			{Name: "approved_submit", Type: "boolean", Description: "Consequential form submissions (method=POST: applications, orders, messages, account changes) are BLOCKED by default. First fill the form, then show the user exactly what will be submitted and ask for their confirmation; only after they explicitly approve, retry the submitting action with approved_submit:true. Never set it without the user's go-ahead. Search/filter forms (GET) never need it.", Default: false},
+			{Name: "profile", Type: "boolean", Description: "Use the user's persistent, VISIBLE browser profile instead of an anonymous headless one. Set TRUE for any task that needs the user to be logged in (job boards, dashboards, anything behind a sign-in). The window is real and on their screen, and logins persist across sessions. Keep it TRUE for every call of that task so you stay on the same profile. When you hit a login wall, a CAPTCHA, or 2FA: tell the user what to do, ask them to complete it in the visible window, wait for them to confirm, then continue. Leave false for anonymous browsing, search and crawl.", Default: false},
+			{Name: "screenshot", Type: "boolean", Description: "Also return a JPEG screenshot of the rendered page (data URL).", Default: false},
+			{Name: "live", Type: "boolean", Description: "Stream a live view of the browser to the user while this runs, so they watch the page in real time. Set TRUE on EVERY call of a browsing sequence the user wants to watch — INCLUDING the very first navigation that opens the page, not just the later clicks (otherwise they miss the page loading). Leave false (default) for quick one-shot fetches, searches or crawls — don't stream those.", Default: false},
+			{Name: "crawl", Type: "object", Description: "Traverse the whole site from `url`: {depth:2 (link levels), max_pages:10, same_domain:true}. Returns a compact model per page (url, title, content excerpt, link count) instead of a single page."},
 		},
 		RiskLevel: tool.RiskLow,
 		Tags:      []string{"web", "fetch", "read"},
@@ -166,6 +179,9 @@ func (m *Module) apply(c Config) {
 
 // Stop releases idle connections and clears the cache.
 func (m *Module) Stop(ctx context.Context) error {
+	if m.browser != nil {
+		m.browser.close()
+	}
 	m.mu.Lock()
 	if m.client != nil {
 		m.client.CloseIdleConnections()

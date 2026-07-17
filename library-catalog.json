@@ -1,0 +1,30 @@
+{
+  "hint": "Stamp any item into scene.skeleton.json: {\"type\":\"stamp\",\"item\":\"<name>\",\"x\":0,\"y\":0}. Fetch more with http.download into libraries/ + libraries/manifest.json.",
+  "items": [
+    {
+      "name": "API Service",
+      "width": 160,
+      "height": 80
+    },
+    {
+      "name": "Database",
+      "width": 160,
+      "height": 80
+    },
+    {
+      "name": "User",
+      "width": 160,
+      "height": 80
+    },
+    {
+      "name": "Queue",
+      "width": 160,
+      "height": 80
+    },
+    {
+      "name": "Cache",
+      "width": 160,
+      "height": 80
+    }
+  ]
+}

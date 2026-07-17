@@ -13,10 +13,6 @@ import (
 
 func init() { Register(&fileConnector{}) }
 
-// fileConnector indexes a file or directory tree. Rich documents (PDF, DOCX,
-// XLSX, PPTX, HTML, EPUB, ODT) are extracted with Tabula (pure-Go, layout +
-// markdown) ; text-native files pass through as UTF-8. Each file → one
-// document keyed by its relative path.
 type fileConnector struct{}
 
 func (*fileConnector) Type() string                                         { return "file" }
@@ -109,8 +105,6 @@ func (*fileConnector) Walk(_ context.Context, spec SourceSpec, emit func(Documen
 	})
 }
 
-// extractFile returns the text + format label of a file, recover-guarded so a
-// malformed document never crashes a crawl. Empty text = skip.
 func extractFile(path string) (text, format string) {
 	ext := strings.ToLower(filepath.Ext(path))
 	if docExts[ext] {

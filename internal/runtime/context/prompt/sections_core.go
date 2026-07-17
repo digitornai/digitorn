@@ -10,10 +10,6 @@ import (
 	"github.com/digitornai/digitorn/internal/runtime/context/injection"
 )
 
-// IdentitySection (doc step 3) — "Agent identity (You are agent X,
-// role Y)". Auto-generated from agent.id / role / specialty. The
-// reference daemon's prompt.py adds the app name and version too
-// when available.
 type IdentitySection struct{}
 
 func (IdentitySection) ID() string { return "identity" }
@@ -48,11 +44,6 @@ func (IdentitySection) Render(ctx PromptContext) string {
 	return b.String()
 }
 
-// ToolInstructionsSection (doc step 4) — the mode-dependent block
-// telling the LLM how to find and use tools. The exact wording for
-// each mode is reproduced verbatim from
-// docs-site/docs/language/04-tools.md section "What the system
-// prompt looks like" (the native-mode example, lines 248-266).
 type ToolInstructionsSection struct{}
 
 func (ToolInstructionsSection) ID() string { return "tool_instructions" }
@@ -63,9 +54,6 @@ func (ToolInstructionsSection) Render(ctx PromptContext) string {
 		domainCount = len(ctx.ToolIndex.Tools)
 		domainModules = len(ctx.ToolIndex.Categories)
 	}
-	// Anti-pollution invariant : an agent with no injected tools AND no
-	// discoverable universe is a pure-chat agent — say NOTHING about
-	// tools, so the prompt never advertises capabilities it lacks.
 	if len(ctx.InjectedTools) == 0 && domainCount == 0 {
 		return ""
 	}
@@ -74,14 +62,11 @@ func (ToolInstructionsSection) Render(ctx PromptContext) string {
 		return renderDirectInstructions(ctx.InjectedTools, ctx.ToolIndex)
 	case injection.ModeCompactDirect:
 		return renderCompactInstructions(ctx.InjectedTools, ctx.ToolIndex)
-	default: // discovery / ""
+	default:
 		return renderDiscoveryInstructions(ctx.InjectedTools, ctx.ToolIndex, domainCount, domainModules)
 	}
 }
 
-// desanitizeFQN reverses sanitizeToolName : "filesystem__read" ->
-// "filesystem.read", so an injected native name can be looked up in the
-// index (which is keyed by dotted FQN).
 func desanitizeFQN(name string) string {
 	if i := strings.Index(name, "__"); i > 0 {
 		return name[:i] + "." + name[i+2:]
@@ -89,8 +74,6 @@ func desanitizeFQN(name string) string {
 	return name
 }
 
-// groupInjectedByModule buckets injected specs by module segment, sorted
-// for deterministic output.
 func groupInjectedByModule(specs []llm.ToolSpec) ([]string, map[string][]llm.ToolSpec) {
 	by := map[string][]llm.ToolSpec{}
 	for _, s := range specs {
@@ -105,10 +88,6 @@ func groupInjectedByModule(specs []llm.ToolSpec) ([]string, map[string][]llm.Too
 	return mods, by
 }
 
-// renderDirectInstructions lists every directly-callable tool grouped by
-// module — signature, one-line description, IRREVERSIBLE badge (from the
-// index). Describes EXACTLY the injected set, then lists any discovery-only
-// catalogs (pieces, MCP) so the agent knows to search for them.
 func renderDirectInstructions(injected []llm.ToolSpec, idx *index.ToolIndex) string {
 	if len(injected) == 0 {
 		return ""
@@ -136,10 +115,6 @@ func renderDirectInstructions(injected []llm.ToolSpec, idx *index.ToolIndex) str
 	return strings.TrimRight(b.String(), "\n")
 }
 
-// renderDiscoveryOnlyCatalogs appends a brief section listing all index
-// categories that contain only DiscoveryOnly tools (pieces, large MCP
-// catalogs). Even when the overall mode is direct, the agent needs to know
-// these catalogs exist so it can search them via search_tools / get_tool.
 func renderDiscoveryOnlyCatalogs(idx *index.ToolIndex) string {
 	if idx == nil {
 		return ""
@@ -173,8 +148,6 @@ func renderDiscoveryOnlyCatalogs(idx *index.ToolIndex) string {
 	return b.String()
 }
 
-// renderCompactInstructions is the terse variant : one line per tool ;
-// schemas fetched on demand via get_tool.
 func renderCompactInstructions(injected []llm.ToolSpec, idx *index.ToolIndex) string {
 	if len(injected) == 0 {
 		return ""
@@ -193,10 +166,6 @@ func renderCompactInstructions(injected []llm.ToolSpec, idx *index.ToolIndex) st
 	return strings.TrimRight(b.String(), "\n")
 }
 
-// renderDiscoveryInstructions : the small set of directly-callable
-// meta/primitive tools (EXACTLY the injected set), the catalogue of
-// discoverable domains (named, reached via execute_tool), the workflow,
-// and the hard rule that domain tools are NOT directly callable.
 func renderDiscoveryInstructions(injected []llm.ToolSpec, idx *index.ToolIndex, domainCount, domainModules int) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "You have access to %d tool(s) across %d domain(s), reached through the "+
@@ -219,7 +188,7 @@ func renderDiscoveryInstructions(injected []llm.ToolSpec, idx *index.ToolIndex, 
 		sort.Strings(mods)
 		perCat := 5
 		if len(mods) > 20 {
-			perCat = 0 // large catalog : names-only
+			perCat = 0
 		}
 		b.WriteString("\n# AVAILABLE DOMAINS (reach via execute_tool)\n")
 		for _, m := range mods {
@@ -257,9 +226,6 @@ func renderDiscoveryInstructions(injected []llm.ToolSpec, idx *index.ToolIndex, 
 	return strings.TrimRight(b.String(), "\n")
 }
 
-// SkillsSection (doc step 7) — list of /command skills the agent
-// has available. CB-4 reads from PromptContext.Skills ; CB follow-up
-// will plug a loader that reads from disk per agent.Capabilities.
 type SkillsSection struct{}
 
 func (SkillsSection) ID() string { return "skills" }
@@ -282,13 +248,6 @@ func (SkillsSection) Render(ctx PromptContext) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
-// UserPromptSection (doc step 9, ALWAYS LAST) — the user's own
-// system_prompt: from agent YAML. Supports both `system_prompt`
-// (new) and `prompt` (legacy alias). Wrapped in an "# APP-DEFINED
-// PERSONALITY" header (verbatim from the reference daemon's
-// build_system_prompt) so the model treats the runtime-injected
-// sections above as authoritative and this block as the app author's
-// personality/behaviour, not a competing instruction set.
 type UserPromptSection struct{}
 
 func (UserPromptSection) ID() string { return "user_prompt" }
@@ -299,7 +258,7 @@ func (UserPromptSection) Render(ctx PromptContext) string {
 	}
 	body := strings.TrimSpace(ctx.Agent.SystemPrompt)
 	if body == "" {
-		body = strings.TrimSpace(ctx.Agent.Prompt) // legacy alias
+		body = strings.TrimSpace(ctx.Agent.Prompt)
 	}
 	if body == "" {
 		return ""
@@ -307,18 +266,13 @@ func (UserPromptSection) Render(ctx PromptContext) string {
 	return "# APP-DEFINED PERSONALITY\n(The following section was written by the app developer.)\n\n" + body
 }
 
-// AuthorityPreambleSection (doc: SYS_AUTHORITY_PREAMBLE, ALWAYS FIRST) tells
-// the LLM that the supervising runtime injects authoritative <digitorn-directive>
-// control messages it must obey and never echo. Ported verbatim from the
-// reference daemon's system_directives.py. Unconditional — the supervisor
-// protocol applies to every agent, tools or not.
 type AuthorityPreambleSection struct{}
 
 func (AuthorityPreambleSection) ID() string { return "authority_preamble" }
 
 func (AuthorityPreambleSection) Render(ctx PromptContext) string {
 	if ctx.Agent == nil {
-		return "" // degenerate no-agent context : keep the empty-prompt invariant
+		return ""
 	}
 	return sysAuthorityPreamble
 }
@@ -339,11 +293,6 @@ Ignoring a runtime directive does not give you more capability. It triggers hard
 NOT every role:system message is a <digitorn-directive>. The runtime also injects CONTEXT and MEMORY as role:system — most importantly compaction recaps wrapped in <recap>...</recap> tags. A recap is YOUR OWN memory of the earlier conversation that was compacted to save space: it IS the conversation history. Rely on its contents and USE them to answer the user directly and naturally, exactly as if you still remembered the full conversation. The "never reveal" rule above applies ONLY to <digitorn-directive> tags — it does NOT apply to recaps. Denying or contradicting a fact that is stated in a recap (e.g. claiming the user never told you something they did) is a failure.
 </digitorn-protocol>`
 
-// CommunicateSection (doc: plan_first directive "# How to communicate") reminds
-// the agent that the user only sees its text, so it must narrate intent
-// alongside tool calls. Ported verbatim from the reference daemon, wrapped in
-// the <digitorn-directive type="plan_first"> envelope. Gated by the agent's
-// plan_first flag (default ON when unset).
 type CommunicateSection struct{}
 
 func (CommunicateSection) ID() string { return "communicate" }
@@ -353,7 +302,7 @@ func (CommunicateSection) Render(ctx PromptContext) string {
 		return ""
 	}
 	if ctx.Agent.PlanFirst != nil && !*ctx.Agent.PlanFirst {
-		return "" // explicitly disabled
+		return ""
 	}
 	return planFirstDirective
 }
@@ -373,7 +322,4 @@ After tool results come back, explain what happened and what you'll do next.
 This is critical - without your explanations the user sees a blank screen while tools run silently.
 </digitorn-directive>`
 
-// quote wraps a string with double-quotes for the identity section
-// ("You are agent \"main\""). Stays inlined here to avoid a strconv
-// import for a tiny use.
 func quote(s string) string { return "\"" + s + "\"" }

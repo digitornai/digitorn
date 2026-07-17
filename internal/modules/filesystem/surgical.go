@@ -5,29 +5,20 @@ import (
 	"strings"
 )
 
-// editLocator carries every way to point at an edit site. Exactly ONE locator
-// mode must be set ; resolveEditOp validates that and dispatches to the matching
-// strategy. The whole point is to let even a weak agent edit surgically WITHOUT
-// reproducing exact text : it reads the numbered lines, then says "replace lines
-// 12-15" or "insert after <anchor>". new_string is the content for every mode.
 type editLocator struct {
-	OldString    string // text locator : exact/fuzzy substring
-	NewString    string // replacement / inserted content (all modes)
-	ReplaceAll   bool   // text locator : change every match
-	Occurrence   int    // text locator : change only the Nth match (1-based)
-	StartLine    int    // line-range locator : 1-based inclusive
-	EndLine      int    // line-range locator : 1-based inclusive (0 = same as start)
-	InsertAfter  string // insert locator : after the unique line containing this
-	InsertBefore string // insert locator : before the unique line containing this
-	Prepend      bool   // insert at file start
-	Append       bool   // insert at file end
-	Expect       string // anti-drift : targeted text must contain this, else refuse
+	OldString    string
+	NewString    string
+	ReplaceAll   bool
+	Occurrence   int
+	StartLine    int
+	EndLine      int
+	InsertAfter  string
+	InsertBefore string
+	Prepend      bool
+	Append       bool
+	Expect       string
 }
 
-// lineModel splits content the SAME way read does (splitLines strips one
-// trailing empty element), remembering whether the file ended with a newline so
-// join() is byte-faithful. This guarantees start_line/end_line refer to exactly
-// the 1-based line numbers the agent saw in read's cat -n output.
 type lineModel struct {
 	lines      []string
 	trailingNL bool
@@ -45,10 +36,6 @@ func (m lineModel) join() string {
 	return s
 }
 
-// replacementLines splits new_string into lines for a line-oriented insert/
-// replace, stripping ONE structural trailing newline so the caller doesn't get
-// a surprise blank line (the lines are re-joined with \n anyway). "" → no lines
-// (a pure deletion).
 func replacementLines(s string) []string {
 	if s == "" {
 		return nil
@@ -56,23 +43,6 @@ func replacementLines(s string) []string {
 	return strings.Split(strings.TrimSuffix(s, "\n"), "\n")
 }
 
-// resolveEditOp picks the edit locator to apply and runs it, returning the new
-// content (without touching disk), the count of changed units, and a strategy
-// label.
-//
-// A weak agent often supplies MORE than one locator — classically old_string
-// PLUS the start_line it read from a grep hit. Rather than rejecting (which
-// just makes it fail), we resolve deterministically by PRECEDENCE and use the
-// single most authoritative one :
-//
-//	old_string > insert_after > insert_before > line-range > prepend > append
-//
-// old_string leads because it is SELF-VALIDATING : a wrong or ambiguous match
-// errors loudly ("not found" / "multiple matches") instead of silently editing
-// the wrong place, whereas a positional line-range would corrupt silently if
-// the agent miscounted. So preferring it is both the most specific intent AND
-// the safest. The chosen strategy is returned in the result, so the resolution
-// is never a black box.
 func resolveEditOp(content string, loc editLocator) (updated string, count int, strategy string, err error) {
 	switch {
 	case loc.OldString != "":
@@ -100,9 +70,6 @@ func resolveEditOp(content string, loc editLocator) (updated string, count int, 
 	}
 }
 
-// editLineRange replaces lines [start, end] (1-based inclusive) with new_string.
-// new_string="" deletes the range. With Expect set, the targeted lines must
-// contain it or the edit is refused (the file changed since the agent read it).
 func editLineRange(content string, loc editLocator) (string, int, string, error) {
 	m := newLineModel(content)
 	n := len(m.lines)
@@ -140,8 +107,6 @@ func editLineRange(content string, loc editLocator) (string, int, string, error)
 	return m.join(), end - start + 1, "line_range", nil
 }
 
-// editInsert inserts new_string after/before the UNIQUE line containing anchor.
-// A missing or non-unique anchor is refused with an actionable message.
 func editInsert(content, anchor, newStr string, after bool) (string, int, string, error) {
 	strat := "insert_before"
 	if after {

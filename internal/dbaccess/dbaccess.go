@@ -1,11 +1,3 @@
-// Package dbaccess is Digitorn's universal database access layer. ONE Go
-// interface (Query/Schema/Close) fronts every engine — all SQL dialects
-// through database/sql, plus NoSQL (MongoDB, Redis, Cassandra, Elasticsearch)
-// — so a single socle serves BOTH the indexer (Walk a source into the RAG) and
-// the agent-facing `database` module (connect/disconnect/query). Adding an
-// engine is one opener, not a new connector. Connections are pooled + bounded
-// here (off the daemon), and every query passes a configurable, layered
-// security policy.
 package dbaccess
 
 import (
@@ -15,19 +7,15 @@ import (
 	"time"
 )
 
-// Row is one result record — a column/field map that fits SQL rows AND NoSQL
-// documents uniformly.
 type Row = map[string]any
 
-// Result is the uniform shape returned by every engine's Query.
 type Result struct {
 	Columns  []string `json:"columns,omitempty"`
 	Rows     []Row    `json:"rows"`
 	RowCount int      `json:"row_count"`
-	Truncated bool    `json:"truncated,omitempty"` // capped at MaxRows
+	Truncated bool    `json:"truncated,omitempty"`
 }
 
-// DB is one open, pooled connection to a database of any kind.
 type DB interface {
 	Kind() string
 	Query(ctx context.Context, query string, args ...any) (*Result, error)
@@ -35,26 +23,19 @@ type DB interface {
 	Close() error
 }
 
-// ConnConfig fully describes a connection : which engine, where, how it is
-// secured, and the business decoration overlaid on its schema.
 type ConnConfig struct {
 	Name     string
-	Kind     string // postgres | mysql | sqlite | sqlserver | clickhouse | mongodb | redis | cassandra | elasticsearch
+	Kind     string
 	DSN      string
 	Security SecurityPolicy
 	Decor    SchemaDecor
-	SampleValues bool // introspection: sample low-cardinality column values
+	SampleValues bool
 }
 
-// Streamer is an optional DB capability : iterate a result row-by-row without
-// materializing it. The indexer uses this to Walk a huge table/collection into
-// the RAG with bounded memory ; the agent `query` tool uses the capped Query.
 type Streamer interface {
 	QueryStream(ctx context.Context, query string, fn func(Row) error) error
 }
 
-// Opener builds a DB for one kind. Registering an opener makes that engine
-// available to the agent AND the indexer at once.
 type Opener func(ctx context.Context, cfg ConnConfig) (DB, error)
 
 var (
@@ -62,8 +43,6 @@ var (
 	openers = map[string]Opener{}
 )
 
-// Register wires an engine kind to its opener (called from each engine's
-// init()). Aliases (postgres/postgresql/pg) register the same opener.
 func Register(kind string, o Opener) {
 	regMu.Lock()
 	openers[kind] = o
@@ -77,8 +56,6 @@ func openerFor(kind string) (Opener, bool) {
 	return o, ok
 }
 
-// Open resolves the engine and opens a connection, applying the connection's
-// session-level security policy. It does NOT pool — the Manager does.
 func Open(ctx context.Context, cfg ConnConfig) (DB, error) {
 	o, ok := openerFor(normalizeKind(cfg.Kind))
 	if !ok {
@@ -87,7 +64,6 @@ func Open(ctx context.Context, cfg ConnConfig) (DB, error) {
 	return o(ctx, cfg)
 }
 
-// Kinds returns the registered engine kinds (observability / tooling).
 func Kinds() []string {
 	regMu.RLock()
 	defer regMu.RUnlock()
@@ -112,19 +88,16 @@ func normalizeKind(k string) string {
 	return k
 }
 
-// SecurityPolicy is the configurable, layered guard applied to a connection :
-// a DB-side read-only transaction + a statement guard + caps + masking + an
-// egress guard. Each layer backstops the others.
 type SecurityPolicy struct {
-	Mode             string        `json:"mode"`               // read_only | read_write | read_write_approval
-	EnforceDBReadOnly bool         `json:"enforce_db_readonly"` // run queries in a DB READ ONLY transaction
-	ApplyRole        string        `json:"apply_role"`         // SET ROLE on connect (least privilege)
+	Mode             string        `json:"mode"`
+	EnforceDBReadOnly bool         `json:"enforce_db_readonly"`
+	ApplyRole        string        `json:"apply_role"`
 	StatementTimeout time.Duration `json:"statement_timeout"`
-	DeniedStatements []string      `json:"denied_statements"`  // drop/truncate/alter/grant/…
+	DeniedStatements []string      `json:"denied_statements"`
 	AllowedTables    []string      `json:"allowed_tables"`
 	MaxRows          int           `json:"max_rows"`
-	SensitiveColumns []string      `json:"sensitive_columns"`  // masked in results
-	Egress           string        `json:"egress"`             // guarded | open
+	SensitiveColumns []string      `json:"sensitive_columns"`
+	Egress           string        `json:"egress"`
 }
 
 func (p SecurityPolicy) readOnly() bool {
@@ -145,9 +118,6 @@ func (p SecurityPolicy) timeout() time.Duration {
 	return 30 * time.Second
 }
 
-// Catalog is the decorated schema handed to the agent : tables, columns,
-// relationships and business meaning, so a cryptically-named database becomes
-// legible.
 type Catalog struct {
 	Tables []TableInfo `json:"tables"`
 }
@@ -169,8 +139,6 @@ type ColumnInfo struct {
 	Sensitive   bool     `json:"sensitive,omitempty"`
 }
 
-// SchemaDecor is the operator's business overlay, merged onto the introspected
-// structure.
 type SchemaDecor struct {
 	Tables map[string]TableDecor `json:"tables"`
 }

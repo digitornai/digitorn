@@ -172,8 +172,6 @@ func TestCompact_ChainedCompactionsPreserveHistory(t *testing.T) {
 	}
 	wantMsgs := 0
 	for _, e := range first {
-		// RT-3 projection : EventToolResult also lands as a "tool" role
-		// Message so the LLM adapter sees results between iterations.
 		if e.Type == EventUserMessage || e.Type == EventAssistantMessage || e.Type == EventToolResult {
 			wantMsgs++
 		}
@@ -216,7 +214,6 @@ func TestCompact_DoubleCallReturnsErrAlreadyCompacting(t *testing.T) {
 	events := setupSession(t, paths, sid, 10)
 	state := buildStateFromEvents(events)
 
-	// Block global limiter to keep first compaction "in flight".
 	limiter := NewLimiter(1)
 	if err := limiter.Acquire(context.Background()); err != nil {
 		t.Fatal(err)
@@ -224,11 +221,6 @@ func TestCompact_DoubleCallReturnsErrAlreadyCompacting(t *testing.T) {
 
 	c := NewCompactor(CompactorConfig{Paths: paths, MaxConcurrent: 1})
 
-	// First call should block on limiter; run in goroutine.
-	// TruncateDeferred : this test passes no Gate, so the default async
-	// truncate would spawn a detached goroutine that outlives the test and
-	// races t.TempDir() cleanup (open temp file → Windows "dir not empty").
-	// Deferring truncation keeps the test about the per-session lock only.
 	var wg sync.WaitGroup
 	wg.Add(1)
 	startedFirst := make(chan struct{})
@@ -242,7 +234,6 @@ func TestCompact_DoubleCallReturnsErrAlreadyCompacting(t *testing.T) {
 	<-startedFirst
 	time.Sleep(10 * time.Millisecond)
 
-	// Second call with the same session must see the per-session lock as taken.
 	_, err := c.Compact(context.Background(), state, CompactOptions{
 		GlobalLimiter: limiter, TruncateMode: TruncateDeferred,
 	})
@@ -274,8 +265,6 @@ func TestCompact_TruncateDeferredKeepsAllEvents(t *testing.T) {
 		t.Fatalf("jsonl should grow by exactly the compact_done event (deferred mode): before=%d after=%d", before, after)
 	}
 
-	// Load must still ignore events with seq <= cutoff, but the
-	// compact_done event has seq > cutoff and MUST be applied.
 	loaded, err := Load(paths, sid, LoadOptions{Mode: JSONLStrict})
 	if err != nil {
 		t.Fatalf("load: %v", err)
@@ -370,8 +359,6 @@ func TestCompact_CrashBetweenSnapshotAndTruncate(t *testing.T) {
 		t.Fatalf("cutoff: %d", res.CutoffSeq)
 	}
 
-	// Simulate a crash : the snapshot is on disk + compact_done event in the JSONL.
-	// The next process must re-load coherent state.
 	loaded, err := Load(paths, sid, LoadOptions{Mode: JSONLStrict})
 	if err != nil {
 		t.Fatalf("load: %v", err)
@@ -392,8 +379,6 @@ func TestCompact_CrashAfterAppendBeforeSnapshot(t *testing.T) {
 	state := buildStateFromEvents(events)
 	_ = state
 
-	// No compaction has been run. A fresh process loads cold: must see
-	// every event with no snapshot.
 	loaded, err := Load(paths, sid, LoadOptions{Mode: JSONLStrict})
 	if err != nil {
 		t.Fatalf("load: %v", err)
@@ -466,7 +451,6 @@ func TestCompact_CorruptedJSONLBestEffort(t *testing.T) {
 	events := setupSession(t, paths, sid, 10)
 	state := buildStateFromEvents(events)
 
-	// Inject a malformed line at the end.
 	f, err := os.OpenFile(paths.EventsFile(sid), os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		t.Fatal(err)
@@ -531,7 +515,6 @@ func TestCompact_RebuildsInconsistentMeta(t *testing.T) {
 	sid := "sess-meta"
 	setupSession(t, paths, sid, 8)
 
-	// Write a stale meta.
 	bogus := &Meta{SessionID: sid, LastSeq: 1, EventCount: 1}
 	if err := WriteMetaAtomic(paths.SessionDir(sid), bogus, false); err != nil {
 		t.Fatal(err)
@@ -565,7 +548,6 @@ func TestSnapshot_AtomicReplacement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Verify no tmp file leaks.
 	entries, _ := os.ReadDir(dir)
 	for _, e := range entries {
 		if strings.HasPrefix(e.Name(), tmpSnapshotPrefix) {

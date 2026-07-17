@@ -8,11 +8,6 @@ import (
 	"github.com/digitornai/digitorn/internal/dbaccess"
 )
 
-// dbaccessConnector Walks ANY database supported by the shared dbaccess socle
-// (every SQL dialect, MongoDB, …) into the RAG : the same engine the agent
-// uses for live queries also feeds indexation. The configured query's rows
-// become documents (id_column → id, text_columns → text, the rest → metadata).
-// Large tables stream row-by-row (bounded memory) via dbaccess.Streamer.
 type dbaccessConnector struct{ kind string }
 
 func init() {

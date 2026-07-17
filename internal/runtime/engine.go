@@ -2571,7 +2571,7 @@ func (e *Engine) resolveAppAgent(ctx context.Context, appID, agentID string) (*a
 }
 
 func approvalTimeout(app *appmgr.RuntimeApp) time.Duration {
-	const defaultS = 300
+	const defaultS = 3600
 	const minS = 30
 	const maxS = 3600
 	v := defaultS

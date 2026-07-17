@@ -7,11 +7,6 @@ import (
 	"github.com/digitornai/digitorn/pkg/module"
 )
 
-// The shared http module must honor the CALLING APP's config block per call —
-// not just default_headers. Regression: allow_private_hosts / timeout /
-// allowed_hosts / credentials were read from the boot config only, so an app
-// opting in to a private-network target (self-hosted GLPI) stayed blocked by
-// the SSRF guard no matter what its YAML said.
 func TestCallConfigOverlaysAppConfig(t *testing.T) {
 	m := New()
 	if err := m.Init(context.Background(), map[string]any{}); err != nil {
@@ -40,7 +35,6 @@ func TestCallConfigOverlaysAppConfig(t *testing.T) {
 	}
 }
 
-// Without an app block, the boot config is used untouched.
 func TestCallConfigNoAppBlockKeepsBootConfig(t *testing.T) {
 	m := New()
 	if err := m.Init(context.Background(), map[string]any{"allow_private_hosts": true}); err != nil {
@@ -52,7 +46,6 @@ func TestCallConfigNoAppBlockKeepsBootConfig(t *testing.T) {
 	}
 }
 
-// An app must not be able to loosen a daemon-level blocklist.
 func TestAppCannotUnblockDaemonBlockedHost(t *testing.T) {
 	m := New()
 	if err := m.Init(context.Background(), map[string]any{"blocked_hosts": []any{"internal.corp"}}); err != nil {

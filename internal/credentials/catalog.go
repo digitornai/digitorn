@@ -1,38 +1,28 @@
 package credentials
 
-// Provider is one entry in the built-in provider catalogue that drives the
-// "add a credential" form. It is purely descriptive — the daemon does not run
-// per-handler validation or live tests here (that is deliberately out of scope
-// for stability). Unknown providers are covered by the web's client-side custom
-// templates, so this list only needs the common known ones.
 type Provider struct {
 	ID          string  `json:"id"`
 	DisplayName string  `json:"display_name"`
-	Category    string  `json:"category"` // llm, database, vcs, …
-	Type        string  `json:"type"`     // handler type: api_key, connection_string, …
+	Category    string  `json:"category"`
+	Type        string  `json:"type"`
 	Icon        string  `json:"icon"`
 	Description string  `json:"description,omitempty"`
 	DocsURL     string  `json:"docs_url,omitempty"`
 	Fields      []Field `json:"fields"`
-	Verify      *Verify `json:"verify,omitempty"` // live-test recipe, when available
+	Verify      *Verify `json:"verify,omitempty"`
 }
 
-// Verify is a recipe to validate a credential against the live provider: an
-// HTTP request whose status code tells us whether the key is accepted. Both the
-// endpoint and the auth headers may template {field} values from the credential
-// (e.g. {api_key}). AuthTemplate holds one "Header: value" per line.
 type Verify struct {
 	Endpoint     string `json:"endpoint"`
-	Method       string `json:"method,omitempty"`        // default GET
-	AuthTemplate string `json:"auth_template,omitempty"` // newline-separated "Header: value"
-	SuccessCodes []int  `json:"success_codes,omitempty"` // default [200]
+	Method       string `json:"method,omitempty"`
+	AuthTemplate string `json:"auth_template,omitempty"`
+	SuccessCodes []int  `json:"success_codes,omitempty"`
 }
 
-// Field is one form input for a provider credential.
 type Field struct {
 	Name        string `json:"name"`
 	Label       string `json:"label"`
-	Type        string `json:"type"` // text, password, url, textarea
+	Type        string `json:"type"`
 	Required    bool   `json:"required"`
 	Masked      bool   `json:"masked,omitempty"`
 	Placeholder string `json:"placeholder,omitempty"`

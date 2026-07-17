@@ -370,14 +370,15 @@ var AllRenderModes = []RenderMode{
 type WorkspaceView string
 
 const (
-	ViewCode     WorkspaceView = "code"
-	ViewPreview  WorkspaceView = "preview"
-	ViewChanges  WorkspaceView = "changes"
-	ViewActivity WorkspaceView = "activity"
-	ViewAuto     WorkspaceView = "auto"
+	ViewCode      WorkspaceView = "code"
+	ViewPreview   WorkspaceView = "preview"
+	ViewChanges   WorkspaceView = "changes"
+	ViewActivity  WorkspaceView = "activity"
+	ViewDocuments WorkspaceView = "documents"
+	ViewAuto      WorkspaceView = "auto"
 )
 
-var AllWorkspaceViews = []WorkspaceView{ViewCode, ViewPreview, ViewChanges, ViewActivity, ViewAuto}
+var AllWorkspaceViews = []WorkspaceView{ViewCode, ViewPreview, ViewChanges, ViewActivity, ViewDocuments, ViewAuto}
 
 type BubbleStyle string
 

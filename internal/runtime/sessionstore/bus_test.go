@@ -134,7 +134,6 @@ func TestBus_NoGapWhenFlusherRejects(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer bus.Stop(context.Background())
-	// Flusher NOT started — Enqueue must fail with ErrFlusherStop.
 	if _, err := bus.Append(context.Background(), makeUserMsg("s", "x")); err == nil {
 		t.Fatal("expected append to fail when flusher not started")
 	}
@@ -356,8 +355,6 @@ func TestBus_AllEventTypesPersistedAndProjected(t *testing.T) {
 	if state.Title != "T" {
 		t.Fatalf("title: %q", state.Title)
 	}
-	// 3 = user, tool_result (projected as "tool" role message so the LLM
-	// adapter sees results next turn — RT-3 agent loop), assistant.
 	if len(state.Messages) != 3 {
 		t.Fatalf("messages: %d", len(state.Messages))
 	}
@@ -456,7 +453,6 @@ func TestBus_View_HistoryShapeAndSocketEnvelope(t *testing.T) {
 	if resp.InstanceID != "inst-1" {
 		t.Fatalf("instance_id: %q", resp.InstanceID)
 	}
-	// user, tool_result (now projected as "tool" message — RT-3), assistant.
 	if len(resp.Messages) != 3 {
 		t.Fatalf("messages: %d", len(resp.Messages))
 	}
@@ -567,7 +563,6 @@ func TestFlusher_RoutesToCorrectShard(t *testing.T) {
 		_ = flusher.Stop(ctx)
 	}()
 
-	// Each session lands on one shard. Verify hash routing is consistent.
 	sids := []string{"alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta"}
 	for _, sid := range sids {
 		want := ShardOf(sid, 8)

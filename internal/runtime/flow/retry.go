@@ -15,10 +15,6 @@ const (
 	defaultRetryMaxBackoff = 30 * time.Second
 )
 
-// execWithRetry runs a node, re-running it on a retryable failure per node.Retry
-// with geometric backoff. Between attempts it emits a "retrying" node-end + a
-// fresh node-start so the timeline shows the attempts. The final failure (retries
-// exhausted / non-retryable) is returned to runPath, where on_error still applies.
 func (r *Runner) execWithRetry(ctx context.Context, node schema.FlowNode, fc *fctx, in runInput, iter int) (execResult, error) {
 	attempts, base, mult, max := retryParams(node.Retry)
 	if attempts <= 1 {
@@ -43,8 +39,6 @@ func (r *Runner) execWithRetry(ctx context.Context, node schema.FlowNode, fc *fc
 	}
 }
 
-// retryParams resolves a node's retry policy to concrete values, applying
-// defaults. attempts == 1 means no retry (a single try).
 func retryParams(rc *schema.FlowRetry) (attempts int, base time.Duration, mult float64, max time.Duration) {
 	if rc == nil || rc.MaxAttempts <= 1 {
 		return 1, 0, 0, 0
@@ -65,8 +59,6 @@ func retryParams(rc *schema.FlowRetry) (attempts int, base time.Duration, mult f
 	return attempts, base, mult, max
 }
 
-// retryableErr reports whether err should be retried under the policy's Match
-// regexp (empty Match = retry any error).
 func retryableErr(rc *schema.FlowRetry, err error) bool {
 	if err == nil {
 		return false
@@ -81,7 +73,6 @@ func retryableErr(rc *schema.FlowRetry, err error) bool {
 	return re.MatchString(err.Error())
 }
 
-// backoffDelay is base * mult^(attempt-1), capped at max.
 func backoffDelay(base time.Duration, mult float64, max time.Duration, attempt int) time.Duration {
 	d := float64(base)
 	for i := 1; i < attempt; i++ {
@@ -96,7 +87,6 @@ func backoffDelay(base time.Duration, mult float64, max time.Duration, attempt i
 	return time.Duration(d)
 }
 
-// sleepCtx sleeps for d or returns ctx.Err() if the context is cancelled first.
 func sleepCtx(ctx context.Context, d time.Duration) error {
 	if d <= 0 {
 		return ctx.Err()

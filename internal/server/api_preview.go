@@ -24,9 +24,6 @@ import (
 	"github.com/digitornai/digitorn/internal/runtime/workdir"
 )
 
-// previewKey lazily loads the HMAC key for preview tokens. STABLE across daemon
-// restarts: a restart must not 403 the preview URLs already held by open web
-// tabs. Persisted next to the other daemon secrets under the sessions root.
 func (d *Daemon) previewKey() []byte {
 	d.previewSecretOnce.Do(func() {
 		d.previewSecret = d.loadOrCreatePreviewSecret()
@@ -42,10 +39,6 @@ func randomPreviewKey(d *Daemon) []byte {
 	return b
 }
 
-// loadOrCreatePreviewSecret returns a 32-byte key persisted at
-// <sessions.root>/.preview-secret so it survives restarts. On the first run it
-// generates + writes the key (0600); on any path/IO problem it degrades to a
-// process-random key (tokens then rotate on restart — the old behaviour).
 func (d *Daemon) loadOrCreatePreviewSecret() []byte {
 	root := ""
 	if d.cfg != nil {
@@ -67,11 +60,6 @@ func (d *Daemon) loadOrCreatePreviewSecret() []byte {
 	return b
 }
 
-// previewToken is a stateless, unguessable per-(app,session) token. The iframe
-// loads the served URL by direct browser navigation, so it CANNOT carry the JWT —
-// this token in the query string is the authorization for the public /serve
-// route. HMAC over a restart-stable key (loadOrCreatePreviewSecret): no per-call
-// storage, no race, and a daemon restart no longer invalidates live preview URLs.
 func (d *Daemon) previewToken(appID, sessionID string) string {
 	mac := hmac.New(sha256.New, d.previewKey())
 	mac.Write([]byte(appID + "\x00" + sessionID))
@@ -85,8 +73,6 @@ func (d *Daemon) checkPreviewToken(appID, sessionID, tok string) bool {
 	return hmac.Equal([]byte(tok), []byte(d.previewToken(appID, sessionID)))
 }
 
-// previewWorkdir resolves a session's workdir WITHOUT the ownership check — the
-// preview token is the authorization. Sub-agent sessions resolve to their root.
 func (d *Daemon) previewWorkdir(sid string) string {
 	lookupID := sid
 	if root, _, isSub := sessionstore.SubAgentSession(sid); isSub {
@@ -102,13 +88,6 @@ func (d *Daemon) previewWorkdir(sid string) string {
 	return wd
 }
 
-// previewEntryCandidates are the entry HTMLs tried, in order, when the preview
-// source is "auto". We never run a build or dev-server — we only serve what the
-// agent already built. BUILT output dirs are tried FIRST, the workdir root LAST:
-// a Vite/CRA project keeps a SOURCE index.html at the root (it points at
-// `/src/main.jsx` / `%PUBLIC_URL%`, which only a dev-server can resolve), so the
-// real built entry under dist/build/out must win. The root entry is the fallback
-// for a hand-written plain static site with no build step.
 var previewEntryCandidates = []string{
 	"dist/index.html",
 	"build/index.html",
@@ -117,13 +96,6 @@ var previewEntryCandidates = []string{
 	"index.html",
 }
 
-// resolvePreviewEntry returns the first existing, SERVABLE entry HTML
-// (workdir-relative, forward-slash) or "" when nothing is built yet. It checks
-// the workdir root first, then ONE level of immediate subdirectories — agents
-// commonly scaffold the project in a subdir (my-react-app/, frontend/, client/),
-// so a build at <wd>/my-react-app/dist/index.html must be found too. A source/dev
-// template is not servable (serving it yields a guaranteed blank page — the
-// browser asks the daemon for /src/main.jsx and gets a 404), so it is skipped.
 func resolvePreviewEntry(wd string) string {
 	if e := findPreviewEntryIn(wd, ""); e != "" {
 		return e
@@ -143,9 +115,6 @@ func resolvePreviewEntry(wd string) string {
 	return ""
 }
 
-// findPreviewEntryIn checks the candidate entry HTMLs under <wd>/<sub> (sub may
-// be ""), skipping un-built source templates. Returns the forward-slash path
-// relative to wd, or "".
 func findPreviewEntryIn(wd, sub string) string {
 	for _, c := range previewEntryCandidates {
 		rel := c
@@ -165,8 +134,6 @@ func findPreviewEntryIn(wd, sub string) string {
 	return ""
 }
 
-// skipPreviewSubdir excludes dirs that can't hold a project root or are already
-// covered by the root scan (dist/build/out/public) — and the big/irrelevant ones.
 func skipPreviewSubdir(name string) bool {
 	if strings.HasPrefix(name, ".") {
 		return true
@@ -178,11 +145,6 @@ func skipPreviewSubdir(name string) bool {
 	return false
 }
 
-// isUnbuiltTemplate reports whether an entry HTML is a dev/source template rather
-// than a built artifact. Built output references hashed `/assets/*.js`; a source
-// template references the un-bundled dev entry — Vite's `/src/...` or `/@vite`,
-// CRA's `%PUBLIC_URL%`. Reads only the head (entry HTMLs are tiny); on any read
-// error it errs toward "servable" (returns false) so a real build is never hidden.
 func isUnbuiltTemplate(abs string) bool {
 	b, err := os.ReadFile(abs)
 	if err != nil {

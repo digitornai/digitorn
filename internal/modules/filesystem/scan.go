@@ -18,22 +18,12 @@ import (
 	"unicode/utf8"
 )
 
-// scan.go : the high-throughput search core shared by grep. Pure Go, no external
-// rg binary — cross-platform and dependency-free. One producer enumerates the
-// (confined, symlink-safe) tree ; NumCPU workers scan files in parallel with
-// pooled buffers, a literal fast path, binary skipping, ctx cancellation, and a
-// bounded early stop. Results are sorted (path, line) so output is deterministic
-// regardless of worker scheduling.
-
-// skipDirs are directory names never descended into — VCS/build/dependency
-// noise an agent search should ignore (and that would otherwise tank throughput).
 var skipDirs = map[string]struct{}{
 	".git": {}, ".hg": {}, ".svn": {}, ".bzr": {},
 	"node_modules": {}, ".venv": {}, "venv": {}, "__pycache__": {},
 	".mypy_cache": {}, ".pytest_cache": {}, ".ruff_cache": {}, ".tox": {},
 	"dist": {}, "build": {}, "target": {}, ".next": {}, ".nuxt": {},
 	".idea": {}, ".vscode": {}, ".cache": {}, "vendor": {},
-	// Framework build/cache outputs + dependency stores.
 	".svelte-kit": {}, ".turbo": {}, ".parcel-cache": {}, ".angular": {},
 	".astro": {}, ".vercel": {}, ".netlify": {}, ".expo": {}, ".docusaurus": {},
 	"bower_components": {}, "coverage": {}, ".nyc_output": {},

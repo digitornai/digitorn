@@ -9,10 +9,6 @@ import (
 	"github.com/digitornai/digitorn/internal/runtime/hooks"
 )
 
-// TestLSPDiagnose_AttachesToToolResult proves the primary behaviour: after an
-// edit/write, the diagnostics are folded INTO that tool's own result (the `text`
-// surface), so the agent reads its errors inline as part of the edit — no separate
-// chat message, no extra tool call. It must NOT inject a message when it can attach.
 func TestLSPDiagnose_AttachesToToolResult(t *testing.T) {
 	fc := &fakeCaller{result: `{"path":"main.go","count":1,"errors":1,"warnings":0,"ok":false,"diagnostics":[{"severity":"error","message":"cannot use string as int"}]}`}
 	e := newEngineSync(hooks.LSPDiagnoseHooks(), hooks.ActionDeps{Caller: fc})
@@ -36,14 +32,12 @@ func TestLSPDiagnose_AttachesToToolResult(t *testing.T) {
 	}
 }
 
-// TestLSPDiagnose_InjectsWhenNoResultMap: if no result map is available (the rare
-// fallback), the diagnostics are injected as a message so they're never lost.
 func TestLSPDiagnose_InjectsWhenNoResultMap(t *testing.T) {
 	fc := &fakeCaller{result: `{"path":"main.go","count":1,"errors":1,"warnings":0,"ok":false,"diagnostics":[{"severity":"error","message":"cannot use string as int"}]}`}
 	e := newEngineSync(hooks.LSPDiagnoseHooks(), hooks.ActionDeps{Caller: fc})
 
 	res := e.Fire(context.Background(), schema.HookEventToolEnd, nil,
-		hooks.Payload{ToolName: "filesystem.edit", ToolArgs: map[string]any{"path": "main.go"}}) // no ToolResult
+		hooks.Payload{ToolName: "filesystem.edit", ToolArgs: map[string]any{"path": "main.go"}})
 
 	if len(res.Injects) == 0 {
 		t.Fatal("no diagnostics injected as fallback — the agent would stay blind")
@@ -53,8 +47,6 @@ func TestLSPDiagnose_InjectsWhenNoResultMap(t *testing.T) {
 	}
 }
 
-// TestLSPDiagnose_CleanFileNoNoise: a passing file still warms the server but
-// injects NOTHING — no noise on every clean edit.
 func TestLSPDiagnose_CleanFileNoNoise(t *testing.T) {
 	fc := &fakeCaller{result: `{"path":"main.go","count":0,"errors":0,"warnings":0,"ok":true}`}
 	e := newEngineSync(hooks.LSPDiagnoseHooks(), hooks.ActionDeps{Caller: fc})
@@ -70,7 +62,6 @@ func TestLSPDiagnose_CleanFileNoNoise(t *testing.T) {
 	}
 }
 
-// TestLSPDiagnose_IgnoresNonEditTools: the hook must not fire for reads/searches.
 func TestLSPDiagnose_IgnoresNonEditTools(t *testing.T) {
 	fc := &fakeCaller{result: `{"errors":1}`}
 	e := newEngineSync(hooks.LSPDiagnoseHooks(), hooks.ActionDeps{Caller: fc})

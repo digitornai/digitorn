@@ -47,14 +47,6 @@ func partsText(out runtime.ToolOutcome) string {
 	return b.String()
 }
 
-// TestModuleConfigInjection_LivePostgres drives the REAL dispatch seam end to
-// end against a live Postgres: BusAdapter.Dispatch → appModuleConfigSource
-// (BYOK-gated) → modulesettings deltas → WithModuleConfig → the database module
-// opens the configured DSN and runs the query. It proves the per-user BYOK
-// config delta actually changes which database the module talks to.
-//
-// Opt-in: set DIGITORN_PG_E2E_DSN to a reachable Postgres DSN whose `customers`
-// table has rows for "Umbrella" and "Acme Corp" (see the test setup SQL).
 func TestModuleConfigInjection_LivePostgres(t *testing.T) {
 	realDSN := os.Getenv("DIGITORN_PG_E2E_DSN")
 	if realDSN == "" {

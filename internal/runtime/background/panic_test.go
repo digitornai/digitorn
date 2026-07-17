@@ -9,18 +9,12 @@ import (
 	"github.com/digitornai/digitorn/internal/runtime/background"
 )
 
-// panicDispatcher models a module whose handler panics (nil deref, bad type
-// assertion, a worker-side decode crash).
 type panicDispatcher struct{}
 
 func (panicDispatcher) Dispatch(_ context.Context, _ runtime.ToolInvocation) runtime.ToolOutcome {
 	panic("boom in module handler")
 }
 
-// TestManager_DispatcherPanic_NoCrash : a panic in the dispatched tool must NOT
-// crash the daemon (the test process surviving is the proof) and must NOT leave
-// the task pinned "running" forever — it is marked errored and a notification
-// carrying the panic reason is enqueued so the agent learns it died.
 func TestManager_DispatcherPanic_NoCrash(t *testing.T) {
 	m := background.New()
 	m.AttachDispatcher(panicDispatcher{})

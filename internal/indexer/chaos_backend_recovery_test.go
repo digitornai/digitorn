@@ -7,11 +7,6 @@ import (
 	"testing"
 )
 
-// flakySink simulates a vector backend that is DOWN for a window then RECOVERS.
-// While down, every Upsert fails (both batch and per-doc isolation), so all docs
-// dead-letter and their cursor hashes are NOT advanced. After recovery, the next
-// sync must retry the dead-lettered docs and land them — no data loss, no need
-// to re-emit from the source.
 type flakySink struct {
 	mu      sync.Mutex
 	down    bool
@@ -50,11 +45,6 @@ func (s *flakySink) dupes() (string, int) {
 	return "", 0
 }
 
-// TestChaos_BackendDownMidIndex_DeadLetterThenRetry proves the headline
-// resilience contract: with the backend DOWN, a sync dead-letters every doc and
-// advances NO cursor hash; once the backend RECOVERS, the very next sync (same
-// source emitting the same docs) lands all of them exactly once. No data loss
-// across the outage; no duplicate once recovered.
 func TestChaos_BackendDownMidIndex_DeadLetterThenRetry(t *testing.T) {
 	registerLoad()
 	cur := NewMemCursor()
@@ -63,9 +53,8 @@ func TestChaos_BackendDownMidIndex_DeadLetterThenRetry(t *testing.T) {
 	svc.OnDeadLetter(func(SourceSpec, Document, error) { dl++ })
 
 	spec := SourceSpec{Name: "src", Type: "loadfake", KB: "kb", Opts: map[string]any{"docs": 6}}
-	sink := newFlakySink() // starts DOWN
+	sink := newFlakySink()
 
-	// Sync 1: backend down -> all 6 dead-lettered, nothing landed, no hash saved.
 	rep1, err := svc.Sync(context.Background(), spec, sink)
 	if err != nil {
 		t.Fatalf("sync1 returned error (should isolate): %v", err)
@@ -78,11 +67,8 @@ func TestChaos_BackendDownMidIndex_DeadLetterThenRetry(t *testing.T) {
 	}
 	t.Logf("sync1 (backend DOWN): landed=%d deadLettered=%d rep=%+v", sink.landedCount(), dl, rep1)
 
-	// Backend recovers.
 	sink.setUp()
 
-	// Sync 2: same source, same docs. Because no hash was saved for the dead-
-	// lettered docs, they are ALL re-sent and now land. Recovery with no loss.
 	rep2, err := svc.Sync(context.Background(), spec, sink)
 	if err != nil {
 		t.Fatalf("sync2: %v", err)
@@ -95,7 +81,6 @@ func TestChaos_BackendDownMidIndex_DeadLetterThenRetry(t *testing.T) {
 	}
 	t.Logf("sync2 (backend UP): landed=%d/6 rep=%+v — full recovery, no loss, no dup", sink.landedCount(), rep2)
 
-	// Sync 3: nothing changed and all hashes now saved -> zero re-sends.
 	before := sink.landedCount()
 	if _, err := svc.Sync(context.Background(), spec, sink); err != nil {
 		t.Fatal(err)

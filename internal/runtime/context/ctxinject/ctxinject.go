@@ -14,11 +14,11 @@ import (
 )
 
 type Data struct {
-	User    map[string]any // id, name, email, region, locale, roles, + raw JWT claims
-	App     map[string]any // id, name, version
-	Agent   map[string]any // id, role
-	Session map[string]any // goal, mode, turn, workdir
-	Env     map[string]any // os, arch, platform (the daemon's runtime)
+	User    map[string]any
+	App     map[string]any
+	Agent   map[string]any
+	Session map[string]any
+	Env     map[string]any
 	Now     time.Time
 }
 
@@ -41,8 +41,6 @@ func (d Data) bag() map[string]any {
 
 var placeholder = regexp.MustCompile(`\{\{\s*([\w.]+)\s*\}\}`)
 
-// Merge layers agent sections on top of app sections : an agent section sharing a
-// non-empty id REPLACES the app's (in place) ; the rest are appended.
 func Merge(app, agent *schema.ContextBlock) []schema.ContextSection {
 	var out []schema.ContextSection
 	idx := map[string]int{}
@@ -297,7 +295,6 @@ func renderDir(dir string, optional bool, workdir string) string {
 		}
 		return "[dir: " + dir + " — " + err.Error() + "]"
 	}
-	// MEMORY.md first, then all other .md files sorted alphabetically.
 	var index, rest []string
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(strings.ToLower(e.Name()), ".md") {
@@ -342,7 +339,6 @@ func interp(tmpl string, bag map[string]any) string {
 	})
 }
 
-// resolve walks a dotted path through the bag.
 func resolve(bag map[string]any, path string) (any, bool) {
 	var cur any = bag
 	for _, p := range strings.Split(path, ".") {

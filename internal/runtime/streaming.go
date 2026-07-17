@@ -13,22 +13,6 @@ import (
 	"github.com/digitornai/digitorn/internal/runtime/turn"
 )
 
-// chatOrStream invokes the LLM either synchronously or via
-// streaming, depending on Engine.Streaming and whether the wired
-// LLMChat satisfies the LLMStream contract. In streaming mode,
-// each chunk's Delta is appended as an EventAssistantDelta event
-// on the session bus so subscribers can render tokens live.
-// The consolidated *llm.ChatResponse is returned to the agent
-// loop with the same shape as the non-streaming path, so all
-// downstream logic (tool dispatch, persistence) is identical.
-//
-// Errors during stream consumption are wrapped with "stream:"
-// so the caller can distinguish them from synchronous failures
-// at the error-message layer.
-// chatOrStream wraps the LLM call with the daemon-wide concurrency semaphore
-// (acquired per-call, released the instant the call returns — never held while
-// an agent waits, which is what keeps nested delegation deadlock-free) and
-// records real-time token telemetry to the ctx Recorder if one is attached.
 func (e *Engine) chatOrStream(
 	ctx context.Context, tr *turn.Turn, in TurnInput, req *llm.ChatRequest,
 ) (*llm.ChatResponse, error) {
@@ -54,7 +38,6 @@ func (e *Engine) chatOrStream(
 	return resp, err
 }
 
-// callLLM performs the actual LLM call, synchronously or via streaming.
 func (e *Engine) callLLM(
 	ctx context.Context, tr *turn.Turn, in TurnInput, req *llm.ChatRequest,
 ) (*llm.ChatResponse, error) {
@@ -63,23 +46,10 @@ func (e *Engine) callLLM(
 	}
 	streamer, ok := e.LLM.(LLMStream)
 	if !ok {
-		// LLM client doesn't support streaming : fall back silently.
-		// We don't return an error because the caller hasn't broken
-		// any contract — streaming is best-effort.
 		return e.LLM.Chat(ctx, req)
 	}
 
-	// Mark the message as streaming-mode at the start by setting
-	// req.Stream=true. The worker uses this to pick the right
-	// provider call shape ; the engine doesn't act on it
-	// downstream.
 	req.Stream = true
-	// Instrument the split : the daemon's own work (load history, assemble
-	// prompt, fire the call) is microseconds — measured at ~30ms from the event
-	// log. callStart→first-token below is the time the agent actually waits, and
-	// it is spent ENTIRELY upstream (engine→worker gRPC + worker→gateway +
-	// provider prefill). Logging the TTFT makes "what blocks between my message
-	// and the reply" answerable at a glance, every turn, no guessing.
 	callStart := time.Now()
 	chunks, err := streamer.ChatStream(ctx, req)
 	if err != nil {
@@ -91,20 +61,12 @@ func (e *Engine) callLLM(
 		reasoningBuilder strings.Builder
 		finalResp        = &llm.ChatResponse{Model: req.Model}
 		seenError        string
-		liveOut          int  // running ~estimate of output tokens, for the live counter
-		ttftLogged       bool // logged the provider time-to-first-token yet
+		liveOut          int
+		ttftLogged       bool
 	)
-	// Per-index streaming state for tool calls : lets us surface the tool NAME
-	// the instant it's detected and grow a token counter as the (possibly huge)
-	// arguments stream in — so the client is never blind during a long write.
 	liveTools := map[int]*liveToolCall{}
-	var reasoningStartedAt, reasoningEndedAt int64 // wall-clock brackets for the thinking trace
+	var reasoningStartedAt, reasoningEndedAt int64
 
-	// Consume the stream, but bail the INSTANT the turn context is cancelled
-	// (user abort). Without this select the loop would keep draining the
-	// channel until the worker noticed the cancel — tokens kept flowing after
-	// "stop". On abort we surface the partial content + the cancellation so the
-	// caller can persist what was generated so far.
 	for {
 		select {
 		case <-ctx.Done():
@@ -119,11 +81,6 @@ func (e *Engine) callLLM(
 				finalResp.ReasoningContent = reasoningBuilder.String()
 				finalResp.ReasoningStartedAt = reasoningStartedAt
 				finalResp.ReasoningEndedAt = reasoningEndedAt
-				// A non-empty seenError means the generation was cut off by a fault: the
-				// gRPC consumer turns ANY non-EOF RecvMsg error (network drop, worker death,
-				// deadline, upstream 5xx, rate limit) into an error chunk, so every failure
-				// lands here carrying its partial, exactly like a user abort via ctx.Done().
-				// A clean EOF (seenError == "") is a deliberate, complete end.
 				if seenError != "" {
 					return finalResp, fmt.Errorf("stream: provider error: %s", seenError)
 				}

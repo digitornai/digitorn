@@ -12,10 +12,6 @@ import (
 	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
 )
 
-// TestObservability_SettleWaiterSuppressesAsyncNotification : when a task
-// finishes WHILE a Wait (the settle window) is consuming it, no async
-// completion notification is enqueued — the agent gets the result once
-// (synchronously), not a confusing duplicate "[BACKGROUND TASK …]" too.
 func TestObservability_SettleWaiterSuppressesAsyncNotification(t *testing.T) {
 	release := make(chan struct{})
 	m := background.New()
@@ -27,9 +23,9 @@ func TestObservability_SettleWaiterSuppressesAsyncNotification(t *testing.T) {
 	}
 	go func() {
 		time.Sleep(20 * time.Millisecond)
-		close(release) // let the task finish WHILE Wait is in flight
+		close(release)
 	}()
-	st, err := m.Wait(context.Background(), "s", id, 0) // no timeout → returns when done
+	st, err := m.Wait(context.Background(), "s", id, 0)
 	if err != nil || st.State != "completed" {
 		t.Fatalf("settle wait: err=%v state=%q", err, st.State)
 	}
@@ -38,9 +34,6 @@ func TestObservability_SettleWaiterSuppressesAsyncNotification(t *testing.T) {
 	}
 }
 
-// TestObservability_LiveLogWhileRunning : a still-running task streams its
-// output into the live sink, and a Status check surfaces that tail BEFORE the
-// task finishes — so the agent can watch a server's startup / spot an error.
 func TestObservability_LiveLogWhileRunning(t *testing.T) {
 	release := make(chan struct{})
 	defer close(release)
@@ -64,7 +57,7 @@ func TestObservability_LiveLogWhileRunning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("launch: %v", err)
 	}
-	<-wrote // the task has streamed to the live sink and is still running
+	<-wrote
 	st, _ := m.Status(context.Background(), "s", id)
 	if st.State != "running" {
 		t.Fatalf("task should still be running, got %q", st.State)
@@ -74,9 +67,6 @@ func TestObservability_LiveLogWhileRunning(t *testing.T) {
 	}
 }
 
-// erroringDispatcher returns an errored outcome that ALSO carries output Parts
-// (stdout/stderr), mirroring what busadapter does for a failed bash.run — the
-// command failed but its output is the WHY.
 type erroringDispatcher struct {
 	errMsg string
 	output string
@@ -90,9 +80,6 @@ func (d erroringDispatcher) Dispatch(_ context.Context, _ runtime.ToolInvocation
 	}
 }
 
-// TestObservability_FinishedTaskOutputIsConsultable : after a backgrounded
-// command finishes, the agent can read its captured output via background_run
-// status (the Result field). Answers "peut-il consulter la sortie ?".
 func TestObservability_FinishedTaskOutputIsConsultable(t *testing.T) {
 	m := background.New()
 	m.AttachDispatcher(instantDispatcher("Server build complete\nListening on :3000"))
@@ -113,34 +100,26 @@ func TestObservability_FinishedTaskOutputIsConsultable(t *testing.T) {
 	}
 }
 
-// TestObservability_AgentKnowsRunningVsStopped : a long-running server reports
-// state "running" while alive, and flips to "cancelled" once stopped — the
-// agent can tell a live server from a dead one. Answers "savoir si un serveur
-// tourne encore / s'est arrêté ?".
 func TestObservability_AgentKnowsRunningVsStopped(t *testing.T) {
 	release := make(chan struct{})
 	defer close(release)
 	m := background.New()
-	m.AttachDispatcher(blockingDispatcher(release)) // models a server that never returns on its own
+	m.AttachDispatcher(blockingDispatcher(release))
 
 	id, err := launch(m, "s", "bash.run", map[string]any{"command": "node server.js"})
 	if err != nil {
 		t.Fatalf("launch: %v", err)
 	}
 
-	// While the "server" runs, the agent polling status sees "running".
 	waitFor(t, func() bool {
 		st, _ := m.Status(context.Background(), "s", id)
 		return st.State == "running"
 	}, "running state visible to agent")
 
-	// A still-running task has no captured Result yet (the dispatch hasn't
-	// returned) — this is the honest limit: live stdout is not streamed.
 	if st, _ := m.Status(context.Background(), "s", id); st.Result != nil {
 		t.Fatalf("running task should not yet expose a result (output is captured on exit), got %v", st.Result)
 	}
 
-	// The agent stops the server.
 	if err := m.Cancel(context.Background(), "s", id); err != nil {
 		t.Fatalf("cancel: %v", err)
 	}
@@ -150,12 +129,6 @@ func TestObservability_AgentKnowsRunningVsStopped(t *testing.T) {
 	}, "agent observes the server stopped")
 }
 
-// TestObservability_FailureNotificationCarriesRealOutput : the auto-notification
-// injected on the next turn for a FAILED background task must include the
-// captured output (e.g. EADDRINUSE), not just "it failed". This pins the
-// runTask → CompletionNotification.Output wiring end to end (a struct-only test
-// would miss a producer that never sets the field). Answers "avoir des retours
-// sur les bugs ?".
 func TestObservability_FailureNotificationCarriesRealOutput(t *testing.T) {
 	m := background.New()
 	m.AttachDispatcher(erroringDispatcher{
@@ -177,9 +150,6 @@ func TestObservability_FailureNotificationCarriesRealOutput(t *testing.T) {
 	}
 }
 
-// TestObservability_WaitBlocksUntilServerStops : an agent can block on a task
-// with a bounded timeout (background_run wait) and gets a timeout (still
-// running) vs a terminal snapshot — a third way to poll liveness.
 func TestObservability_WaitBlocksUntilServerStops(t *testing.T) {
 	release := make(chan struct{})
 	m := background.New()
@@ -187,13 +157,11 @@ func TestObservability_WaitBlocksUntilServerStops(t *testing.T) {
 
 	id, _ := launch(m, "s", "bash.run", map[string]any{"command": "node server.js"})
 
-	// Short wait while it's alive → timeout, snapshot still "running".
 	st, err := m.Wait(context.Background(), "s", id, 0.05)
 	if err == nil || st.State != "running" {
 		t.Fatalf("wait on a live server: err=%v state=%q (want timeout + running)", err, st.State)
 	}
 
-	// Server exits → wait returns the terminal snapshot.
 	close(release)
 	st, err = m.Wait(context.Background(), "s", id, 1)
 	if err != nil || st.State != "completed" {

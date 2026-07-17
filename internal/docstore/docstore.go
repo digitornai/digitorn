@@ -1,7 +1,3 @@
-// Package docstore is the fragment-document engine: a JSON document lives as a
-// directory of small fragments addressed by stable id, composed into the single
-// file the app reads and decomposed back when the app writes it. The engine is
-// fully generic — what to explode and how is declared per app (Manifest).
 package docstore
 
 import (

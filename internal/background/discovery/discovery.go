@@ -1,9 +1,3 @@
-// Package discovery arms the background service from app configuration: it reads
-// each installed app's app.yaml, extracts its `tools.modules.channels.config`
-// block, and turns the declared providers into armed triggers + configured
-// adapters. It reads the shared apps directory directly (no daemon import, no
-// daemon API) so it works even when the daemon is down — the design's resilience
-// choice. A periodic re-scan picks up installs / config changes.
 package discovery
 
 import (
@@ -33,14 +27,11 @@ import (
 	"github.com/digitornai/digitorn/internal/background/store"
 )
 
-// appManifest is the slice of an app.yaml we care about: the app id and the
-// channels module config. `tools.modules` is a map keyed by module name, so the
-// `channels` key binds directly to our struct (other modules are ignored).
 type appManifest struct {
 	App struct {
 		AppID string `yaml:"app_id"`
 	} `yaml:"app"`
-	AppID string `yaml:"app_id"` // some manifests put it at top level
+	AppID string `yaml:"app_id"`
 	Tools struct {
 		Modules struct {
 			Channels struct {
@@ -50,15 +41,11 @@ type appManifest struct {
 	} `yaml:"tools"`
 }
 
-// AppChannels is one app's resolved channels config.
 type AppChannels struct {
 	AppID  string
 	Config channels.ModuleConfig
 }
 
-// ScanApps reads <dir>/<app>/app.yaml for every app, returning those that declare
-// at least one channel provider. Unreadable / malformed manifests are skipped
-// (a bad app never breaks discovery of the others).
 func ScanApps(dir string) ([]AppChannels, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -89,8 +76,6 @@ func ScanApps(dir string) ([]AppChannels, error) {
 	return out, nil
 }
 
-// Plan is the fully-resolved arming plan: durable triggers + the adapter
-// providers that produce their events.
 type Plan struct {
 	Triggers  []processor.TriggerSpec
 	Webhooks  []webhook.Provider
@@ -100,23 +85,15 @@ type Plan struct {
 	WhatsApps []whatsapp.Provider
 	Discords  []discord.Provider
 	Pieces    []pieces.Provider
-	Warnings  []string // non-fatal per-provider issues (bad schedule, unknown adapter)
+	Warnings  []string
 }
 
-// BuildPlan turns discovered app channels into an arming plan. env resolves
-// {{env.X}} / {{secret.X}} placeholders in adapter config values (so secrets
-// stay out of the manifest). A provider with a fatal adapter-config error is
-// skipped with a warning — never aborts the whole plan.
 func BuildPlan(apps []AppChannels, env func(string) string, secret func(appID, key string) string) Plan {
 	if env == nil {
 		env = func(string) string { return "" }
 	}
 	var p Plan
 	for _, app := range apps {
-		// Per-app resolver: a {{secret.X}} placeholder (delivered to the resolver
-		// as "DIGITORN_BG_SECRET_X") is fetched from the daemon's per-app secret
-		// store first, so a token pasted in the UI works with no env var; env
-		// vars remain the fallback. {{env.X}} keeps resolving from the env.
 		appID := app.AppID
 		env := env
 		if secret != nil {
@@ -149,7 +126,7 @@ func BuildPlan(apps []AppChannels, env func(string) string, secret func(appID, k
 			case "cron":
 				if cp, ok := cronProvider(name, pc.Config, &p); ok {
 					p.Crons = append(p.Crons, cp)
-					spec.Schedule = cfgStr(pc.Config, "schedule", env) // for ops next_run
+					spec.Schedule = cfgStr(pc.Config, "schedule", env)
 				}
 			case "rss":
 				p.Feeds = append(p.Feeds, rssProvider(app.AppID, name, pc.Config, env))
@@ -164,8 +141,6 @@ func BuildPlan(apps []AppChannels, env func(string) string, secret func(appID, k
 					p.Pieces = append(p.Pieces, pp)
 				}
 			case "primitives":
-				// Primitives adapter is registered separately in Arm() — no provider config needed.
-				// The adapter polls the daemon's /api/events/recent endpoint for module events.
 			default:
 				p.Warnings = append(p.Warnings, "provider "+name+": adapter "+pc.Adapter+" not wired (V1: webhook|cron|rss|telegram|whatsapp|discord|pieces)")
 			}

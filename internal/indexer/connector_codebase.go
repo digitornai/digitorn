@@ -16,12 +16,6 @@ import (
 
 func init() { Register(&codebaseConnector{}) }
 
-// codebaseConnector indexes a code repository for semantic code search :
-// each source file is split into symbol-level chunks (func/method/type/
-// class/interface) via the shared codeast tree-sitter layer — the same
-// machinery that powers grep enrichment + the repo map. One chunk → one
-// document keyed by path#line. Walk-only for now (fsnotify watch later).
-// Only built with `-tags treesitter` (CGO); absent in the pure-Go build.
 type codebaseConnector struct{}
 
 func (*codebaseConnector) Type() string                                          { return "codebase" }
@@ -87,7 +81,6 @@ func (*codebaseConnector) Walk(_ context.Context, spec SourceSpec, emit func(Doc
 				return nil
 			}
 		}
-		// whole-file fallback (unparsed or symbol_chunks=false)
 		return emit(Document{ID: rel, Text: string(b), Meta: map[string]any{"path": rel}})
 	})
 }

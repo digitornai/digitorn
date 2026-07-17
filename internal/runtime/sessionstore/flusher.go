@@ -130,10 +130,6 @@ func (f *DiskFlusher) Enqueue(ev Event) error {
 	return f.shards[idx].tryEnqueue(ev)
 }
 
-// EnqueueBlocking waits for queue space, respecting ctx. Use this when
-// the caller cannot tolerate event drops (REST handlers, Socket.IO
-// bridge). Returns ctx.Err() if ctx is cancelled, ErrQueueFull only if
-// the per-sid quota gate trips (single session flooding).
 func (f *DiskFlusher) EnqueueBlocking(ctx context.Context, ev Event) error {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
@@ -144,16 +140,6 @@ func (f *DiskFlusher) EnqueueBlocking(ctx context.Context, ev Event) error {
 	return f.shards[idx].tryEnqueueBlocking(ctx, ev)
 }
 
-// EnqueueDurable waits for queue space AND for the event to be fsynced
-// to disk before returning. This is the event-sourcing durability
-// guarantee : when this call returns nil, the event survives kill -9.
-//
-// Latency : queue wait + (flush interval ÷ 2) + fsync. Throughput :
-// unaffected (events still batch ; only the ack arrives later).
-//
-// Requires the flusher to be configured with Fsync=true ; otherwise
-// "durable" only means "written to OS page cache", which can still be
-// lost on power failure but survives a process kill.
 func (f *DiskFlusher) EnqueueDurable(ctx context.Context, ev Event) error {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
@@ -164,10 +150,6 @@ func (f *DiskFlusher) EnqueueDurable(ctx context.Context, ev Event) error {
 	return f.shards[idx].tryEnqueueDurable(ctx, ev)
 }
 
-// EnqueueDurableBatch is the group-commit form of EnqueueDurable : it
-// enqueues every event and waits for all their fsync acks together. All
-// events must share one session_id so they route to a single shard and
-// batch into one fsync. Returns one result per event (nil = durable).
 func (f *DiskFlusher) EnqueueDurableBatch(ctx context.Context, evs []Event) []error {
 	res := make([]error, len(evs))
 	if len(evs) == 0 {

@@ -17,7 +17,7 @@ type AppMeta struct {
 	AttachmentsMode AttachmentsMode   `yaml:"attachments_mode,omitempty" json:"attachments_mode,omitempty"`
 	Features        map[string]bool   `yaml:"features,omitempty" json:"features,omitempty"`
 	Theme           map[string]string `yaml:"theme,omitempty" json:"theme,omitempty"`
-	Mode            string            `yaml:"mode,omitempty" json:"mode,omitempty"` // some manifests put runtime.mode at app level
+	Mode            string            `yaml:"mode,omitempty" json:"mode,omitempty"`
 }
 
 type QuickPrompt struct {

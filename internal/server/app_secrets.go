@@ -2,8 +2,6 @@ package server
 
 import "os"
 
-// daemonAppSecrets resolves {{secret.X}} for flow nodes and module config at
-// runtime. UI-stored secrets take precedence; env vars remain a dev fallback.
 type daemonAppSecrets struct {
 	store *secretStore
 }

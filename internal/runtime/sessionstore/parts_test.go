@@ -5,9 +5,6 @@ import (
 	"testing"
 )
 
-// TestNormalizeMessageParts_NewWriter_KeepsPartsExactly asserts that a
-// writer using the new Parts field gets back exactly the parts it
-// supplied — no reordering, no loss, no synthesis.
 func TestNormalizeMessageParts_NewWriter_KeepsPartsExactly(t *testing.T) {
 	blob := BlobRef{Hash: "abc123", Mime: "image/png", Size: 1024}
 	tc := &ToolCallSpec{ID: "call-1", Name: "search", Args: map[string]any{"q": "go"}}
@@ -37,9 +34,6 @@ func TestNormalizeMessageParts_NewWriter_KeepsPartsExactly(t *testing.T) {
 	}
 }
 
-// TestNormalizeMessageParts_LegacyWriter_SynthesizesParts asserts that
-// a legacy writer (Content + Attachments only, no Parts) gets a Parts
-// list synthesized for them — so new readers see a uniform shape.
 func TestNormalizeMessageParts_LegacyWriter_SynthesizesParts(t *testing.T) {
 	in := &MessagePayload{
 		Role:    "user",
@@ -76,9 +70,6 @@ func TestNormalizeMessageParts_LegacyWriter_SynthesizesParts(t *testing.T) {
 	}
 }
 
-// TestNormalizeMessageParts_TextOnly_LossPath asserts the simplest path
-// — pure text message — survives perfectly through normalization. This
-// covers > 95% of real-world traffic.
 func TestNormalizeMessageParts_TextOnly_LossPath(t *testing.T) {
 	in := &MessagePayload{Role: "user", Content: "ping"}
 	parts, content, _, _ := NormalizeMessageParts(in)
@@ -90,9 +81,6 @@ func TestNormalizeMessageParts_TextOnly_LossPath(t *testing.T) {
 	}
 }
 
-// TestNormalizeMessageParts_MultipleTextParts_ConcatenatedInContent
-// asserts the legacy Content field correctly captures all text parts
-// (so legacy readers don't miss anything when the message is multi-part).
 func TestNormalizeMessageParts_MultipleTextParts_ConcatenatedInContent(t *testing.T) {
 	in := &MessagePayload{
 		Role: "assistant",
@@ -108,9 +96,6 @@ func TestNormalizeMessageParts_MultipleTextParts_ConcatenatedInContent(t *testin
 	}
 }
 
-// TestNormalizeMessageParts_NilSafe asserts NormalizeMessageParts handles
-// a nil payload without panicking. Protects projection from bugs in
-// writers that emit malformed events.
 func TestNormalizeMessageParts_NilSafe(t *testing.T) {
 	parts, content, toolIDs, atts := NormalizeMessageParts(nil)
 	if parts != nil || content != "" || toolIDs != nil || atts != nil {
@@ -118,10 +103,6 @@ func TestNormalizeMessageParts_NilSafe(t *testing.T) {
 	}
 }
 
-// TestNormalizeMessageParts_ForwardCompatUnknownType asserts that an
-// unknown part type is preserved through normalization. Future formats
-// (e.g. "embedding") survive round-trip even before we add explicit
-// handling.
 func TestNormalizeMessageParts_ForwardCompatUnknownType(t *testing.T) {
 	in := &MessagePayload{
 		Role: "user",
@@ -135,9 +116,6 @@ func TestNormalizeMessageParts_ForwardCompatUnknownType(t *testing.T) {
 	}
 }
 
-// TestProjectionAppliesNormalization is the integration check : an
-// event going through projection produces a Message whose Parts +
-// Content are normalized consistently.
 func TestProjectionAppliesNormalization(t *testing.T) {
 	st := NewSessionState("sess-1")
 	blob := BlobRef{Hash: "img-h", Mime: "image/png", Size: 100}

@@ -29,10 +29,6 @@ type CompactOptions struct {
 type SessionGate interface {
 	LockSession(sid string) func()
 	DropFD(sid string)
-	// FlushPending drains every queued write to disk. The truncate calls it
-	// while holding LockSession, so an event allocated since the compaction
-	// snapshot (seq > cutoff) is on disk and the JSONL rewrite keeps it instead
-	// of silently dropping it.
 	FlushPending(ctx context.Context) error
 }
 
@@ -162,13 +158,6 @@ func (c *Compactor) Compact(ctx context.Context, state *SessionState, opts Compa
 	jsonlPath := c.paths.EventsFile(state.SessionID)
 	beforeSize := fileSizeOrZero(jsonlPath)
 
-	// Build the snapshot's transcript LOSSLESSLY : the UNION of the bounded
-	// in-memory window and the disk rebuild (previous snapshot's messages +
-	// message events since). The in-memory state.Messages is trimmed to the
-	// model's window, so serializing it alone would drop the pre-window
-	// transcript once the JSONL is truncated below ; the disk alone can lag the
-	// in-memory view if a writer hasn't flushed yet. The union is complete under
-	// both — and under production's AppendDurable (disk ⊇ memory) it equals disk.
 	if jres, jerr := ReadJSONL(jsonlPath, JSONLBestEffort, ""); jerr == nil {
 		snap.Messages = MergeMessagesBySeq(snap.Messages, TranscriptFromParts(prevSnap, jres.Events))
 	}
@@ -191,8 +180,6 @@ func (c *Compactor) Compact(ctx context.Context, state *SessionState, opts Compa
 	writeDur := time.Since(writeStart).Nanoseconds()
 
 	if err := updateMetaAfterSnapshot(dir, &snap, writeRes, cutoff); err != nil {
-		// Snapshot is on disk and atomic. Meta update failure is non-fatal
-		// because Load() rebuilds meta when inconsistent.
 	}
 
 	res := &CompactResult{
@@ -267,19 +254,12 @@ func (c *Compactor) Compact(ctx context.Context, state *SessionState, opts Compa
 			_, _, _ = truncateUnderGate(gate, sid, jsonlPath, cutoff, fs)
 		}()
 	case TruncateDeferred:
-		// Intentionally leave the JSONL untouched. Load() will skip
-		// events with seq <= cutoff via snapshot.CutoffSeq.
 	}
 
 	res.EndedAtUnixNano = endedNano
 	return res, nil
 }
 
-// updateMetaAfterSnapshot writes the post-compaction meta.json. It reads
-// from the IMMUTABLE SessionSnapshot captured at the start of Compact —
-// NOT the live SessionState — so it never races a concurrent append
-// mutating the state (the snapshot is a consistent point-in-time copy,
-// which is also exactly the moment this compaction represents).
 func updateMetaAfterSnapshot(dir string, snap *SessionSnapshot, wr *WriteSnapshotResult, cutoff uint64) error {
 	metaPath := filepath.Join(dir, metaFilename)
 	existing, _ := ReadMeta(metaPath)
@@ -331,11 +311,6 @@ func truncateUnderGate(gate SessionGate, sid, path string, cutoff uint64, fsync 
 	if gate != nil {
 		unlock := gate.LockSession(sid)
 		defer unlock()
-		// Drain in-flight writes BEFORE reading the JSONL. An event allocated
-		// between the compaction snapshot and this lock (so seq > cutoff) may
-		// still be in the flusher queue ; persist it now so the rewrite keeps it.
-		// LockSession blocks NEW appends, so once drained the queue stays empty
-		// through the read+rename — closing the race with the async flusher.
 		_ = gate.FlushPending(context.Background())
 		gate.DropFD(sid)
 	}
@@ -427,7 +402,6 @@ func estimateSnapshotSize(snap *SessionSnapshot) int64 {
 	for _, fact := range snap.Facts {
 		n += int64(len(fact))
 	}
-	// 256 byte overhead per discrete object as a fudge factor.
 	n += int64(256 * (len(snap.ToolCalls) + len(snap.Approvals) + len(snap.WorkspaceFiles) + len(snap.Widgets) + len(snap.Previews)))
 	return n
 }

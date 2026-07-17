@@ -19,10 +19,6 @@ func pgDSN() string {
 	return "postgres://postgres:postgres@localhost:5433/postgres"
 }
 
-// TestDatabaseModule_Live proves the agent-facing path end-to-end on a real
-// Postgres : the 3 tools (connect → query → disconnect) over a config-declared
-// named connection, with the security policy (read-only + PII masking) and the
-// decorated schema flowing back through the tool results.
 func TestDatabaseModule_Live(t *testing.T) {
 	raw, err := sql.Open("pgx", pgDSN())
 	if err != nil {
@@ -57,7 +53,6 @@ func TestDatabaseModule_Live(t *testing.T) {
 	m := New()
 	defer m.mgr.Shutdown()
 
-	// connect → decorated schema returned.
 	r, _ := m.connect(ctx, json.RawMessage(`{"name":"prod"}`))
 	if !r.Success {
 		t.Fatalf("connect failed: %s", r.Error)
@@ -67,7 +62,6 @@ func TestDatabaseModule_Live(t *testing.T) {
 		t.Fatalf("connect did not return a decorated schema: %+v", r.Data)
 	}
 
-	// query with NO connection → defaults to the sole configured DB ; PII masked.
 	r, _ = m.query(ctx, json.RawMessage(`{"query":"SELECT id, name, ssn FROM accounts ORDER BY id"}`))
 	if !r.Success {
 		t.Fatalf("query failed: %s", r.Error)

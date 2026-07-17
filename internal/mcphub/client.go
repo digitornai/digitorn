@@ -1,11 +1,3 @@
-// Package mcphub is a read-only client for the Digitorn Hub's MCP endpoints.
-// The Hub is the central, admin-curated SOURCE of MCP server definitions
-// (the verified "featured" catalog + a semantically-searchable mirror of the
-// upstream registry); each daemon CONSUMES it and installs servers into its own
-// per-user store. The Hub never installs anything — it only serves configs.
-//
-// All endpoints used here are PUBLIC reads (no auth), so the client needs only
-// the Hub base URL. Results are cached briefly (the catalog moves slowly).
 package mcphub
 
 import (
@@ -22,9 +14,6 @@ import (
 	"time"
 )
 
-// FeaturedEntry mirrors the Hub's McpFeaturedRow — one curated, verified MCP
-// server definition. Its shape matches the daemon's internal catalog entry, so
-// it resolves into a launch spec exactly like a static-catalog server.
 type FeaturedEntry struct {
 	ServerID    string            `json:"server_id"`
 	DisplayName string            `json:"display_name"`
@@ -57,9 +46,6 @@ type FeaturedEntry struct {
 	VerifiedAt   *time.Time `json:"verified_at"`
 	LastTestedOK bool       `json:"last_tested_ok"`
 
-	// Hosted/BYOK: a hosted_url means Digitorn runs the server (zero user setup);
-	// personal_keys are the creds a BYOK user supplies; digitorn_provided are
-	// keys Digitorn injects on the user's behalf.
 	PersonalKeys     []string          `json:"personal_keys"`
 	DigitornProvided map[string]string `json:"digitorn_provided"`
 	HostedURL        *string           `json:"hosted_url"`

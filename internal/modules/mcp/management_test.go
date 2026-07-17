@@ -11,13 +11,11 @@ func TestCatalogListAndGet(t *testing.T) {
 	if len(all) == 0 {
 		t.Fatal("catalog is empty")
 	}
-	// Sorted by id, no dupes.
 	for i := 1; i < len(all); i++ {
 		if all[i-1].ServerID >= all[i].ServerID {
 			t.Fatalf("catalog not strictly sorted: %q then %q", all[i-1].ServerID, all[i].ServerID)
 		}
 	}
-	// github is a known catalog entry with an env-mapped credential.
 	gh, ok := CatalogGet("github")
 	if !ok {
 		t.Fatal("github not in catalog")
@@ -34,7 +32,6 @@ func TestCatalogListAndGet(t *testing.T) {
 }
 
 func TestCatalogOAuthFlag(t *testing.T) {
-	// notion is OAuth-capable in the catalog.
 	n, ok := CatalogGet("notion")
 	if !ok {
 		t.Skip("notion not in catalog")
@@ -45,8 +42,6 @@ func TestCatalogOAuthFlag(t *testing.T) {
 }
 
 func TestSearchCatalogOnly(t *testing.T) {
-	// A substring that only matches the catalog (offline; registry hit is a
-	// best-effort network call that may add a result but never removes one).
 	res := Search(context.Background(), "github")
 	var found bool
 	for _, r := range res {
@@ -73,7 +68,6 @@ func TestRequirementsFromCatalog(t *testing.T) {
 	if !strings.HasPrefix(req.YAMLExample, "github:") {
 		t.Fatalf("yaml example does not start with the server id:\n%s", req.YAMLExample)
 	}
-	// The env var the server actually reads must be carried through.
 	var hasEnv bool
 	for _, c := range req.Credentials {
 		if c.EnvVar != "" {

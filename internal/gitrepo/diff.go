@@ -9,8 +9,6 @@ import (
 	"github.com/sergi/go-diff/diffmatchpatch"
 )
 
-// encodeUnified renders a git-style unified diff for one file from the
-// line-oriented diff of its old (HEAD) and new (working-tree) contents.
 func encodeUnified(path, oldContent, newContent string, diffs []diffmatchpatch.Diff) (string, error) {
 	if oldContent == newContent {
 		return "", nil
@@ -44,9 +42,6 @@ func encodeUnified(path, oldContent, newContent string, diffs []diffmatchpatch.D
 	}
 	return buf.String(), nil
 }
-
-// The four tiny adapters below implement go-git's diff.Patch interfaces so we
-// can reuse its UnifiedEncoder to format the output exactly like git does.
 
 type textChunk struct {
 	content string

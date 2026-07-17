@@ -15,8 +15,6 @@ import (
 	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
 )
 
-// blockingBGDispatcher blocks until its context is cancelled — a stand-in for a
-// long-running background tool, so we can prove abort cancels it.
 type blockingBGDispatcher struct{}
 
 func (blockingBGDispatcher) Dispatch(ctx context.Context, _ runtime.ToolInvocation) runtime.ToolOutcome {
@@ -24,8 +22,6 @@ func (blockingBGDispatcher) Dispatch(ctx context.Context, _ runtime.ToolInvocati
 	return runtime.ToolOutcome{Status: "errored", Error: ctx.Err().Error()}
 }
 
-// TestAPI_AbortStopsBackgroundTasks : the total abort primitive must also cancel
-// running background_run tasks in the session, not only the turn + agents.
 func TestAPI_AbortStopsBackgroundTasks(t *testing.T) {
 	h := newAPIHarness(t)
 	bg := background.New()
@@ -43,7 +39,7 @@ func TestAPI_AbortStopsBackgroundTasks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("launch: %v", err)
 	}
-	time.Sleep(10 * time.Millisecond) // let the task goroutine register
+	time.Sleep(10 * time.Millisecond)
 
 	code, body := h.do(t, "POST", "/api/apps/app-1/sessions/"+sid+"/abort", "user-A", "")
 	if code != http.StatusOK {
@@ -65,11 +61,6 @@ func TestAPI_AbortStopsBackgroundTasks(t *testing.T) {
 	}, "background task cancelled by abort")
 }
 
-// resyncStubRunner is a deterministic sub-agent runner. It drives the real
-// telemetry Recorder the manager injected into the sub-turn (proving the live
-// counters fill exactly as they would under a real engine), then returns a
-// result. No LLM — what's under test is the resync mechanism (durable agent
-// tree + live telemetry + per-session isolation), not the model.
 type resyncStubRunner struct {
 	toolCalls int
 	tokensIn  int
@@ -92,8 +83,6 @@ func (r resyncStubRunner) RunSubAgent(ctx context.Context, spec runtime.SubAgent
 	}, nil
 }
 
-// blockingRunner blocks until its context is cancelled, then reports the
-// terminal status the manager derives from the cancelled ctx.
 type blockingRunner struct{ started chan struct{} }
 
 func (b blockingRunner) RunSubAgent(ctx context.Context, spec runtime.SubAgentSpec) (runtime.AgentResult, error) {
@@ -105,9 +94,6 @@ func (b blockingRunner) RunSubAgent(ctx context.Context, spec runtime.SubAgentSp
 	return runtime.AgentResult{RunID: spec.RunID, AgentID: spec.AgentID, Status: "cancelled"}, ctx.Err()
 }
 
-// TestAPI_AbortCancelsAgentTree : POST /abort is a HARD stop — it must cancel
-// the whole delegated tree, not just leave a durable marker. Sub-agents run on
-// independent contexts, so only CancelAll reaches them.
 func TestAPI_AbortCancelsAgentTree(t *testing.T) {
 	h := newAPIHarness(t)
 	started := make(chan struct{}, 2)
@@ -133,7 +119,7 @@ func TestAPI_AbortCancelsAgentTree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("spawn child: %v", err)
 	}
-	<-started // at least one is actually running before we abort
+	<-started
 
 	code, body := h.do(t, "POST", "/api/apps/app-1/sessions/"+sid+"/abort", "user-A", "")
 	if code != http.StatusOK {

@@ -1,14 +1,3 @@
-// Package mediagen calls the gateway's dedicated image/video generation
-// endpoints — these are NOT exposed through /v1/chat/completions, so an
-// image/video agent does a single authenticated POST here instead of a chat
-// turn. Everything still flows through the gateway (same JWT/sk auth as chat).
-//
-//	image : POST {base}/v1/images/generations  → {data:[{url|b64_json}]}
-//	video : POST {base}/v1/videos/generations  → {video:{url, content_type,…}}
-//
-// Generated images are downloaded to bytes here so they can be persisted in the
-// content-addressed blob store (the gateway/CDN URLs are short-lived). Videos
-// stay as URLs (downloading them would be heavy) — the URL is rendered directly.
 package mediagen
 
 import (
@@ -97,7 +86,6 @@ func (c *Client) GenerateImage(ctx context.Context, model, prompt, bearer string
 		if d.URL != "" {
 			data, mime, err := c.download(ctx, d.URL)
 			if err != nil || len(data) == 0 {
-				// Keep the URL as a fallback so something still renders.
 				parts = append(parts, llm.ContentPart{Type: llm.ContentTypeImage, URL: d.URL})
 				continue
 			}

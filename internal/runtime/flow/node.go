@@ -9,16 +9,12 @@ import (
 	"github.com/digitornai/digitorn/internal/compiler/schema"
 )
 
-// execResult is the outcome of running one node. Routing happens afterwards in
-// the runner by evaluating node.Routes against the context.
 type execResult struct {
 	text      string
 	status    string
 	terminate bool
 }
 
-// executeNode runs a single node, recording its output into ctx. It does NOT
-// decide the next node; the runner evaluates routes after this returns.
 func (r *Runner) executeNode(ctx context.Context, node schema.FlowNode, fc *fctx, in runInput) (execResult, error) {
 	switch node.Type {
 	case "agent":
@@ -119,10 +115,6 @@ func (r *Runner) execTerminal(node schema.FlowNode, fc *fctx) execResult {
 	return execResult{status: "completed", text: out, terminate: true}
 }
 
-// agentTask derives the agent's user-turn input from the node params. The Go
-// schema carries agent input under `params` (the doc's `input:` is a schema
-// alias). Convention: an explicit `task`/`user_message` wins; otherwise the
-// resolved params are JSON-encoded so a structured input still reaches the agent.
 func (r *Runner) agentTask(node schema.FlowNode, fc *fctx) string {
 	if s := stringParam(node.Params, "task"); s != "" {
 		return fc.interpolate(s)
@@ -178,9 +170,6 @@ func normalizeChoices(raw []any) []string {
 	return out
 }
 
-// resolutionToChoice maps an approval registry resolution to one of the node's
-// declared choices. Approved → the first choice (conventionally "approve");
-// any non-approval → the second choice (conventionally "reject").
 func resolutionToChoice(res approvalResolution, choices []string) string {
 	approve, reject := "approve", "reject"
 	if len(choices) > 0 {

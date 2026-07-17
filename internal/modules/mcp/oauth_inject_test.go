@@ -39,7 +39,6 @@ func TestHeaderRoundTripper_DefaultSchemeAndNoToken(t *testing.T) {
 	cap := &captureRT{}
 	h := &headerRoundTripper{base: cap, headers: nil}
 
-	// Empty token type → defaults to Bearer.
 	ctx := module.WithAuthContext(context.Background(), module.AuthContext{Token: "AT"})
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://x", nil)
 	_, _ = h.RoundTrip(req)
@@ -47,7 +46,6 @@ func TestHeaderRoundTripper_DefaultSchemeAndNoToken(t *testing.T) {
 		t.Fatalf("default scheme: got %q", got)
 	}
 
-	// No auth context → no Authorization header at all.
 	req2, _ := http.NewRequest(http.MethodGet, "https://x", nil)
 	_, _ = h.RoundTrip(req2)
 	if cap.last.Header.Get("Authorization") != "" {
@@ -81,8 +79,6 @@ func TestPhysicalKey(t *testing.T) {
 	}
 }
 
-// callCtx builds the worker-side call context: identity (userID) + per-app config
-// + the resolved auth context.
 func callCtx(userID, envVar, token string, servers map[string]any) context.Context {
 	ctx := tool.WithIdentity(context.Background(), tool.Identity{UserID: userID, ModuleID: "mcp"})
 	ctx = module.WithModuleConfig(ctx, map[string]any{"servers": servers})
@@ -127,11 +123,11 @@ func TestEnsureConnected_ReconnectsOnTokenChange(t *testing.T) {
 	}}
 
 	m.ensureConnected(callCtx("userA", "TOK", "tok1", servers), "")
-	m.ensureConnected(callCtx("userA", "TOK", "tok1", servers), "") // unchanged → no redial
+	m.ensureConnected(callCtx("userA", "TOK", "tok1", servers), "")
 	if dials != 1 {
 		t.Fatalf("expected 1 dial for unchanged token, got %d", dials)
 	}
-	m.ensureConnected(callCtx("userA", "TOK", "tok2", servers), "") // rotated → redial
+	m.ensureConnected(callCtx("userA", "TOK", "tok2", servers), "")
 	if dials != 2 {
 		t.Fatalf("expected redial on token change, got %d dials", dials)
 	}
@@ -158,7 +154,6 @@ func TestEvictOldestUserConn(t *testing.T) {
 	for i, id := range []string{"s\x00u1", "s\x00u2", "s\x00u3"} {
 		p.putEntry(&serverEntry{id: id, conn: &fakeConn{}, status: statusConnected, createdAt: base.Add(time.Duration(i) * time.Second)})
 	}
-	// Keep at most 2 → evicting before adding the 4th removes the oldest (u1).
 	p.evictOldestUserConn(userKeySep, 3)
 	if _, ok := p.get("s\x00u1"); ok {
 		t.Fatal("oldest per-user conn should have been evicted")

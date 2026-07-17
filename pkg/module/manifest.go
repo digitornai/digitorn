@@ -5,7 +5,6 @@ import (
 	"github.com/digitornai/digitorn/internal/domain/tool"
 )
 
-// Type aliases so module authors and external tooling can use one package.
 type (
 	Manifest  = domainmodule.Manifest
 	Platform  = domainmodule.Platform
@@ -14,9 +13,6 @@ type (
 	RiskLevel = tool.RiskLevel
 	Result    = tool.Result
 
-	// PromptContributor + its types : a module implements these to inject
-	// system-prompt content for AUTHORIZED agents (port of the reference
-	// daemon's get_prompt_sections / get_dynamic_tool_prompts).
 	PromptContributor = domainmodule.PromptContributor
 	PromptSection     = domainmodule.PromptSection
 	PromptScope       = domainmodule.PromptScope

@@ -20,8 +20,6 @@ func labelManifest() Manifest {
 	return m
 }
 
-// The agent declares only a label; the engine materialises a bound, centred
-// text element wired both ways and z-ordered above its node.
 func TestLabels_MaterialisedBoundAndOnTop(t *testing.T) {
 	dir := t.TempDir()
 	m := labelManifest()
@@ -39,11 +37,9 @@ func TestLabels_MaterialisedBoundAndOnTop(t *testing.T) {
 	if err := json.Unmarshal(composed, &doc); err != nil {
 		t.Fatal(err)
 	}
-	// root header seeded
 	if doc.Type != "excalidraw" || doc.Version != 2 {
 		t.Fatalf("root header not seeded: type=%q version=%v", doc.Type, doc.Version)
 	}
-	// exactly one box + one generated label
 	if len(doc.Elements) != 2 {
 		t.Fatalf("want box+label = 2 elements, got %d", len(doc.Elements))
 	}
@@ -64,11 +60,9 @@ func TestLabels_MaterialisedBoundAndOnTop(t *testing.T) {
 	if label["textAlign"] != "center" || label["verticalAlign"] != "middle" {
 		t.Fatalf("label not centred: %v", label)
 	}
-	// completion reached the generated element
 	if label["fontFamily"] == nil || label["seed"] == nil {
 		t.Fatalf("generated label not completed by defaults: %v", label)
 	}
-	// z-order: label drawn AFTER (above) its box, and box lists it in boundElements
 	if doc.Elements[0]["type"] == "text" {
 		t.Fatalf("label must sort after its box, not before")
 	}
@@ -84,8 +78,6 @@ func TestLabels_MaterialisedBoundAndOnTop(t *testing.T) {
 	}
 }
 
-// A generated label is never persisted as a hand-authored fragment when the app
-// saves the composed doc back.
 func TestLabels_NotDecomposedToFragment(t *testing.T) {
 	dir := t.TempDir()
 	m := labelManifest()
@@ -103,8 +95,6 @@ func TestLabels_NotDecomposedToFragment(t *testing.T) {
 	}
 }
 
-// A lossy canvas round-trip (app drops unknown fields cell/label) must not erase
-// the agent's declarative intent — preserveAuthored restores it on decompose.
 func TestLabels_AuthoredFieldsSurviveLossyRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	m := labelManifest()
@@ -116,7 +106,6 @@ func TestLabels_AuthoredFieldsSurviveLossyRoundTrip(t *testing.T) {
 	j := LoadJournal(dir)
 	RecordComposed(j, composed, m, dir)
 
-	// simulate the app re-saving the box WITHOUT the app-unknown cell/label fields
 	lossy := []byte(`{"elements":[{"id":"box","type":"rectangle","index":"a0","x":0,"y":0,"width":200,"height":80}],"files":{}}`)
 	if _, err := Decompose(m, lossy, dir, j); err != nil {
 		t.Fatalf("decompose: %v", err)

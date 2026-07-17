@@ -42,7 +42,7 @@ func TestSealer_OpenRejectsTampered(t *testing.T) {
 	if _, err := s.Open("not-base64!!"); err == nil {
 		t.Fatal("expected error on bad base64")
 	}
-	if _, err := s.Open("c2hvcnQ="); err == nil { // "short" < 24 bytes
+	if _, err := s.Open("c2hvcnQ="); err == nil {
 		t.Fatal("expected error on short ciphertext")
 	}
 }

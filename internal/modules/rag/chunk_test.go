@@ -19,11 +19,9 @@ func TestChunkize_EmptyIsNil(t *testing.T) {
 }
 
 func TestChunkize_RecursiveSplitsLongText(t *testing.T) {
-	// 20 paragraphs of ~120 runes each → must split into several chunks,
-	// each within a reasonable bound of the target size.
 	var b strings.Builder
 	for i := 0; i < 20; i++ {
-		b.WriteString(strings.Repeat("phrase exemple ", 8)) // ~120 runes
+		b.WriteString(strings.Repeat("phrase exemple ", 8))
 		b.WriteString("\n\n")
 	}
 	chunks := Chunkize(b.String(), StrategyRecursive, 300, 40)
@@ -54,7 +52,6 @@ func TestChunkize_FixedWindowsWithOverlap(t *testing.T) {
 }
 
 func TestChunkize_OverlapCarriesContext(t *testing.T) {
-	// Distinct sentences ; with overlap, adjacent chunks should share text.
 	text := ""
 	for i := 0; i < 30; i++ {
 		text += "Sentence number " + strings.Repeat("z", 5) + ". "
@@ -63,7 +60,6 @@ func TestChunkize_OverlapCarriesContext(t *testing.T) {
 	if len(chunks) < 2 {
 		t.Skip("not enough chunks to assess overlap")
 	}
-	// Reassembled chunks must cover the whole source (no dropped content).
 	joined := strings.Join(chunkTexts(chunks), "")
 	if !strings.Contains(joined, "Sentence number") {
 		t.Error("content lost during chunking")

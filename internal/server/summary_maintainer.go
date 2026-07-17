@@ -13,8 +13,6 @@ import (
 	"github.com/digitornai/digitorn/internal/safego"
 )
 
-// contextBGSummaryDisabled is the kill-switch. Default ON — set
-// DIGITORN_CONTEXT_BG_SUMMARY=0 to fall back to inline summarize.
 func contextBGSummaryDisabled() bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("DIGITORN_CONTEXT_BG_SUMMARY"))) {
 	case "0", "false", "no", "off":
@@ -23,18 +21,6 @@ func contextBGSummaryDisabled() bool {
 	return false
 }
 
-// summaryMaintainer keeps a high-fidelity LLM summary of each session's aged
-// region PREPARED ahead of the compaction gate, entirely off the turn loop.
-// The runtime calls Touch (non-blocking) after each turn; a bounded worker
-// pool coalesces per-session, runs the (possibly slow) summary LLM call in the
-// background, and persists an EventContextSummaryPrepared candidate the gate
-// applies instantly. When the prepared candidate already covers the region the
-// gate would drop, compaction is zero-latency: no LLM call on the turn loop.
-//
-// Delta mode (default): only new messages since the last prepared coverage are
-// sent to the summary LLM — 5-10x cheaper than re-summarising the full history.
-// The prior summary provides the accumulated context; the LLM merges the delta
-// into it, producing a rolling, cumulative handoff.
 type summaryMaintainer struct {
 	store     *sessionstore.Bus
 	compactor *contextCompactor
@@ -44,7 +30,7 @@ type summaryMaintainer struct {
 
 	mu      sync.Mutex
 	pending map[string]struct{}
-	jwts    map[string]string // freshest user JWT per session; in-memory only
+	jwts    map[string]string
 	queue   chan string
 	stop    chan struct{}
 	wg      sync.WaitGroup
@@ -97,10 +83,6 @@ func (m *summaryMaintainer) Stop() {
 	m.wg.Wait()
 }
 
-// Touch signals a session whose aged region may need a fresh prepared summary.
-// jwt is stashed so the off-loop LLM call authenticates in gateway mode.
-// NEVER blocks: a duplicate pending touch is coalesced and a saturated queue
-// drops the marker (the next Touch re-enqueues).
 func (m *summaryMaintainer) Touch(sessionID, jwt string) {
 	if m == nil || sessionID == "" {
 		return
@@ -145,10 +127,6 @@ func (m *summaryMaintainer) takeJWT(sid string) string {
 	return m.jwts[sid]
 }
 
-// prepare computes (off the loop) a high-fidelity LLM summary and persists it
-// as a candidate. Uses delta-mode when an existing summary already covers part
-// of the history — only new messages are sent to the LLM, dramatically reducing
-// cost for long sessions. Recover-guarded: panics never crash the pool.
 func (m *summaryMaintainer) prepare(sid string) {
 	defer safego.Recover("server.summaryMaintainer.prepare")
 	if m.store == nil || m.compactor == nil {
@@ -170,7 +148,6 @@ func (m *summaryMaintainer) prepare(sid string) {
 	}
 	keepRecent := contextcompact.KeepRecentOrDefault(keep)
 
-	// Protect the last user message (same guard as compactor).
 	for i := len(snap.Messages) - 1; i >= 0; i-- {
 		if snap.Messages[i].Role == "user" {
 			if minKeep := len(snap.Messages) - i; keepRecent < minKeep {
@@ -189,7 +166,6 @@ func (m *summaryMaintainer) prepare(sid string) {
 		return
 	}
 
-	// Hysteresis: already have a summary that covers this far or further.
 	if snap.PreparedSummary != nil && coversSeq <= snap.PreparedSummary.CoversSeq {
 		return
 	}
@@ -202,8 +178,6 @@ func (m *summaryMaintainer) prepare(sid string) {
 		summaryMax = cfg.SummaryMaxTokens
 	}
 
-	// Resolve best available prior: PreparedSummary wins over ContextCompaction
-	// when it covers further (always the case if maintained correctly).
 	existingCoverage := uint64(0)
 	priorSummary := ""
 	if snap.ContextCompaction != nil && snap.ContextCompaction.CutoffSeq > 0 {
@@ -232,10 +206,6 @@ func (m *summaryMaintainer) prepare(sid string) {
 	var res contextcompact.Result
 
 	if existingCoverage > 0 {
-		// DELTA MODE: only summarize messages since existing coverage.
-		// We build a synthetic slice [delta + tail] so SafeSplitIndex inside
-		// Summarize computes cut = len(delta), summarizing only the new portion.
-		// The prior summary provides cumulative context to the LLM.
 		var delta []sessionstore.Message
 		for i := range snap.Messages[:cut] {
 			if snap.Messages[i].Seq > existingCoverage {
@@ -243,16 +213,11 @@ func (m *summaryMaintainer) prepare(sid string) {
 			}
 		}
 		if len(delta) == 0 {
-			return // existing coverage is already up to date
+			return
 		}
-		// tail = snap.Messages[cut:] has exactly keepRecent messages.
-		// delta + tail → SafeSplitIndex gives cut = len(delta), so Summarize
-		// drops only the delta and keeps the tail verbatim. Perfect.
 		synthetic := append(delta, snap.Messages[cut:]...)
 		res = contextcompact.Summarize(ctx, synthetic, keepRecent, s, summaryMax, snap.Goal, priorSummary)
-		// CutoffSeq from Summarize points to delta's last message = snap.Messages[cut-1].Seq ✓
 	} else {
-		// FULL MODE: first summarization, no prior coverage.
 		res = contextcompact.Summarize(ctx, snap.Messages, keepRecent, s, summaryMax, snap.Goal, "")
 	}
 

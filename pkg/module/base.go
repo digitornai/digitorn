@@ -1,9 +1,3 @@
-// Package module is the public SDK for authoring Digitorn modules.
-//
-// A module embeds Base, sets its identity in a constructor, registers its
-// tools via RegisterTool, optionally implements OnPause/OnResume/OnReload,
-// and may override Init/Start/Stop or call BindConfig to parse its typed
-// configuration.
 package module
 
 import (
@@ -77,7 +71,6 @@ func (b *Base) Manifest() domainmodule.Manifest {
 	}
 }
 
-// BindConfig unmarshals cfg into target (a pointer to a struct). Call from Init.
 func (b *Base) BindConfig(cfg map[string]any, target any) error {
 	if cfg == nil {
 		return nil
@@ -117,21 +110,14 @@ func (b *Base) Stop(ctx context.Context) error {
 	return b.state.transition(StateDisabled)
 }
 
-// Pause transitions the module from ACTIVE to PAUSED. Override to drain
-// in-flight work; the default just flips state.
 func (b *Base) Pause(ctx context.Context) error {
 	return b.state.transition(StatePaused)
 }
 
-// Resume transitions the module from PAUSED back to ACTIVE. Override to
-// rehydrate state; the default just flips state.
 func (b *Base) Resume(ctx context.Context) error {
 	return b.state.transition(StateActive)
 }
 
-// UpdateConfig is the hot-reload entry point. The default implementation
-// rebinds cfg onto the config target captured by BindConfig if any.
-// Override for richer behavior (rewire connections, swap caches, ...).
 func (b *Base) UpdateConfig(ctx context.Context, cfg map[string]any) error {
 	b.mu.RLock()
 	target := b.config
@@ -157,9 +143,6 @@ func (b *Base) Invoke(ctx context.Context, name string, params []byte) (tool.Res
 	if params == nil {
 		params = json.RawMessage("{}")
 	}
-	// Refine the call identity with this module + tool so worker-side code
-	// and any author middleware see the full picture (the runtime sets
-	// app/session/user upstream; we own module/tool).
 	id, _ := tool.IdentityFromContext(ctx)
 	id.ModuleID, id.ToolName = b.ID, name
 	ctx = tool.WithIdentity(ctx, id)

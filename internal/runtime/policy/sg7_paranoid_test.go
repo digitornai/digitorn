@@ -8,21 +8,6 @@ import (
 	"github.com/digitornai/digitorn/internal/runtime/policy"
 )
 
-// SG-7 — paranoid tests covering subtle combinations + boundary
-// conditions + adversarial inputs that go beyond the per-gate basics
-// of SG-1..6. Targets the SEC01-03 invariants the Python daemon
-// never tested automatically.
-//
-// Five categories :
-//
-//   A. Subtle combinations  (deny+approve, hidden+grant, deny+grant, ...)
-//   B. Boundary inputs      (empty actions, unknown policy, FQN edge cases)
-//   C. Adversarial schemas  (caps fields with surprising values)
-//   D. Audit row invariants (gate code stability, no duplication)
-//   E. Per-agent strict     (sub-agent cannot widen parent)
-
-// invoke is a compact helper to build an Invocation with all the
-// fields a gate needs.
 func invoke(caller policy.CallerKind, module, action string) policy.Invocation {
 	return policy.Invocation{
 		Caller:    caller,
@@ -35,7 +20,6 @@ func invoke(caller policy.CallerKind, module, action string) policy.Invocation {
 	}
 }
 
-// pctx is a compact helper to build a PolicyContext.
 func pctx(active bool, caps *schema.CapabilitiesConfig, spec *tool.Spec) policy.PolicyContext {
 	return policy.PolicyContext{
 		AppActive:    active,
@@ -44,20 +28,11 @@ func pctx(active bool, caps *schema.CapabilitiesConfig, spec *tool.Spec) policy.
 	}
 }
 
-// =====================================================================
-// CATEGORY A — Subtle combinations
-// =====================================================================
-
-// TestParanoid_DenyBeatsApprove_AndDenyBeatsGrant : same action in
-// deny AND approve AND grant must always Deny. Verified across many
-// orderings of the slice (to catch any "first match wins per slice"
-// bug). Doc rule : "deny > approve > grant" — strict.
 func TestParanoid_DenyBeatsApprove_AndDenyBeatsGrant(t *testing.T) {
 	caps := &schema.CapabilitiesConfig{
 		Deny:    []schema.CapabilityGrant{{Module: "shell", Tools: []string{"bash"}}},
 		Approve: []schema.CapabilityGrant{{Module: "shell", Tools: []string{"bash"}}},
 		Grant:   []schema.CapabilityGrant{{Module: "shell", Tools: []string{"bash"}}},
-		// Even raising the max_risk to high & default to auto, deny still wins.
 		MaxRiskLevel:  schema.RiskLevel(tool.RiskHigh),
 		DefaultPolicy: schema.CapAuto,
 	}
@@ -70,40 +45,22 @@ func TestParanoid_DenyBeatsApprove_AndDenyBeatsGrant(t *testing.T) {
 	}
 }
 
-// TestParanoid_ApproveBypassesRiskCap : the EXACT claude-code bug. A
-// high-risk tool (bash) placed under `approve` with NO max_risk_level
-// (default ceiling = medium) must NOT be filtered out by gate 2 — it is a
-// deliberate opt-in meant to be offered and gated by approval. Before the fix,
-// only `grant` bypassed the cap, so the safer policy (approve) silently removed
-// the tool and the agent reported "no shell access". Gate 2 must Allow ; the
-// whole chain must end in NeedsApproval (gate 4), not Deny.
 func TestParanoid_ApproveBypassesRiskCap(t *testing.T) {
 	caps := &schema.CapabilitiesConfig{
-		// No MaxRiskLevel → default medium ; bash is high → over the cap.
 		Approve:       []schema.CapabilityGrant{{Module: "bash", Tools: []string{"run"}}},
 		DefaultPolicy: schema.CapAuto,
 	}
-	// Use the REAL bash.run spec shape : high risk AND a declared permission.
-	// The permission is what made the live agent lose the shell — gate 3 derives
-	// its granted set from `grant` only, so an approve-listed action with a
-	// required permission was denied. The test must carry Permissions or it
-	// silently skips gate 3 (the bug that hid this in the first place).
 	bashSpec := &tool.Spec{RiskLevel: tool.RiskHigh, Permissions: []string{"bash.run"}}
 
-	// Gate 2 (risk cap) must allow — the opt-in bypasses the ceiling.
 	if d := policy.Gate2Risk(invoke(policy.CallerLLM, "bash", "run"), pctx(true, caps, bashSpec)); d.Kind != policy.DecisionAllow {
 		t.Fatalf("gate2 got %v / %v, want Allow (approve must bypass risk cap)", d.Kind, d.Gate)
 	}
-	// Gate 3 (permissions) must allow — the approve opt-in satisfies the
-	// action_granted shortcut, exactly like grant.
 	if d := policy.Gate3Permissions(invoke(policy.CallerLLM, "bash", "run"), pctx(true, caps, bashSpec)); d.Kind != policy.DecisionAllow {
 		t.Fatalf("gate3 got %v / %v, want Allow (approve must satisfy permissions)", d.Kind, d.Gate)
 	}
-	// Whole chain ends in NeedsApproval — the tool is OFFERED + gated, not dropped.
 	if d := policy.RunGates(invoke(policy.CallerLLM, "bash", "run"), pctx(true, caps, bashSpec)); d.Kind != policy.DecisionNeedsApproval {
 		t.Fatalf("chain got %v / %v, want NeedsApproval", d.Kind, d.Gate)
 	}
-	// And it survives the schema-build filter (it appears in the LLM toolset).
 	visible := policy.BuildAgentToolset(true, caps,
 		&schema.Agent{Modules: schema.AgentModules{{ID: "bash", Tools: []string{"run"}}}},
 		[]policy.AvailableAction{{Module: "bash", Action: "run", Spec: bashSpec}},
@@ -113,11 +70,6 @@ func TestParanoid_ApproveBypassesRiskCap(t *testing.T) {
 	}
 }
 
-// TestParanoid_GrantBypassesRiskCap : the doc says "grant bypasses
-// the max_risk_level cap" (language/04-tools.md verbatim example
-// with `max_risk_level: low` + grant on `shell.bash`). Gate 2 must
-// honour this — a grant on a high-risk action with max_risk=medium
-// must still allow.
 func TestParanoid_GrantBypassesRiskCap(t *testing.T) {
 	caps := &schema.CapabilitiesConfig{
 		MaxRiskLevel:  schema.RiskLevel(tool.RiskMedium),
@@ -133,15 +85,6 @@ func TestParanoid_GrantBypassesRiskCap(t *testing.T) {
 	}
 }
 
-// TestParanoid_GrantBypassesRiskButDenyStillBlocks : the precedence
-// rule for the conflict scenario. An action that's in BOTH grant
-// AND deny, where risk exceeds the cap :
-//   - Gate 2 bypasses the cap because of the grant → Allow
-//   - Gate 4 deny then blocks → Deny
-//   - Overall : Deny (deny > grant per doc)
-//
-// Verifies the gates compose correctly across the override and the
-// final blocker.
 func TestParanoid_GrantBypassesRiskButDenyStillBlocks(t *testing.T) {
 	caps := &schema.CapabilitiesConfig{
 		MaxRiskLevel:  schema.RiskLevel(tool.RiskMedium),
@@ -161,13 +104,6 @@ func TestParanoid_GrantBypassesRiskButDenyStillBlocks(t *testing.T) {
 	}
 }
 
-// TestParanoid_HiddenAndGrantTogether_LLMBlockedButHookAllowed :
-// when an action is in hidden_actions AND grant :
-//   - LLM caller : gate 1b denies (hidden invisible)
-//   - hook caller : gate 1b bypasses, gate 4 grant allows
-//
-// This is the canonical "hidden but callable from infra" pattern
-// from security-04-hidden-vs-deny.md.
 func TestParanoid_HiddenAndGrantTogether(t *testing.T) {
 	caps := &schema.CapabilitiesConfig{
 		HiddenActions: []schema.CapabilityGrant{{Module: "lsp", Tools: []string{"diagnostics"}}},
@@ -175,22 +111,17 @@ func TestParanoid_HiddenAndGrantTogether(t *testing.T) {
 	}
 	spec := &tool.Spec{RiskLevel: tool.RiskLow}
 
-	// LLM : hidden wins, deny at gate 1b.
 	d1 := policy.RunGates(invoke(policy.CallerLLM, "lsp", "diagnostics"), pctx(true, caps, spec))
 	if d1.Kind != policy.DecisionDeny || d1.Gate != policy.GateHidden {
 		t.Errorf("LLM caller : got %v / %v, want Deny / %s", d1.Kind, d1.Gate, policy.GateHidden)
 	}
 
-	// Hook : hidden bypassed, grant allows at gate 4.
 	d2 := policy.RunGates(invoke(policy.CallerHook, "lsp", "diagnostics"), pctx(true, caps, spec))
 	if d2.Kind != policy.DecisionAllow {
 		t.Errorf("Hook caller : got %v, want Allow (hidden bypassed for non-LLM)", d2.Kind)
 	}
 }
 
-// TestParanoid_DenyEmptyActions_BlocksAllModuleActions : the
-// documented convention — a Deny entry with empty actions covers
-// EVERY action of that module. Verified across multiple action names.
 func TestParanoid_DenyEmptyActions_BlocksAllModuleActions(t *testing.T) {
 	caps := &schema.CapabilitiesConfig{
 		Deny:          []schema.CapabilityGrant{{Module: "shell"}},
@@ -207,8 +138,6 @@ func TestParanoid_DenyEmptyActions_BlocksAllModuleActions(t *testing.T) {
 	}
 }
 
-// TestParanoid_ApproveEmptyActions_RequiresApprovalForAll : same
-// empty-actions convention for approve.
 func TestParanoid_ApproveEmptyActions_RequiresApprovalForAll(t *testing.T) {
 	caps := &schema.CapabilitiesConfig{
 		Approve:       []schema.CapabilityGrant{{Module: "shell"}},
@@ -226,17 +155,9 @@ func TestParanoid_ApproveEmptyActions_RequiresApprovalForAll(t *testing.T) {
 	}
 }
 
-// =====================================================================
-// CATEGORY B — Boundary inputs
-// =====================================================================
-
-// TestParanoid_UnknownDefaultPolicy_FailsClosed : an unknown
-// default_policy value (forward-compat, e.g. someone adds "warn"
-// to the YAML schema in the future) must fail-closed at the
-// runtime gate.
 func TestParanoid_UnknownDefaultPolicy_FailsClosed(t *testing.T) {
 	caps := &schema.CapabilitiesConfig{
-		DefaultPolicy: schema.CapabilityPolicy("warn"), // not a known value
+		DefaultPolicy: schema.CapabilityPolicy("warn"),
 	}
 	d := policy.RunGates(
 		invoke(policy.CallerLLM, "filesystem", "read"),
@@ -247,10 +168,6 @@ func TestParanoid_UnknownDefaultPolicy_FailsClosed(t *testing.T) {
 	}
 }
 
-// TestParanoid_EmptyModuleEmptyAction_StillEvaluated : the LLM might
-// emit a tool_call with module="" or action="" (malformed). Each
-// gate should handle it without panicking. The final decision will
-// land at gate 4 default_policy.
 func TestParanoid_EmptyModuleEmptyAction_NoPanic(t *testing.T) {
 	caps := &schema.CapabilitiesConfig{DefaultPolicy: schema.CapBlock}
 	cases := []struct{ module, action string }{
@@ -259,7 +176,6 @@ func TestParanoid_EmptyModuleEmptyAction_NoPanic(t *testing.T) {
 		{"filesystem", ""},
 	}
 	for _, c := range cases {
-		// Just verify no panic and a valid decision is returned.
 		d := policy.RunGates(
 			invoke(policy.CallerLLM, c.module, c.action),
 			pctx(true, caps, nil),
@@ -270,9 +186,6 @@ func TestParanoid_EmptyModuleEmptyAction_NoPanic(t *testing.T) {
 	}
 }
 
-// TestParanoid_NilCapabilities_DevMode_AllowsLowRisk : the doc says
-// "absence means dev/test mode (no enforcement)". Confirm that with
-// nil caps, low/medium risk actions pass.
 func TestParanoid_NilCapabilities_DevMode_AllowsLowRisk(t *testing.T) {
 	for _, level := range []tool.RiskLevel{tool.RiskLow, tool.RiskMedium} {
 		d := policy.RunGates(
@@ -285,9 +198,6 @@ func TestParanoid_NilCapabilities_DevMode_AllowsLowRisk(t *testing.T) {
 	}
 }
 
-// TestParanoid_NilCapabilities_HighRiskStillCapped : nil caps =
-// dev mode, BUT gate 2 still applies the default ceiling (medium).
-// High risk still denied.
 func TestParanoid_NilCapabilities_HighRiskStillCapped(t *testing.T) {
 	d := policy.RunGates(
 		invoke(policy.CallerLLM, "shell", "bash"),
@@ -298,14 +208,6 @@ func TestParanoid_NilCapabilities_HighRiskStillCapped(t *testing.T) {
 	}
 }
 
-// =====================================================================
-// CATEGORY C — Adversarial schemas
-// =====================================================================
-
-// TestParanoid_DenyOnAllSpiral_StillReachableForSystemModules :
-// even an app that denies EVERY action (default_policy=block, deny:
-// [{module: "*"}] not supported but a global block) must still
-// allow system module calls (context_builder, etc.).
 func TestParanoid_DenyAll_SystemModulesStillReachable(t *testing.T) {
 	caps := &schema.CapabilitiesConfig{
 		DefaultPolicy: schema.CapBlock,

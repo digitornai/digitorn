@@ -4,52 +4,8 @@ import (
 	"github.com/digitornai/digitorn/internal/llm"
 )
 
-// builtinToolSpecs holds the canonical schemas for the meta-tools +
-// always-direct primitives the context_builder exposes regardless
-// of injection mode.
-//
-// Documented in docs-site/docs/language/04b-builtin-tools.md
-// "Always-available primitives (context_builder)" :
-//
-//	search_tools, get_tool, execute_tool, list_categories,
-//	browse_category, run_parallel, use_skill, call_app, ask_user,
-//	background_run
-//
-// CB-2 only defines the specs (data). CB-3 wires them to a real
-// dispatcher so they execute. The descriptions below are intentionally
-// terse + actionable so the LLM picks the right one without re-reading
-// the doc — the doc-quote per-tool isn't repeated to keep input
-// tokens low.
-//
-// Two notes :
-//
-//  1. background_run is documented as ONE action with 5 modes
-//     dispatched by params (launch, status, wait, cancel, list_tasks).
-//     The schema below carries the polymorphism in `parameters.oneOf`
-//     so the LLM gets clear hints without 5 separate tools.
-//
-//  2. tool names are kept dotted ("context_builder.search_tools")
-//     internally. The runtime adapter sanitizes them to underscore
-//     form ("context_builder__search_tools") only when calling an
-//     OpenAI-compatible API that rejects dots — that's a CB-3
-//     responsibility.
-
-// builtinToolSpecs holds the 5 context_builder primitives the planner draws
-// from : the 3 discovery tools (search_tools — UNIFIED search + list + browse —
-// plus get_tool, execute_tool) and the 2 universal execution primitives
-// (run_parallel / background_run). builtinsForMode then picks the relevant
-// subset per injection mode (no pollution).
-//
-// The other context_builder primitives are NOT universal and are appended by
-// the wiring ONLY when usable (see CallAppSpec / AskUserSpec / UseSkillSpec) :
-// injecting a tool the model can't actually use (no bridge wired, no skills,
-// no grant) just invites small models to mis-pick it. agent_spawn.agent and
-// memory.* are likewise module-gated.
-//
-// Order matters : in discovery mode the LLM sees them in this order.
 func builtinToolSpecs() []llm.ToolSpec {
 	return []llm.ToolSpec{
-		// --- discovery meta-tools (5) ---
 		{
 			Name:        "context_builder.search_tools",
 			Description: "Discover tools in the visible index — ONE tool, three modes by params: (1) query=\"read a file\" → hybrid semantic+keyword search, ranked hits ; (2) category=\"filesystem\" → list every tool in that domain (use page to paginate) ; (3) NO args → list the available domains/categories. After you find a tool, call get_tool for its exact parameters, then call it (or execute_tool).",
@@ -109,7 +65,6 @@ func builtinToolSpecs() []llm.ToolSpec {
 				"required": []string{"name", "params"},
 			},
 		},
-		// --- always-direct execution primitives (2) ---
 		{
 			Name:        "context_builder.run_parallel",
 			Description: `Run several INDEPENDENT tool calls at once instead of one-by-one. Reach for this whenever you have 2+ calls whose inputs don't depend on each other — e.g. reading several files, grepping several patterns, hitting several endpoints. It's much faster than sequential calls and keeps the turn tight. Do NOT use it for steps that must run in order (a write that depends on a prior read), and don't wrap a single call in it. Pass "tasks" as a list of {tool, args}, e.g. {"tasks":[{"tool":"filesystem.read","args":{"path":"a.go"}},{"tool":"filesystem.read","args":{"path":"b.go"}}]}. Each task is isolated (one failing doesn't cancel the others) and results return in input order. 1-50 tasks.`,
@@ -171,32 +126,22 @@ func builtinToolSpecs() []llm.ToolSpec {
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					// Launch
 					"name":   map[string]any{"type": "string", "description": "Tool FQN to run in background, e.g. \"bash.run\". Required for launch."},
 					"params": map[string]any{"type": "object", "description": "Parameters for the tool being launched."},
-					// Async smart wait
 					"notify_when": map[string]any{"type": "string", "description": "Pattern to watch for in live output. When found, the agent is automatically woken in a NEW TURN with [BACKGROUND TASK READY] — no polling needed. Set at launch time alongside name+params."},
-					// Sync pattern wait
 					"wait_for": map[string]any{"type": "string", "description": "Block THIS turn until this pattern appears in the task's live log (polls every 300ms). Requires task_id. Use for short waits < 30s."},
-					// Watch mode
 					"watch":    map[string]any{"type": "boolean", "description": "Run command repeatedly every interval seconds as a background loop."},
 					"command":  map[string]any{"type": "string", "description": "Shell command to run repeatedly in watch mode."},
 					"interval": map[string]any{"type": "number", "description": "Watch interval in seconds (default 2)."},
 					"until":    map[string]any{"type": "string", "description": "Stop watching when this pattern appears in the output."},
-					// Task reference
 					"task_id": map[string]any{"type": "string", "description": "ID of an existing background task (for status/wait/cancel/signal/stdin/wait_for)."},
-					// Status / wait
 					"wait":       map[string]any{"type": "boolean", "description": "Block until task completes. Set with task_id. Use only when you have nothing else to do."},
 					"timeout":    map[string]any{"type": "number", "description": "Timeout in seconds for wait or wait_for (default: wait=∞, wait_for=60)."},
 					"tail_lines": map[string]any{"type": "number", "description": "Lines of live log to return in status/wait (default 100, 0=all)."},
-					// Signals
 					"signal": map[string]any{"type": "string", "description": "Signal to send to running task: \"SIGINT\" (Ctrl+C graceful), \"SIGTERM\" (graceful stop). Requires task_id."},
-					// Stdin injection
 					"stdin": map[string]any{"type": "string", "description": "Text to pipe to task stdin (e.g. \"yes\\n\" to answer a prompt). Requires task_id."},
-					// Cancel / list
 					"cancel":     map[string]any{"type": "boolean", "description": "Kill the task (SIGKILL). Requires task_id."},
 					"list_tasks": map[string]any{"type": "boolean", "description": "List all background tasks for this session."},
-					// Launch tuning
 					"settle_seconds": map[string]any{"type": "number", "description": "Seconds to wait for a fast-failing launch before returning task_id (default 2, 0=immediate)."},
 				},
 			},
@@ -204,22 +149,6 @@ func builtinToolSpecs() []llm.ToolSpec {
 	}
 }
 
-// builtinsForMode returns the context_builder builtins RELEVANT for the chosen
-// injection mode — the activation-by-relevance policy that stops polluting the
-// agent's context with tools it can't use :
-//
-//   - hasTools == false (a pure-chat agent, no domain tools) → NONE. There is
-//     nothing to discover, run in parallel or background.
-//   - direct  : run_parallel + background_run only. Every domain tool is already
-//     shown with its full schema, so the discovery / schema-fetch meta-tools are
-//     dead weight.
-//   - compact : get_tool + execute_tool (fetch the schema then call by name —
-//     mandatory in compact, where tools have no inline params) + run_parallel +
-//     background_run.
-//   - discovery : the full 5 discovery meta-tools (domain tools are hidden
-//     behind them) + run_parallel + background_run.
-//
-// Names stay dotted ; assembleToolList sanitizes to the wire form.
 func builtinsForMode(mode Mode, hasTools, hasDynamicCatalog bool) []llm.ToolSpec {
 	if !hasTools {
 		return nil
@@ -247,9 +176,8 @@ func builtinsForMode(mode Mode, hasTools, hasDynamicCatalog bool) []llm.ToolSpec
 		}
 		return pick("get_tool", "execute_tool", "run_parallel", "background_run")
 	case ModeDiscovery:
-		// search_tools is the unified discovery tool (search + list + browse).
 		return discovery()
-	default: // ModeDirect (and any fallback)
+	default:
 		if hasDynamicCatalog {
 			return discovery()
 		}
@@ -257,12 +185,6 @@ func builtinsForMode(mode Mode, hasTools, hasDynamicCatalog bool) []llm.ToolSpec
 	}
 }
 
-// CallAppSpec is the context_builder.call_app primitive. It is NOT a universal
-// builtin : the wiring appends it ONLY when the daemon actually wired an
-// AppCaller bridge (composition available). Injecting a non-wired call_app just
-// gives the model a tool that returns "not wired" — which small models pick by
-// mistake when they mean to delegate. Gating it on a real bridge removes that
-// confusion. Name pre-sanitized to the OpenAI wire form.
 func CallAppSpec() []llm.ToolSpec {
 	specs := []llm.ToolSpec{
 		{
@@ -284,11 +206,6 @@ func CallAppSpec() []llm.ToolSpec {
 	return specs
 }
 
-// AskUserSpec is the context_builder.ask_user primitive. Per
-// docs-site/docs/reference/modules/context_builder.md it is exposed only when
-// granted (tools.capabilities.grant {module: context_builder, actions:
-// [ask_user]}) AND the daemon wired an AskUser bridge. The wiring appends it
-// only when both hold. Name pre-sanitized.
 func AskUserSpec() []llm.ToolSpec {
 	specs := []llm.ToolSpec{
 		{
@@ -330,10 +247,6 @@ func AskUserSpec() []llm.ToolSpec {
 	return specs
 }
 
-// UseSkillSpec is the context_builder.use_skill primitive. Useless without
-// skills, so the wiring appends it only when the app declares skills
-// (dev.skills or the agent's capabilities.skills) AND a SkillLoader is wired.
-// Name pre-sanitized.
 func UseSkillSpec() []llm.ToolSpec {
 	specs := []llm.ToolSpec{
 		{
@@ -354,14 +267,6 @@ func UseSkillSpec() []llm.ToolSpec {
 	return specs
 }
 
-// MemoryToolSpecs are the 4 working-memory tools of the `memory` module
-// (docs-site/docs/reference/modules/memory.md). UNLIKE the universal
-// context_builder builtins above, these are NOT always injected : the wiring
-// appends them ONLY when the app DECLARES the memory module in YAML
-// (tools.modules.memory) — the documented opt-in contract. They keep their
-// canonical `memory.*` FQN (gated like a module) but stay always-direct (the
-// agent never has to discover how to manage its own memory). Names are
-// pre-sanitized to the OpenAI wire form so the caller can append them as-is.
 func MemoryToolSpecs() []llm.ToolSpec {
 	specs := []llm.ToolSpec{
 		{
@@ -435,15 +340,6 @@ func MemoryToolSpecs() []llm.ToolSpec {
 	return specs
 }
 
-// AgentToolSpec is the single delegation tool of the `agent_spawn` module
-// (docs-site/docs/reference/modules/agent_spawn.md — one action, eight modes,
-// tool name `Agent`). UNLIKE the universal context_builder builtins, it is NOT
-// always injected : the wiring appends it ONLY when the app LOADS the
-// agent_spawn module (declared in tools.modules.agent_spawn or granted via
-// tools.capabilities.grant {module: agent_spawn}) — the documented gating. It
-// keeps its canonical `agent_spawn.agent` FQN but stays always-direct. A second
-// runtime gate (coordinator role) still applies at dispatch time. Name is
-// pre-sanitized to the OpenAI wire form so the caller can append it as-is.
 func AgentToolSpec() []llm.ToolSpec {
 	specs := []llm.ToolSpec{
 		{

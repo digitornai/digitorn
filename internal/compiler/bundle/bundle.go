@@ -1,5 +1,3 @@
-// Package bundle loads a Digitorn app bundle (a directory containing app.yaml
-// plus prompts/, skills/, behavior/, assets/ and fragments/).
 package bundle
 
 import (
@@ -17,8 +15,6 @@ type Bundle struct {
 	Locale string
 }
 
-// Load resolves path to a bundle. path may be either the bundle directory
-// (containing app.yaml) or app.yaml itself.
 func Load(path string) (*Bundle, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
@@ -54,9 +50,6 @@ func (b *Bundle) ReadSkill(name string) (string, error) {
 	return b.readLocalized("skills", name, ".md")
 }
 
-// ReadBehavior parses behavior/<name>.yaml and returns its JSON encoding so
-// the engine can splice it as a structured value when the host expects a map
-// or as a JSON string when the host expects a scalar (matches Python behaviour).
 func (b *Bundle) ReadBehavior(name string) (string, error) {
 	candidates := []string{
 		filepath.Join(b.Root, "behavior", name+".yaml"),
@@ -80,8 +73,6 @@ func (b *Bundle) ReadBehavior(name string) (string, error) {
 	return "", fmt.Errorf("behavior file not found: behavior/%s.yaml", name)
 }
 
-// AssetURL returns the public URL the runtime exposes for assets/<name>.
-// The app prefix lets the daemon route /api/apps/<app_id>/assets/<name>.
 func (b *Bundle) AssetURL(appID, name string) (string, error) {
 	if _, err := os.Stat(filepath.Join(b.Root, "assets", name)); err != nil {
 		return "", fmt.Errorf("asset not found: assets/%s", name)
@@ -111,8 +102,6 @@ func (b *Bundle) ReadInclude(rel string) (string, error) {
 	return string(data), nil
 }
 
-// readLocalized picks <name>.<locale><ext> when DIGITORN_LOCALE is set and the
-// variant exists; otherwise falls back to <name><ext>.
 func (b *Bundle) readLocalized(dir, name, ext string) (string, error) {
 	if b.Locale != "" {
 		variant := filepath.Join(b.Root, dir, name+"."+b.Locale+ext)

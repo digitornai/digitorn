@@ -26,20 +26,18 @@ type AgentKVStore interface {
 	All(root string) map[string]string
 }
 
-// AgentSpawnRequest is one delegation issued by a coordinator.
 type AgentSpawnRequest struct {
 	AppID        string
 	RootSession  string
 	UserID       string
-	UserJWT      string // gateway bearer forwarded to the sub-agent's isolated turn
-	AgentID      string // target logical agent id
+	UserJWT      string
+	AgentID      string
 	Task         string
 	MemorySeed   string
-	ParentRunID  string // the calling agent's run id ("" / logical for the entry agent)
-	ParentCallID string // the tool call_id of the delegating `agent` call (chip key)
+	ParentRunID  string
+	ParentCallID string
 }
 
-// AgentSnapshot is the live view of one agent returned to the LLM.
 type AgentSnapshot struct {
 	RunID       string `json:"run_id"`
 	AgentID     string `json:"agent_id"`
@@ -56,32 +54,10 @@ type AgentSnapshot struct {
 	Error       string `json:"error,omitempty"`
 }
 
-// handleAgent dispatches the `agent` delegation tool. Modes (mirroring the
-// reference agent_spawn) :
-//
-//	spawn          : { agent, task, memory_seed? }        → { run_id, status }
-//	spawn + wait   : { agent, task, wait:true, timeout? } → finished snapshot
-//	wait           : { wait:true, run_id|run_ids, timeout? }
-//	status         : { run_id }
-//	list           : { list:true }                        → { agents:[...] }
-//	cancel         : { cancel:true, run_id }
-//
-// The presence of a delegation target (`agent` / `specialist`) selects spawn —
-// a target with wait:true spawns THEN blocks on the child and returns its
-// finished snapshot, so a coordinator delegates and collects the answer in a
-// single tool call. Without a target, wait/status operate on existing run ids.
-//
-// Only coordinator-role agents may call it.
 func (m *MetaDispatcher) handleAgent(ctx context.Context, call runtime.ToolInvocation) runtime.ToolOutcome {
 	if m.Agents == nil {
 		return errored("agent not wired (no AgentManager)")
 	}
-	// Fail CLOSED : the `agent` tool is reserved for coordinator-role agents.
-	// A nil lookup means the role check can't be performed, so we DENY rather
-	// than wave the call through — a missing dependency must never silently
-	// disable a security gate (the same fail-open class as the gate2 risk
-	// ceiling). Production always wires CoordinatorLookup ; the tool is also
-	// gated upstream by the app declaring tools.modules.agent_spawn.
 	if m.CoordinatorLookup == nil || !m.CoordinatorLookup(call.AppID, call.AgentID) {
 		return errored("the `agent` tool requires a coordinator-role agent")
 	}
@@ -109,7 +85,6 @@ func (m *MetaDispatcher) handleAgent(ctx context.Context, call runtime.ToolInvoc
 	wait, _ := call.Args["wait"].(bool)
 	timeout, _ := call.Args["timeout"].(float64)
 
-	// Batch spawn: agents=[{agent:"x",task:"..."}, ...] launches N agents atomically.
 	if raw, ok := call.Args["agents"]; ok {
 		items, _ := raw.([]any)
 		if len(items) == 0 {
@@ -147,7 +122,6 @@ func (m *MetaDispatcher) handleAgent(ctx context.Context, call runtime.ToolInvoc
 		return jsonOutcome(map[string]any{"agents": snaps})
 	}
 
-	// A delegation target selects spawn — optionally with an inline wait.
 	if target := firstString(call.Args, "agent", "specialist"); target != "" {
 		task := firstString(call.Args, "task", "prompt")
 		if task == "" {
@@ -178,7 +152,6 @@ func (m *MetaDispatcher) handleAgent(ctx context.Context, call runtime.ToolInvoc
 		return jsonOutcome(agentSnapMap(snap))
 	}
 
-	// No target : control operations on already-running agents.
 	if wait {
 		if ids := stringSliceArg(call.Args["run_ids"]); len(ids) > 0 {
 			snaps, err := m.Agents.WaitAll(ctx, root, ids, timeout)
@@ -211,8 +184,6 @@ func (m *MetaDispatcher) handleAgent(ctx context.Context, call runtime.ToolInvoc
 	return errored("agent spawn: 'agent' (target agent id) is required")
 }
 
-// rootSessionOf strips the "::agent::<id>" sub-session suffix(es) so a
-// sub-agent calling the tool resolves the SAME root table as the entry agent.
 func rootSessionOf(s string) string {
 	if i := strings.Index(s, "::agent::"); i >= 0 {
 		return s[:i]

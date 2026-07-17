@@ -8,9 +8,6 @@ import (
 	"github.com/digitornai/digitorn/internal/domain/tool"
 )
 
-// SecurityGate decides whether a tool call is allowed for the current caller.
-// The runtime supplies a concrete gate (driven by the app's capabilities
-// block); the module asks the gate at every Invoke.
 type SecurityGate interface {
 	Authorize(ctx context.Context, moduleID, toolName string, params json.RawMessage) error
 }

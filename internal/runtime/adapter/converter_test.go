@@ -11,16 +11,10 @@ import (
 	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
 )
 
-// anyBlobLoader returns deterministic bytes for any hash, so image parts
-// take the loaded path (not the skip path) during equivalence checks.
 func anyBlobLoader(_ context.Context, hash string) ([]byte, error) {
 	return []byte("blob:" + hash), nil
 }
 
-// converterCorpus is a diverse set of histories covering every branch the
-// adapter has: plain text, tool_call/tool_result pairs, a DANGLING tool
-// call (turn interrupted), multi-part tool results, images in both user
-// and tool messages, unknown roles, and a large mixed transcript.
 func converterCorpus() [][]sessionstore.Message {
 	return [][]sessionstore.Message{
 		nil,
@@ -30,13 +24,13 @@ func converterCorpus() [][]sessionstore.Message {
 			{Seq: 2, Role: "user", Content: "2+2?"},
 			{Seq: 3, Role: "assistant", Content: "4"},
 		},
-		{ // dangling tool_call followed by a later message -> repair fires
+		{
 			{Seq: 1, Role: "user", Content: "do X"},
 			{Seq: 2, Role: "assistant", Parts: []sessionstore.MessagePart{
 				{Type: sessionstore.PartTypeToolCall, ToolCall: &sessionstore.ToolCallSpec{ID: "c1", Name: "x"}}}},
 			{Seq: 3, Role: "user", Content: "never mind"},
 		},
-		{ // answered tool pair
+		{
 			{Seq: 1, Role: "assistant", Parts: []sessionstore.MessagePart{
 				{Type: sessionstore.PartTypeToolCall, ToolCall: &sessionstore.ToolCallSpec{ID: "c1", Name: "read"}}}},
 			{Seq: 2, Role: "tool", Parts: []sessionstore.MessagePart{
@@ -44,7 +38,7 @@ func converterCorpus() [][]sessionstore.Message {
 					ToolCallID: "c1", Parts: []sessionstore.MessagePart{{Type: sessionstore.PartTypeText, Text: "ok"}}}}}},
 			{Seq: 3, Role: "user", Content: "next"},
 		},
-		{ // image in user + image in tool result (multi-part)
+		{
 			{Seq: 1, Role: "user", Parts: []sessionstore.MessagePart{
 				{Type: sessionstore.PartTypeText, Text: "look"},
 				{Type: sessionstore.PartTypeImage, Blob: &sessionstore.BlobRef{Hash: "u-img", Mime: "image/png", Size: 8}}}},
@@ -54,14 +48,13 @@ func converterCorpus() [][]sessionstore.Message {
 						{Type: sessionstore.PartTypeText, Text: "shot"},
 						{Type: sessionstore.PartTypeImage, Blob: &sessionstore.BlobRef{Hash: "t-img", Mime: "image/png", Size: 8}}}}}}},
 		},
-		{ // unknown role + empty role are dropped
+		{
 			{Seq: 1, Role: "user", Content: "hi"},
 			{Seq: 2, Role: "moderator", Content: "hidden"},
 			{Seq: 3, Role: "", Content: "no role"},
 			{Seq: 4, Role: "assistant", Content: "hello"},
 		},
-		{ // compaction view: synthetic Seq-0 summary + gapped real Seqs,
-			// the exact shape ApplyView feeds the converter in production.
+		{
 			{Seq: 0, Role: "system", Content: "summary of earlier conversation"},
 			{Seq: 7, Role: "user", Content: "recent question"},
 			{Seq: 8, Role: "assistant", Parts: []sessionstore.MessagePart{
@@ -81,15 +74,11 @@ func TestConverter_IdenticalToMessagesToLLM(t *testing.T) {
 	for idx, hist := range converterCorpus() {
 		want := adapter.MessagesToLLM(context.Background(), hist, opts)
 
-		// (1) fresh converter, full history in one shot.
 		gotFull := adapter.NewConverter(opts).Convert(context.Background(), hist)
 		if !reflect.DeepEqual(gotFull, want) {
 			t.Fatalf("corpus[%d] full-shot mismatch:\n got=%#v\nwant=%#v", idx, gotFull, want)
 		}
 
-		// (2) progressive growth: feed prefixes 1..n (simulates the turn
-		//     loop re-calling with a growing history). The final result
-		//     must equal the stateless conversion of the full history.
 		c := adapter.NewConverter(opts)
 		var grown []llm.ChatMessage
 		for k := 1; k <= len(hist); k++ {
@@ -104,9 +93,6 @@ func TestConverter_IdenticalToMessagesToLLM(t *testing.T) {
 	}
 }
 
-// BenchmarkConverter_Turn contrasts the two ways to feed a multi-iteration
-// turn: stateless MessagesToLLM re-converting the full history each
-// iteration vs the incremental Converter converting only the new tail.
 func BenchmarkConverter_Turn(b *testing.B) {
 	base := buildTextHistory(200)
 	const iterations = 10

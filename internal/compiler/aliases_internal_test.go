@@ -46,7 +46,7 @@ func TestNormalize_AgentModulesDedup_AllToolsWins(t *testing.T) {
 		ID: "main",
 		Modules: schema.AgentModules{
 			{ID: "workspace", Tools: []string{"read", "write"}},
-			{ID: "filesystem"}, // empty Tools = all tools
+			{ID: "filesystem"},
 		},
 	}}}
 	normalizeModuleAliases(def)
@@ -135,6 +135,6 @@ func TestNormalize_DirectModulesAndNonAliasUntouched(t *testing.T) {
 }
 
 func TestNormalize_NilSafe(t *testing.T) {
-	normalizeModuleAliases(nil)                      // must not panic
-	normalizeModuleAliases(&schema.AppDefinition{})  // empty def, no Tools/Runtime/Agents
+	normalizeModuleAliases(nil)
+	normalizeModuleAliases(&schema.AppDefinition{})
 }

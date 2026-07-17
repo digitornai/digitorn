@@ -1,22 +1,3 @@
-// Package agent implements the multi-agent orchestrator : a per-root-session
-// registry of delegated sub-agents, each running as its own goroutine.
-//
-// Design invariants (the reason this scales to a million nested agents) :
-//
-//   - Goroutine per agent, with a recover() guard : one agent panicking can
-//     never crash another agent or the daemon.
-//   - Nothing scarce is held while waiting. Spawn returns immediately ; Wait
-//     blocks ONLY the calling goroutine on a done channel. The real bound is
-//     the engine's per-call LLM semaphore, acquired around each LLM call and
-//     never across a wait — so a parent waiting on a child holds no slot and
-//     the child can always run. No agent ever blocks another.
-//   - Lock-free hot path : the registry is sharded by root session
-//     (sync.Map) ; per-agent telemetry is atomic counters. Status/List take a
-//     brief per-root lock only.
-//   - Cancellation tree : each agent's context derives from its parent's, so
-//     cancelling an agent cancels its whole subtree.
-//   - Guards : a max delegation depth and a per-root agent budget stop a
-//     buggy agent from fork-bombing the machine.
 package agent
 
 import (
@@ -32,19 +13,12 @@ import (
 	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
 )
 
-// Defaults applied when a Manager field is zero.
 const (
 	DefaultMaxDepth         = 20
 	DefaultMaxAgentsPerRoot = 100_000
 
-	// DefaultAgentRetain bounds how long a terminal (completed/errored/cancelled)
-	// agent stays in memory after it ended, so a coordinator can still Wait /
-	// Status / List it within its turn. The durable trail lives in the sink, so
-	// reaping the in-memory record loses nothing. agentReapInterval is how often
-	// the sweeper runs.
 	DefaultAgentRetain = 30 * time.Minute
 	agentReapInterval  = 1 * time.Minute
-
 )
 
 var (
@@ -54,32 +28,26 @@ var (
 	ErrNoRunner = errors.New("agent: no runner attached")
 )
 
-// SubAgentRunner is the slice of the engine the manager needs : run a target
-// agent as an isolated sub-turn. *runtime.Engine satisfies it via RunSubAgent.
 type SubAgentRunner interface {
 	RunSubAgent(ctx context.Context, spec runtime.SubAgentSpec) (runtime.AgentResult, error)
 }
 
-// EventSink publishes durable agent-lifecycle events (for client resync). nil
-// = no durable events (the in-memory registry still works ; wired in P3).
 type EventSink interface {
 	AppendDurable(ctx context.Context, ev sessionstore.Event) (uint64, error)
 }
 
-// SpawnRequest describes one delegation.
 type SpawnRequest struct {
 	AppID        string
-	RootSession  string // the top-level session the whole tree lives under
+	RootSession  string
 	UserID       string
-	UserJWT      string // gateway bearer forwarded to the sub-agent's turn (transient)
-	AgentID      string // target logical agent id
+	UserJWT      string
+	AgentID      string
 	Task         string
 	MemorySeed   string
-	ParentRunID  string // "" = spawned by the entry agent (depth 0)
-	ParentCallID string // tool call_id of the delegating `agent` call, for client chip binding
+	ParentRunID  string
+	ParentCallID string
 }
 
-// Snapshot is a lock-free view of one agent, for status / list / resync.
 type Snapshot struct {
 	RunID         string `json:"run_id"`
 	AgentID       string `json:"agent_id"`
@@ -98,7 +66,6 @@ type Snapshot struct {
 	Error         string `json:"error,omitempty"`
 }
 
-// Manager is the production multi-agent orchestrator.
 type Manager struct {
 	runner SubAgentRunner
 	sink   EventSink
@@ -107,19 +74,15 @@ type Manager struct {
 	MaxDepth         int
 	MaxAgentsPerRoot int
 
-	// RetainCompleted bounds how long a terminal agent lingers after it ended
-	// (0 → DefaultAgentRetain). now is injectable for tests.
 	RetainCompleted time.Duration
 	now             func() time.Time
 
-	roots sync.Map // rootSession -> *rootTable
+	roots sync.Map
 
 	reapStop chan struct{}
 	reapOnce sync.Once
 }
 
-// New constructs a Manager. AttachRunner must be called before Spawn ; Start
-// launches the background reaper.
 func New(logger *slog.Logger) *Manager {
 	if logger == nil {
 		logger = slog.Default()
@@ -163,8 +126,6 @@ type rootTable struct {
 	agents map[string]*agentState
 }
 
-// agentState is the live state of one agent instance. Telemetry fields are
-// atomic so the engine (via the Recorder) updates them lock-free in real time.
 type agentState struct {
 	runID        string
 	agentID      string
@@ -178,22 +139,20 @@ type agentState struct {
 	cancel context.CancelFunc
 	done   chan struct{}
 
-	status       atomic.Value // string
+	status       atomic.Value
 	endedNano    atomic.Int64
-	result       atomic.Value // runtime.AgentResult
-	errMsg       atomic.Value // string
-	cancelReason atomic.Value // string — user-facing reason when cancelled by the user
+	result       atomic.Value
+	errMsg       atomic.Value
+	cancelReason atomic.Value
 
 	toolCalls   atomic.Int64
 	llmCalls    atomic.Int64
 	tokensIn    atomic.Int64
 	tokensOut   atomic.Int64
 	children    atomic.Int64
-	currentTool atomic.Value // string — last tool name dispatched
+	currentTool atomic.Value
 }
 
-// AddLLMCall / AddToolCall implement runtime.Recorder — the real-time, lock-free
-// telemetry hook the engine calls around each LLM / tool call.
 func (a *agentState) AddLLMCall(promptTokens, completionTokens int) {
 	a.llmCalls.Add(1)
 	a.tokensIn.Add(int64(promptTokens))
@@ -243,13 +202,6 @@ func (m *Manager) rootFor(root string) *rootTable {
 	return fresh
 }
 
-// lockRoot returns the root table LOCKED, guaranteed to still be the one
-// registered in m.roots. The reaper deletes an empty table while holding its
-// lock ; without this validation Spawn could add an agent to a table the reaper
-// is removing, orphaning the agent (and its goroutine) outside m.roots. The loop
-// re-fetches if our table was reaped between rootFor and the lock — and because
-// the reaper must HOLD the lock to delete, a validated holder keeps the table
-// live for its whole critical section. Caller unlocks rt.mu.
 func (m *Manager) lockRoot(root string) *rootTable {
 	for {
 		rt := m.rootFor(root)
@@ -261,8 +213,6 @@ func (m *Manager) lockRoot(root string) *rootTable {
 	}
 }
 
-// terminal reports whether the agent has finished (its goroutine has recorded a
-// final status and endedNano). Running agents are never reaped.
 func (a *agentState) terminal() bool {
 	if a.endedNano.Load() == 0 {
 		return false
@@ -274,10 +224,6 @@ func (a *agentState) terminal() bool {
 	return false
 }
 
-// Start launches the background reaper that drops terminal agents (and empty
-// root tables) once they're older than RetainCompleted, bounding memory under a
-// long-lived daemon with heavy delegation. Idempotent ; Stop ends it. The reaper
-// also exits if ctx is cancelled.
 func (m *Manager) Start(ctx context.Context) {
 	m.reapStop = make(chan struct{})
 	stop := m.reapStop
@@ -298,14 +244,12 @@ func (m *Manager) Start(ctx context.Context) {
 	}()
 }
 
-// Stop ends the background reaper. Safe to call once ; a no-op if never started.
 func (m *Manager) Stop() {
 	if m.reapStop == nil {
 		return
 	}
 	m.reapOnce.Do(func() { close(m.reapStop) })
 }
-
 
 func (m *Manager) reapAll() {
 	cutoff := m.clock().Add(-m.retain()).UnixNano()
@@ -383,7 +327,6 @@ func (m *Manager) SpawnBatch(_ context.Context, reqs []SpawnRequest) ([]string, 
 	return runIDs, nil
 }
 
-
 func (m *Manager) Spawn(_ context.Context, req SpawnRequest) (string, error) {
 	if m.runner == nil {
 		return "", ErrNoRunner
@@ -428,7 +371,6 @@ func (m *Manager) Spawn(_ context.Context, req SpawnRequest) (string, error) {
 	return runID, nil
 }
 
-
 func (m *Manager) runAgent(a *agentState, req SpawnRequest) {
 
 	defer a.cancel()
@@ -459,14 +401,13 @@ func (m *Manager) runAgent(a *agentState, req SpawnRequest) {
 		}
 	}()
 
-
 	ctx := runtime.WithRecorder(a.ctx, a)
 	res, err := m.runner.RunSubAgent(ctx, runtime.SubAgentSpec{
 		AppID: req.AppID, ParentSession: req.RootSession, UserID: req.UserID, UserJWT: req.UserJWT,
 		AgentID: req.AgentID, RunID: a.runID, Task: req.Task, MemorySeed: req.MemorySeed, Depth: a.depth,
 	})
 
-	close(tickStop) // stop the telemetry ticker
+	close(tickStop)
 	a.endedNano.Store(m.clock().UnixNano())
 	a.result.Store(res)
 	status := "completed"
@@ -531,7 +472,6 @@ func (m *Manager) WaitAll(ctx context.Context, root string, runIDs []string, tim
 		err      error
 	}
 
-
 	resCh := make(chan result, len(runIDs))
 
 	for i, id := range runIDs {
@@ -553,7 +493,6 @@ func (m *Manager) WaitAll(ctx context.Context, root string, runIDs []string, tim
 	return out, firstErr
 }
 
-
 func (m *Manager) Status(root, runID string) (Snapshot, error) {
 	a := m.lookup(root, runID)
 	if a == nil {
@@ -561,7 +500,6 @@ func (m *Manager) Status(root, runID string) (Snapshot, error) {
 	}
 	return a.snapshot(), nil
 }
-
 
 func (m *Manager) List(root string) []Snapshot {
 	v, ok := m.roots.Load(root)
@@ -578,7 +516,6 @@ func (m *Manager) List(root string) []Snapshot {
 	return out
 }
 
-
 func (m *Manager) Cancel(root, runID string) error {
 	a := m.lookup(root, runID)
 	if a == nil {
@@ -587,7 +524,6 @@ func (m *Manager) Cancel(root, runID string) error {
 	a.cancel()
 	return nil
 }
-
 
 func (m *Manager) CancelWithReason(root, runID, reason string) (int, error) {
 	a := m.lookup(root, runID)
@@ -634,7 +570,6 @@ func isDescendant(agents map[string]*agentState, runID, ancestorID string) bool 
 	return isDescendant(agents, a.parentRunID, ancestorID)
 }
 
-
 func (m *Manager) CancelAll(root string) int {
 	v, ok := m.roots.Load(root)
 	if !ok {
@@ -652,7 +587,6 @@ func (m *Manager) CancelAll(root string) int {
 	}
 	return len(cancels)
 }
-
 
 func (m *Manager) emitProgress(a *agentState, currentTool string) {
 	if m.sink == nil {
