@@ -6,7 +6,7 @@ app:
   short_name: Support
   icon: "🎧"
   color: "#4F46E5"
-  version: "2.0.0"
+  version: "2.0.1"
   description: >
     Omnichannel AI customer-support desk. Requests arrive on any wired channel
     (webhook from your ticketing/CRM/contact form, Discord, WhatsApp...), an
@@ -33,7 +33,7 @@ agents:
     brain:
       provider: openai
       backend: openai_compat
-      model: zen-mimo-v2.5-free
+      model: mimo-v2.5
       temperature: 0
       max_tokens: 1024
       config:
@@ -58,7 +58,7 @@ agents:
     brain: &specialist_brain
       provider: openai
       backend: openai_compat
-      model: zen-mimo-v2.5-free
+      model: mimo-v2.5
       temperature: 0.2
       max_tokens: 700
       config:

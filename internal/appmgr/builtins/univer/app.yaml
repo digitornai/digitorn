@@ -6,7 +6,7 @@ app:
   short_name: Sheets
   icon: ""
   color: "#3b82f6"
-  version: "0.3.0"
+  version: "0.3.1"
   description: "A live Excel-like spreadsheet the agent builds and edits in real time."
   author: "you@example.com"
   category: "data"
@@ -32,7 +32,7 @@ agents:
     brain:
       provider: openai
       backend: openai_compat
-      model: zen-mimo-v2.5-free
+      model: mimo-v2.5
       temperature: 0.3
       max_tokens: 64000
       config:

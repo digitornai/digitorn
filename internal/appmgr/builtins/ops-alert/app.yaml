@@ -6,7 +6,7 @@ app:
   short_name: Alerts
   icon: "🚨"
   color: "#DC2626"
-  version: "1.0.0"
+  version: "1.0.1"
   description: >
     Background ops desk: ingests webhook alerts (monitoring, CI, custom integrations),
     triages severity, summarizes impact, and recommends next steps. One session per
@@ -25,7 +25,7 @@ agents:
     role: worker
     brain:
       provider: openai
-      model: zen-deepseek-v4-flash-free
+      model: deepseek-v4-flash
       temperature: 0.2
       max_tokens: 4096
       config:

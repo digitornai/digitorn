@@ -6,7 +6,7 @@ app:
   short_name: LaTeX
   icon: ""
   color: "#008080"
-  version: "0.3.0"
+  version: "0.3.1"
   description: "Write and compile LaTeX documents live; the agent plans, asks when unsure, builds a well-structured document, compiles, and fixes errors."
   author: "you@example.com"
   category: "writing"
@@ -106,7 +106,7 @@ agents:
     brain:
       provider: openai
       backend: openai_compat
-      model: zen-mimo-v2.5-free
+      model: mimo-v2.5
       temperature: 0.3
       max_tokens: 64000
       config:

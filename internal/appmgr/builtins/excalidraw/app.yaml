@@ -6,7 +6,7 @@ app:
   short_name: Excalidraw
   icon: ""
   color: "#6965db"
-  version: "0.1.0"
+  version: "0.1.1"
   description: "A collaborative whiteboard the agent can draw on in real time."
   author: "you@example.com"
   category: "design"
@@ -240,7 +240,7 @@ agents:
     brain:
       provider: openai
       backend: openai_compat
-      model: zen-mimo-v2.5-free
+      model: mimo-v2.5
       temperature: 0.3
       max_tokens: 64000
       config:

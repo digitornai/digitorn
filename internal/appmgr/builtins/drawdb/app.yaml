@@ -6,7 +6,7 @@ app:
   short_name: drawDB
   icon: ""
   color: "#5b8def"
-  version: "0.1.2"
+  version: "0.1.3"
   description: "A live database schema designer the agent can draw and edit in real time."
   author: "you@example.com"
   category: "data"
@@ -266,7 +266,7 @@ agents:
     brain:
       provider: openai
       backend: openai_compat
-      model: zen-mimo-v2.5-free
+      model: mimo-v2.5
       temperature: 0.3
       max_tokens: 64000
       config:

@@ -2,7 +2,7 @@ app:
   app_id: digitorn-craft
   name: Digitorn Craft
   short_name: Craft
-  version: 0.1.0
+  version: "0.1.1"
   description: "Build React + Vite apps from a single prompt. Pick a starter template or describe what you want — the AI writes the code, installs deps, and ships a production build."
   icon: ""
   color: "#14B8A6"
@@ -58,14 +58,14 @@ agents:
   - id: builder
     role: coordinator
     brain:
-      # zen-mimo-v2.5-free via the Digitorn gateway (provider
+      # mimo-v2.5 via the Digitorn gateway (provider
       # opencode_zen_public, 131k ctx / 8k output). The gateway resolver
       # swaps this brain for a gateway-bound ``OpenAICompatProvider`` at
       # session start for every authenticated user; ``api_key`` +
       # ``base_url`` below are placeholders ignored on the gateway path.
       provider: openai
       backend: openai_compat
-      model: zen-mimo-v2.5-free
+      model: mimo-v2.5
       config:
         api_key: placeholder
         base_url: https://api.openai.com/v1
@@ -1005,7 +1005,7 @@ ui:
     intent_phrases:
       source: auto
       llm:
-        gateway_model: zen-mimo-v2.5-free
+        gateway_model: mimo-v2.5
         timeout_seconds: 4
         prompt: |
           You are the narrator of an AI React + Vite app builder.

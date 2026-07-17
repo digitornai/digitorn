@@ -11,7 +11,7 @@ app:
   short_name: "Chat"
   icon: "💬"
   color: "#6366F1"
-  version: "0.6.1"
+  version: "0.6.2"
   description: "General-purpose assistant that also creates & edits Word, PDF, PowerPoint and Excel files. Zero setup — chat in the web app or CLI."
   author: "you@example.com"
   category: "coding"
@@ -70,12 +70,12 @@ agents:
   - id: main
     role: worker
     brain:
-      # zen-mimo-v2.5-free via the Digitorn gateway (provider
+      # mimo-v2.5 via the Digitorn gateway (provider
       # opencode_zen_public). api_key + base_url are placeholders ignored
       # on the gateway path for authenticated users.
       provider: openai
       backend: openai_compat
-      model: zen-mimo-v2.5-free
+      model: mimo-v2.5
       temperature: 0.7
       max_tokens: 64000
       config:
