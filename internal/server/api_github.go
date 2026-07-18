@@ -65,11 +65,18 @@ func (d *Daemon) githubToken(r *http.Request) (string, error) {
 	if d.mcpOAuth == nil {
 		return "", errors.New("oauth is not configured on this daemon")
 	}
-	tok, err := d.mcpOAuth.GetToken(r.Context(), userIDOf(r.Context()), githubProviderKey)
-	if err != nil || tok == nil || tok.AccessToken == "" {
-		return "", errors.New("github not connected")
+	uid := userIDOf(r.Context())
+	if tok, err := d.mcpOAuth.GetToken(r.Context(), uid, githubProviderKey); err == nil && tok != nil && tok.AccessToken != "" {
+		return tok.AccessToken, nil
 	}
-	return tok.AccessToken, nil
+	if pm := d.piecesModule(); pm != nil {
+		if store := pm.PiecesStore(); store != nil {
+			if wire, werr := store.RevealAuth(r.Context(), uid, githubProviderKey); werr == nil && wire != nil && wire.AccessToken != "" {
+				return wire.AccessToken, nil
+			}
+		}
+	}
+	return "", errors.New("github not connected")
 }
 
 // githubOAuthCreds resolves Digitorn's managed GitHub OAuth app credentials.
