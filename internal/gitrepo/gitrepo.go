@@ -61,6 +61,8 @@ func workdirHasContent(workdir string) bool {
 	return false
 }
 
+func WorkdirHasContent(workdir string) bool { return workdirHasContent(workdir) }
+
 func OpenIfNeeded(workdir string) (*Repo, error) {
 	if !headExists(gitDirOf(workdir)) && !workdirHasContent(workdir) {
 		return nil, nil

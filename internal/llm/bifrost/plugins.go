@@ -367,10 +367,15 @@ func (c *CircuitBreakerPlugin) PostLLMHook(ctx *schemas.BifrostContext, resp *sc
 		}
 	}
 
-	if bifrostErr == nil {
-		// Success.
+	// The breaker only cares about PROVIDER HEALTH. A success OR a
+	// client-side error (4xx: quota, auth, bad request) both prove the
+	// upstream is reachable and answering — only 5xx / transport
+	// failures mean the provider itself is unhealthy. Counting a 4xx
+	// would let ONE user hitting their quota (429) trip the circuit for
+	// every caller of that provider — the exact cascade we must avoid.
+	if !cbIsHealthFailure(bifrostErr) {
 		if isProbe {
-			// Probe succeeded → fully close + reset state.
+			// Probe reached a responsive upstream → fully close + reset.
 			s := c.getOrCreate(prov)
 			s.openUntilNano.Store(0)
 			s.halfOpenProbe.Store(false)
@@ -382,9 +387,41 @@ func (c *CircuitBreakerPlugin) PostLLMHook(ctx *schemas.BifrostContext, resp *sc
 		return resp, bifrostErr, nil
 	}
 
-	// Failure.
+	// Provider-health failure (5xx / transport).
 	c.recordFailure(prov, isProbe)
 	return resp, bifrostErr, nil
+}
+
+// cbIsHealthFailure decides whether a Bifrost error signals an UNHEALTHY
+// provider (→ counts toward opening the circuit) versus a request that
+// the upstream answered on its own terms (→ ignored by the breaker).
+//
+//   - nil error                         → not a failure (success)
+//   - our own short-circuit errors      → ignored (never self-arm)
+//   - 4xx (quota 429, auth 401/403,
+//     bad-request 400/422, not-found)   → ignored: the request was wrong,
+//     the provider is fine
+//   - 5xx                               → failure (provider is erroring)
+//   - status 0 (no HTTP response:
+//     dial refused, TLS, timeout)       → failure (provider unreachable)
+func cbIsHealthFailure(bifrostErr *schemas.BifrostError) bool {
+	if bifrostErr == nil {
+		return false
+	}
+	// Never let the breaker's own short-circuit responses re-arm it.
+	if bifrostErr.Type != nil {
+		switch *bifrostErr.Type {
+		case "circuit_breaker_open", "circuit_breaker_probe_in_flight":
+			return false
+		}
+	}
+	if bifrostErr.StatusCode != nil {
+		sc := *bifrostErr.StatusCode
+		if sc >= 400 && sc < 500 {
+			return false // client-side error — not a provider-health signal
+		}
+	}
+	return true
 }
 
 // recordFailure registers a failure timestamp in the ring buffer and

@@ -747,6 +747,25 @@ func errMsg(b *schemas.BifrostError) string {
 	return "unknown bifrost error"
 }
 
+// errUpstreamCode returns the application-level error code the upstream
+// (our gateway) reported in its OpenAI-shape `error.code` — "quota_exceeded",
+// "model_unsupported", etc. Empty when the upstream sent no code (a raw
+// provider error, a network failure): callers then fall back to the HTTP
+// status. This is the thread that lets a client tell "you hit your quota,
+// upgrade" apart from "the provider is rate-limiting, retry later" — both 429.
+func errUpstreamCode(b *schemas.BifrostError) string {
+	if b == nil || b.Error == nil {
+		return ""
+	}
+	if b.Error.Code != nil {
+		return *b.Error.Code
+	}
+	if b.Error.Type != nil {
+		return *b.Error.Type
+	}
+	return ""
+}
+
 // errStatusCode extracts the HTTP status returned by the upstream provider,
 // or 0 when Bifrost surfaced an error without one (network drop, parse
 // failure, etc.). 0 maps to codes.Unknown downstream.
@@ -878,6 +897,15 @@ func translateError(berr *schemas.BifrostError, ec errCallContext) error {
 	// Compose a gRPC status with the upstream context embedded as a
 	// machine-readable detail proto. Dashboards / alerts can match on
 	// `ErrorInfo.Reason` to e.g. group all "anthropic_400" failures.
+	//
+	// upstreamCode is the application-level error code the gateway put in
+	// its OpenAI-shape `error.code` (e.g. "quota_exceeded"), now that the
+	// gateway emits it and Bifrost's parser lifts it into Error.Code. It
+	// is DISTINCT from the HTTP status: two different 429s ("quota_exceeded"
+	// from us vs a provider rate-limit) must reach the client as different
+	// codes so the UI can offer "upgrade plan" only for the former. The
+	// HTTP layer reads this from the metadata to build the client error.
+	upstreamCode := errUpstreamCode(berr)
 	st := status.New(grpcCode, fmt.Sprintf("bifrost: %s", msg))
 	info := &errdetails.ErrorInfo{
 		Reason: fmt.Sprintf("%s_%d", ec.Provider, statusCode),
@@ -886,6 +914,8 @@ func translateError(berr *schemas.BifrostError, ec errCallContext) error {
 			"provider":       ec.Provider,
 			"model":          ec.Model,
 			"status_code":    fmt.Sprintf("%d", statusCode),
+			"upstream_code":  upstreamCode,
+			"message":        msg,
 			"correlation_id": ec.CorrelationID,
 			"session_id":     ec.SessionID,
 			"user_id":        ec.UserID,

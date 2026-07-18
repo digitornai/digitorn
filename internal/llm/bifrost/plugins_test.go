@@ -176,6 +176,79 @@ func TestCircuitBreaker_ClosesAfterCooldown(t *testing.T) {
 	}
 }
 
+// A quota block (429) is the user's own limit, NOT a provider-health
+// signal. It must NEVER trip the breaker — otherwise one user hitting
+// their quota fails fast for everyone, AND the short-circuit masks the
+// quota_exceeded error so the client never learns to upgrade its plan.
+func TestCircuitBreaker_QuotaErrorNeverOpens(t *testing.T) {
+	cb := NewCircuitBreakerPlugin(3, 1*time.Second, 1*time.Second)
+	status := 429
+	for i := 0; i < 20; i++ {
+		ctx := newCtxForTest()
+		_, sc, _ := cb.PreLLMHook(ctx, chatReq("openai"))
+		if sc != nil {
+			t.Fatalf("quota 429 must never short-circuit (i=%d)", i)
+		}
+		cb.PostLLMHook(ctx, nil, &schemas.BifrostError{
+			StatusCode: &status,
+			Error:      &schemas.ErrorField{Message: "quota exceeded"},
+		})
+	}
+	if _, sc, _ := cb.PreLLMHook(newCtxForTest(), chatReq("openai")); sc != nil {
+		t.Fatal("circuit must stay CLOSED under a flood of 429 quota errors")
+	}
+}
+
+// Every 4xx is a client-side outcome (bad request, auth, not-found),
+// not a sick provider — none of them may open the circuit.
+func TestCircuitBreaker_ClientErrorsNeverOpen(t *testing.T) {
+	for _, status := range []int{400, 401, 403, 404, 422, 429} {
+		cb := NewCircuitBreakerPlugin(2, 1*time.Second, 1*time.Second)
+		sc4 := status
+		for i := 0; i < 5; i++ {
+			ctx := newCtxForTest()
+			cb.PreLLMHook(ctx, chatReq("p"))
+			cb.PostLLMHook(ctx, nil, &schemas.BifrostError{
+				StatusCode: &sc4,
+				Error:      &schemas.ErrorField{Message: "client error"},
+			})
+		}
+		if _, sc, _ := cb.PreLLMHook(newCtxForTest(), chatReq("p")); sc != nil {
+			t.Fatalf("status %d must not open the circuit", status)
+		}
+	}
+}
+
+// 5xx and transport failures (no HTTP status) DO signal an unhealthy
+// provider and must still open the circuit — the resilience guarantee.
+func TestCircuitBreaker_ServerAndTransportErrorsOpen(t *testing.T) {
+	// 503 upstream error.
+	cb := NewCircuitBreakerPlugin(2, 1*time.Second, 1*time.Second)
+	s503 := 503
+	for i := 0; i < 2; i++ {
+		ctx := newCtxForTest()
+		cb.PreLLMHook(ctx, chatReq("p"))
+		cb.PostLLMHook(ctx, nil, &schemas.BifrostError{
+			StatusCode: &s503,
+			Error:      &schemas.ErrorField{Message: "upstream down"},
+		})
+	}
+	if _, sc, _ := cb.PreLLMHook(newCtxForTest(), chatReq("p")); sc == nil {
+		t.Fatal("503 must open the circuit")
+	}
+
+	// Transport failure: no StatusCode at all (dial refused / timeout).
+	cb2 := NewCircuitBreakerPlugin(2, 1*time.Second, 1*time.Second)
+	for i := 0; i < 2; i++ {
+		ctx := newCtxForTest()
+		cb2.PreLLMHook(ctx, chatReq("q"))
+		cb2.PostLLMHook(ctx, nil, &schemas.BifrostError{Error: &schemas.ErrorField{Message: "connection refused"}})
+	}
+	if _, sc, _ := cb2.PreLLMHook(newCtxForTest(), chatReq("q")); sc == nil {
+		t.Fatal("transport failure (status 0) must open the circuit")
+	}
+}
+
 func TestCircuitBreaker_DoesNotOpenForSuccess(t *testing.T) {
 	cb := NewCircuitBreakerPlugin(2, 1*time.Second, 1*time.Second)
 	for i := 0; i < 10; i++ {

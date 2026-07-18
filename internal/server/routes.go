@@ -100,6 +100,10 @@ func (d *Daemon) MountAPI() {
 		// images, tool image outputs). Content-addressed → immutable + cacheable.
 		r.Get("/api/apps/{app_id}/blobs/{hash}", d.getBlob)
 
+		// Batch STT for the web composer's voice input ("whisper" mode in
+		// voice-input.ts). Audio → llm worker → gateway with the caller's JWT.
+		r.Post("/api/transcribe", d.transcribeAudio)
+
 		// ----- Automations : user-scoped window onto the background service -----
 		// The bg /ops API is admin-only ; these routes enforce per-user ownership
 		// and relay server-side, so the ops token never reaches a client.

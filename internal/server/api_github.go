@@ -175,6 +175,11 @@ func (d *Daemon) githubRepos(w http.ResponseWriter, r *http.Request) {
 
 // POST .../github/clone {repo, branch} — clone a GitHub repo into an EMPTY
 // session workspace (native mode: push/pull operate on the real .git).
+func longGitOp(w http.ResponseWriter, r *http.Request, timeout time.Duration) (context.Context, context.CancelFunc) {
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
+	return context.WithTimeout(context.WithoutCancel(r.Context()), timeout)
+}
+
 func (d *Daemon) githubClone(w http.ResponseWriter, r *http.Request) {
 	sid := chi.URLParam(r, "session_id")
 	wd, err := d.sessionWorkdir(r.Context(), sid)
@@ -208,7 +213,7 @@ func (d *Daemon) githubClone(w http.ResponseWriter, r *http.Request) {
 		}
 		full = login + "/" + full
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
+	ctx, cancel := longGitOp(w, r, 30*time.Minute)
 	defer cancel()
 	branch, head, err := gitrepo.CloneRepo(ctx, wd, "https://github.com/"+full+".git", strings.TrimSpace(req.Branch), token)
 	if err != nil {
@@ -315,7 +320,7 @@ func (d *Daemon) githubPull(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "github_not_cloned", "this workspace is not a cloned repository")
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
+	ctx, cancel := longGitOp(w, r, 30*time.Minute)
 	defer cancel()
 	head, updated, err := gitrepo.NativePull(ctx, wd, token)
 	if err != nil {
@@ -339,7 +344,7 @@ func (d *Daemon) githubStatus(w http.ResponseWriter, r *http.Request) {
 	if _, terr := d.githubToken(r); terr == nil {
 		connected = true
 	}
-	out := map[string]any{"connected": connected}
+	out := map[string]any{"connected": connected, "empty": !gitrepo.WorkdirHasContent(wd)}
 	if st := readGithubLink(wd); st != nil {
 		out["repo"] = st.FullName
 		out["url"] = st.URL
@@ -464,7 +469,7 @@ func (d *Daemon) githubPush(w http.ResponseWriter, r *http.Request) {
 		if login, lerr := githubLogin(token); lerr == nil {
 			name, email = login, login+"@users.noreply.github.com"
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
+		ctx, cancel := longGitOp(w, r, 30*time.Minute)
 		defer cancel()
 		head, committed, serr := gitrepo.NativeSync(ctx, wd, token, msg, name, email, st.Branch)
 		if serr != nil {

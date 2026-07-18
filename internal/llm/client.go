@@ -9,6 +9,7 @@ import (
 	"os"
 	"time"
 
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -90,6 +91,15 @@ func (c *Client) Chat(ctx context.Context, req *ChatRequest) (*ChatResponse, err
 	defer cancel()
 	var lastErr error
 	for attempt := 0; attempt <= c.retries; attempt++ {
+		if attempt > 0 {
+			// Backoff before every re-attempt (never retry instantly).
+			// Abort the wait if the caller's context is already gone.
+			select {
+			case <-time.After(retryBackoff(attempt)):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
 		conn, err := c.mgr.Pick(ctx, c.kind)
 		if err != nil {
 			lastErr = err
@@ -281,6 +291,64 @@ func (c *Client) Transcribe(ctx context.Context, req *TranscribeRequest) (<-chan
 	return out, nil
 }
 
+// TranscribeText is the unary form of Transcribe for single-utterance
+// (batch) callers like the HTTP /api/transcribe endpoint. It drains the
+// stream to the final transcript and, crucially, returns the upstream
+// gRPC error UNFLATTENED — the streaming Transcribe collapses errors to
+// an ErrorFrame string (fine for the voice pipeline, but it discards the
+// status details a caller needs to tell "quota_exceeded" from a transient
+// provider failure). Here the raw *status.Status propagates so the HTTP
+// layer can classify it (see server.classifyLLMError).
+func (c *Client) TranscribeText(ctx context.Context, req *TranscribeRequest) (string, error) {
+	if req == nil {
+		return "", errors.New("llm: nil request")
+	}
+	conn, err := c.mgr.Pick(ctx, c.kind)
+	if err != nil {
+		return "", err
+	}
+	desc := &grpc.StreamDesc{StreamName: MethodTranscribe, ServerStreams: true}
+	stream, err := conn.GRPC().NewStream(ctx, desc,
+		"/"+ServiceName+"/"+MethodTranscribe,
+		grpc.CallContentSubtype(AudioCodecName),
+	)
+	if err != nil {
+		return "", fmt.Errorf("llm: transcribe open: %w", err)
+	}
+	if err := stream.SendMsg(req); err != nil {
+		return "", fmt.Errorf("llm: transcribe send: %w", err)
+	}
+	if err := stream.CloseSend(); err != nil {
+		return "", fmt.Errorf("llm: transcribe close-send: %w", err)
+	}
+	var final, interim string
+	for {
+		f := new(AudioFrame)
+		err := stream.RecvMsg(f)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			// Return the gRPC status verbatim — its ErrorInfo detail
+			// carries upstream_code (e.g. "quota_exceeded").
+			return "", err
+		}
+		switch f.Kind() {
+		case FrameFinal:
+			if final != "" {
+				final += " "
+			}
+			final += f.Text()
+		case FrameText:
+			interim = f.Text()
+		}
+	}
+	if final != "" {
+		return final, nil
+	}
+	return interim, nil
+}
+
 // Embed computes embeddings for the input texts.
 func (c *Client) Embed(ctx context.Context, req *EmbedRequest) (*EmbedResponse, error) {
 	if req == nil {
@@ -392,10 +460,47 @@ func isRetryable(err error) bool {
 		switch s.Code() {
 		case codes.Unavailable,
 			codes.DeadlineExceeded,
-			codes.ResourceExhausted,
 			codes.Aborted:
 			return true
+		case codes.ResourceExhausted:
+			// A quota block (our own limit) must never be retried; only a
+			// genuine upstream rate-limit is.
+			return upstreamCodeOf(s) != "quota_exceeded"
 		}
 	}
 	return false
+}
+
+// upstreamCodeOf reads the gateway's error.code from the ErrorInfo detail.
+func upstreamCodeOf(s *status.Status) string {
+	for _, d := range s.Details() {
+		if info, ok := d.(*errdetails.ErrorInfo); ok {
+			return info.Metadata["upstream_code"]
+		}
+	}
+	return ""
+}
+
+// retryBackoff returns the delay before retry attempt N (1-based):
+// 200ms, 400ms, 800ms … capped at 5s. Retrying a rate-limited or
+// unavailable upstream with ZERO delay (the previous behaviour) just
+// hammers it; a short exponential backoff is the correct response to
+// 429/503.
+func retryBackoff(attempt int) time.Duration {
+	if attempt < 1 {
+		attempt = 1
+	}
+	// Cap the shift BEFORE computing: 200ms << 5 = 6.4s already exceeds
+	// the 5s ceiling, and a large attempt would overflow int64 and wrap
+	// to a bogus (even negative) duration. Clamp the exponent, then the
+	// value.
+	shift := attempt - 1
+	if shift > 5 {
+		shift = 5
+	}
+	d := 200 * time.Millisecond << shift
+	if d > 5*time.Second {
+		d = 5 * time.Second
+	}
+	return d
 }

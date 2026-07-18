@@ -45,6 +45,7 @@ client_secret_*.json
 
 # --- bin/ scratch ---------------------------------------------------------
 bin/*.bak*
+bin/config.hubprod.yaml
 bin/*.old*
 bin/*.preVoiceB
 bin/.vite/
