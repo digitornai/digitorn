@@ -98,6 +98,35 @@ func Open(workdir string) (*Repo, error) {
 		gitignore.ParsePattern(metaDir+"/", nil),
 		gitignore.ParsePattern(".git/", nil),
 	)
+	// Dependency/cache dirs: go-git Status hashes the WHOLE worktree, so a single
+	// node_modules (tens of thousands of files from `npm install`) stalls change
+	// detection past the 30s timeout — the editor then never refreshes. Excluded
+	// from change-tracking ONLY; the file tree (fs walk) and preview (direct file
+	// read) still show these dirs. Build outputs (dist/build/out/bin) are left
+	// tracked on purpose — the preview serves them and they may be user output.
+	for _, d := range []string{
+		// JS / Node
+		"node_modules/", ".pnpm-store/", ".yarn/", "bower_components/",
+		".next/", ".nuxt/", ".svelte-kit/", ".angular/", ".astro/",
+		".turbo/", ".parcel-cache/", ".cache/", ".vite/",
+		// Python
+		"__pycache__/", ".venv/", "venv/", ".pytest_cache/", ".mypy_cache/",
+		".ruff_cache/", ".tox/", ".ipynb_checkpoints/",
+		// Rust / JVM (Maven, Gradle)
+		"target/", ".gradle/",
+		// Vendored deps (Go / PHP / Ruby)
+		"vendor/", ".bundle/",
+		// Dart / Flutter
+		".dart_tool/",
+		// Elixir / Erlang
+		"_build/", ".elixir_ls/",
+		// Haskell
+		".stack-work/", "dist-newstyle/",
+		// Infra / misc
+		".terraform/", "coverage/", ".nyc_output/",
+	} {
+		wt.Excludes = append(wt.Excludes, gitignore.ParsePattern(d, nil))
+	}
 	ensureExclude(gd)
 
 	r := &Repo{workdir: workdir, gitDir: gd, repo: repo, wt: wt, origin: map[string]plumbing.Hash{}}

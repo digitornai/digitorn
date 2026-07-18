@@ -43,14 +43,29 @@ func nativeOpen(workdir string) (*git.Repository, *git.Worktree, error) {
 	return repo, wt, nil
 }
 
+// NativeOrigin returns the "origin" remote URL of the workdir's native git repo
+// (<workdir>/.git), or "" when there is no native repo or no origin remote.
+func NativeOrigin(workdir string) string {
+	repo, err := git.PlainOpen(workdir)
+	if err != nil {
+		return ""
+	}
+	rem, err := repo.Remote("origin")
+	if err != nil {
+		return ""
+	}
+	urls := rem.Config().URLs
+	if len(urls) == 0 {
+		return ""
+	}
+	return urls[0]
+}
+
 // CloneRepo clones remoteURL into an unused workdir (nothing on disk but the
 // daemon's .digitorn metadata). Returns the checked-out branch and HEAD sha.
 func CloneRepo(ctx context.Context, workdir, remoteURL, branch, token string) (string, string, error) {
 	if _, err := os.Stat(filepath.Join(workdir, ".git")); err == nil {
 		return "", "", fmt.Errorf("%w: a git repository already exists", ErrWorkdirNotEmpty)
-	}
-	if headExists(gitDirOf(workdir)) {
-		return "", "", fmt.Errorf("%w: the workspace already has tracked history", ErrWorkdirNotEmpty)
 	}
 	if workdirHasContent(workdir) {
 		return "", "", fmt.Errorf("%w: it already contains files", ErrWorkdirNotEmpty)
@@ -83,9 +98,6 @@ func CloneRepo(ctx context.Context, workdir, remoteURL, branch, token string) (s
 func InitRepo(workdir, remoteURL, branch string) error {
 	if _, err := os.Stat(filepath.Join(workdir, ".git")); err == nil {
 		return fmt.Errorf("%w: a git repository already exists", ErrWorkdirNotEmpty)
-	}
-	if headExists(gitDirOf(workdir)) {
-		return fmt.Errorf("%w: the workspace already has tracked history", ErrWorkdirNotEmpty)
 	}
 	if branch == "" {
 		branch = "main"

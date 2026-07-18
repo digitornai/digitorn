@@ -965,6 +965,7 @@ ui:
     # revisits), the workspace is always visible for Craft.
     default_open: true
     auto_open_on_first_tool: true
+    source_control: github
     # Craft opens on the built preview when dist/ exists; code and
     # changes stay reachable from the mode menu.
     default_view: preview

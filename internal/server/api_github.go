@@ -61,6 +61,50 @@ func writeGithubLink(workdir string, st *githubLinkState) error {
 	return os.WriteFile(githubLinkPath(workdir), b, 0o600)
 }
 
+func githubFullNameFromURL(u string) string {
+	u = strings.TrimSuffix(strings.TrimSpace(u), ".git")
+	i := strings.Index(u, "github.com")
+	if i < 0 {
+		return ""
+	}
+	rest := strings.TrimLeft(u[i+len("github.com"):], ":/")
+	parts := strings.Split(rest, "/")
+	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
+		return ""
+	}
+	return parts[0] + "/" + parts[1]
+}
+
+func (d *Daemon) githubBindAndPush(w http.ResponseWriter, r *http.Request, wd, token, full string) {
+	name, email := "", ""
+	if login, lerr := githubLogin(token); lerr == nil {
+		name, email = login, login+"@users.noreply.github.com"
+	}
+	ctx, cancel := longGitOp(w, r, 30*time.Minute)
+	defer cancel()
+	head, _, serr := gitrepo.NativeSync(ctx, wd, token, "digitorn: initial commit", name, email, "main")
+	if serr != nil {
+		writeError(w, http.StatusBadGateway, "git_push_failed", serr.Error())
+		return
+	}
+	st := &githubLinkState{
+		FullName:    full,
+		URL:         "https://github.com/" + full,
+		Branch:      "main",
+		Mode:        githubModeNative,
+		LinkedAt:    time.Now().UTC().Format(time.RFC3339),
+		LastPush:    time.Now().UTC().Format(time.RFC3339),
+		LastPushSHA: head,
+	}
+	if werr := writeGithubLink(wd, st); werr != nil {
+		writeError(w, http.StatusInternalServerError, "link_persist_failed", werr.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"repo": st.FullName, "url": st.URL, "branch": st.Branch, "head": head, "mode": githubModeNative,
+	})
+}
+
 func (d *Daemon) githubToken(r *http.Request) (string, error) {
 	if d.mcpOAuth == nil {
 		return "", errors.New("oauth is not configured on this daemon")
@@ -272,6 +316,12 @@ func (d *Daemon) githubCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "github_cloned_workspace", "this workspace is already bound to a repository")
 		return
 	}
+	if origin := gitrepo.NativeOrigin(wd); origin != "" {
+		if full := githubFullNameFromURL(origin); full != "" {
+			d.githubBindAndPush(w, r, wd, token, full)
+			return
+		}
+	}
 	var req struct {
 		Repo    string `json:"repo"`
 		Private bool   `json:"private"`
@@ -293,20 +343,7 @@ func (d *Daemon) githubCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "git_init_failed", err.Error())
 		return
 	}
-	st := &githubLinkState{
-		FullName: full,
-		URL:      "https://github.com/" + full,
-		Branch:   "main",
-		Mode:     githubModeNative,
-		LinkedAt: time.Now().UTC().Format(time.RFC3339),
-	}
-	if err := writeGithubLink(wd, st); err != nil {
-		writeError(w, http.StatusInternalServerError, "link_persist_failed", err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"repo": st.FullName, "url": st.URL, "branch": st.Branch, "mode": githubModeNative,
-	})
+	d.githubBindAndPush(w, r, wd, token, full)
 }
 
 // POST .../github/pull — fast-forward a cloned workspace from origin.

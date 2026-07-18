@@ -207,3 +207,65 @@ templates:
       Then adapt each section to the user's product (copy, features, pricing
       tiers, testimonials), swap imagery, and reorder/remove sections as
       needed. Vite HMR is live. Extend, never rewrite.
+
+
+  - id: studio-landing
+    name: "Studio landing"
+    description: "Animated single-page studio/marketing site: hero, about, classes, gallery, testimonials, contact. React + Vite + Tailwind + Framer Motion."
+    preview_path: "templates/studio-landing/dist/index.html"
+    seed_dir: "templates/studio-landing/files/"
+    system_prompt: |
+      You are building from the "Studio landing" starter — a COMPLETE,
+      animated single-page marketing site ALREADY scaffolded in the
+      workspace. This is your foundation. DO NOT start from scratch, DO NOT
+      scaffold a new project. Build the user's landing page ON TOP of it.
+
+      Stack (installed): React + Vite + TypeScript + Tailwind CSS +
+      Framer Motion (lucide-react icons).
+
+      Structure — explore before editing:
+        - src/components/ — the page sections: Navbar, Hero, About, Classes,
+          Gallery, Testimonials, Contact, Footer. Edit these.
+        - src/App.tsx — composes the sections in order (with a mobile menu).
+        - src/index.css — Tailwind + theme.
+
+      First turn, ALWAYS in this order:
+        1. Bash("npm install", timeout=600)
+        2. Bash("npm run dev -- --host 0.0.0.0 --port 5173", run_in_background=true)
+        3. PreviewProxy(port=5173, bash_task_id=<id>)
+
+      Then adapt each section to the user's brand (copy, imagery, sections),
+      reorder/remove sections as needed, and keep the Framer Motion entrance
+      animations. Vite HMR is live. Extend, never rewrite.
+
+
+  - id: ecommerce-shop
+    name: "E-commerce shop"
+    description: "Full storefront: home, product listing, product detail, cart & checkout, with a Zustand cart store. React + Vite + Tailwind + React Router (hash)."
+    preview_path: "templates/ecommerce-shop/dist/index.html"
+    seed_dir: "templates/ecommerce-shop/files/"
+    system_prompt: |
+      You are building from the "E-commerce shop" starter — a COMPLETE
+      storefront ALREADY scaffolded in the workspace. This is your
+      foundation. DO NOT start from scratch, DO NOT scaffold a new project.
+      Build the user's shop ON TOP of it.
+
+      Stack (installed): React + Vite + TypeScript + Tailwind CSS +
+      react-router-dom (HASH history, so the live preview renders) +
+      Zustand (lucide-react icons).
+
+      Structure — explore before editing:
+        - src/pages/ — Home, Products, ProductDetail, Cart, Checkout. Edit these.
+        - src/components/ — shared UI (product card, layout, nav…).
+        - src/store/cart.ts — Zustand cart store (add/remove/total).
+        - src/data/ — the product catalogue (swap for the user's products).
+        - src/types/, src/lib/.
+
+      First turn, ALWAYS in this order:
+        1. Bash("npm install", timeout=600)
+        2. Bash("npm run dev -- --host 0.0.0.0 --port 5173", run_in_background=true)
+        3. PreviewProxy(port=5173, bash_task_id=<id>)
+
+      Then adapt to the user's catalogue (products in src/data/), branding,
+      and checkout flow. Keep the HashRouter. Vite HMR is live. Extend,
+      never rewrite.
