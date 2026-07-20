@@ -55,6 +55,11 @@ type SocketIOBridge struct {
 
 	PreWarmContext func(sessionID, appID string)
 
+	// TurnActive reports whether a turn is currently in flight for a session, so
+	// a (re)joining client can re-arm its spinner. Wired in bootstrap to the
+	// sessionRunner. Nil-safe.
+	TurnActive func(sessionID string) bool
+
 	clients sync.Map
 
 	sub        *sessionstore.Subscription
@@ -146,6 +151,8 @@ func (b *SocketIOBridge) dispatchToRealtime(ev sessionstore.Event) {
 	env := b.builder.Build(&ev)
 	b.emitEnvelope(room, &ev, env)
 
+	b.fanUserNotification(&ev)
+
 	if _, runID, isSub := sessionstore.SubAgentSession(ev.SessionID); isSub {
 		for _, anc := range sessionstore.SubAgentAncestors(ev.SessionID) {
 			ancRoom := "session:" + anc
@@ -158,6 +165,65 @@ func (b *SocketIOBridge) dispatchToRealtime(ev sessionstore.Event) {
 			b.emitEnvelope(ancRoom, &ev, fan)
 		}
 	}
+}
+
+// fanUserNotification pushes a cross-session alert to the session OWNER's user
+// room on notable events (approval waiting/cleared, turn finished, turn errored)
+// — so a tab viewing ANOTHER session learns about it. USER-ROOM ONLY, keyed by
+// the authenticated ev.UserID (never a session room) → strictly isolated per
+// user: only that user's own authenticated sockets receive it.
+func (b *SocketIOBridge) fanUserNotification(ev *sessionstore.Event) {
+	if ev.UserID == "" || ev.SessionID == "" {
+		return
+	}
+	// Sub-agent lifecycle resolves inside the parent turn's flow — not a
+	// top-level "the user should know" alert.
+	if _, _, isSub := sessionstore.SubAgentSession(ev.SessionID); isSub {
+		return
+	}
+	var kind, title string
+	switch ev.Type {
+	case sessionstore.EventApprovalRequest:
+		kind = "approval_pending"
+		if ev.Approval != nil {
+			title = ev.Approval.Reason
+		}
+	case sessionstore.EventApprovalGranted, sessionstore.EventApprovalDenied:
+		kind = "approval_cleared"
+	case sessionstore.EventTurnEnded:
+		// Single terminal event carries the outcome (turn/turn.go closeWith):
+		// "done" | "errored" | "interrupted". We notify on the first two; an
+		// interrupt is user-initiated (they already know). EventError is NOT
+		// hooked here — it always accompanies a status="errored" turn_ended, so
+		// hooking both would double-fire.
+		if ev.Turn == nil {
+			return
+		}
+		switch ev.Turn.Status {
+		case "done":
+			kind = "turn_done"
+		case "errored":
+			kind = "turn_error"
+			title = ev.Turn.Reason
+		default:
+			return
+		}
+	default:
+		return
+	}
+	note := sessionstore.Event{
+		Type:      sessionstore.EventNotification,
+		SessionID: ev.SessionID,
+		AppID:     ev.AppID,
+		UserID:    ev.UserID,
+		Notification: &sessionstore.NotificationPayload{
+			Kind:      kind,
+			SessionID: ev.SessionID,
+			AppID:     ev.AppID,
+			Title:     title,
+		},
+	}
+	b.emitEnvelope("user:"+ev.UserID, &note, b.builder.Build(&note))
 }
 
 func (b *SocketIOBridge) emitEnvelope(room string, ev *sessionstore.Event, env sessionstore.SocketEnvelope) {
@@ -357,7 +423,26 @@ func (b *SocketIOBridge) handleJoinSession(ctx context.Context, c ports.Realtime
 		return err
 	}
 	go b.emitContextOnJoin(c, sessionID, appID)
+	if b.TurnActive != nil && b.TurnActive(sessionID) {
+		b.emitTurnActiveOnJoin(c, sessionID, appID)
+	}
 	return nil
+}
+
+// emitTurnActiveOnJoin tells the just-joined client a turn is in flight so it
+// re-arms its spinner. Transient (not durable): emitted only to this client.
+func (b *SocketIOBridge) emitTurnActiveOnJoin(c ports.RealtimeClient, sessionID, appID string) {
+	if c == nil || b.builder == nil {
+		return
+	}
+	ev := sessionstore.Event{
+		Type:      sessionstore.EventTurnState,
+		SessionID: sessionID,
+		AppID:     appID,
+	}
+	if err := c.Emit("event", b.builder.Build(&ev)); err != nil {
+		b.log.Debug("bridge: turn-state-on-join emit failed", slog.String("err", err.Error()))
+	}
 }
 
 func (b *SocketIOBridge) emitContextOnJoin(c ports.RealtimeClient, sessionID, appID string) {

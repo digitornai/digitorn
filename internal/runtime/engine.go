@@ -1958,6 +1958,18 @@ func (e *Engine) persistToolCallEvents(
 	}
 }
 
+// stripIntentArg removes the narration-only `intent` key before a tool runs
+// (ui.tool_calls.inject_intent). Returns the original map untouched when absent
+// — so the flag-OFF path is byte-for-byte the previous behaviour.
+func stripIntentArg(args map[string]any) map[string]any {
+	if _, ok := args["intent"]; !ok {
+		return args
+	}
+	clone := maps.Clone(args)
+	delete(clone, "intent")
+	return clone
+}
+
 func (e *Engine) dispatchToolsParallel(
 	ctx context.Context, tr *turn.Turn, in TurnInput,
 	app *appmgr.RuntimeApp, agent *schema.Agent,
@@ -2042,10 +2054,14 @@ func (e *Engine) dispatchToolsParallel(
 			} else if e.ToolTimeout > 0 {
 				dctx, toolCancel = context.WithTimeout(ctx, e.ToolTimeout)
 			}
+			args := tc.Arguments
+			if app.InjectIntent() {
+				args = stripIntentArg(tc.Arguments)
+			}
 			outcomes[i] = e.dispatcher().Dispatch(dctx, ToolInvocation{
 				CallID:     tc.ID,
 				Name:       tc.Name,
-				Args:       tc.Arguments,
+				Args:       args,
 				AppID:      in.AppID,
 				AgentID:    agentID,
 				AgentRunID: agentRunID(in.AgentRunID, agentID),

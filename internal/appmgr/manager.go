@@ -60,6 +60,15 @@ type RuntimeApp struct {
 	BundleDir  string // absolute path to {Root}/{app_id}/
 }
 
+// InjectIntent reports ui.tool_calls.inject_intent. Nil-safe → false unless set.
+func (a *RuntimeApp) InjectIntent() bool {
+	if a == nil || a.Definition == nil || a.Definition.UI == nil ||
+		a.Definition.UI.ToolCalls == nil || a.Definition.UI.ToolCalls.InjectIntent == nil {
+		return false
+	}
+	return *a.Definition.UI.ToolCalls.InjectIntent
+}
+
 // UpdateInfo answers "/check-update" for hub-installed apps : compares
 // the local Version against the hub's latest_version.
 type UpdateInfo struct {

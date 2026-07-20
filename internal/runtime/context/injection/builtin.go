@@ -126,22 +126,22 @@ func builtinToolSpecs() []llm.ToolSpec {
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"name":   map[string]any{"type": "string", "description": "Tool FQN to run in background, e.g. \"bash.run\". Required for launch."},
-					"params": map[string]any{"type": "object", "description": "Parameters for the tool being launched."},
-					"notify_when": map[string]any{"type": "string", "description": "Pattern to watch for in live output. When found, the agent is automatically woken in a NEW TURN with [BACKGROUND TASK READY] — no polling needed. Set at launch time alongside name+params."},
-					"wait_for": map[string]any{"type": "string", "description": "Block THIS turn until this pattern appears in the task's live log (polls every 300ms). Requires task_id. Use for short waits < 30s."},
-					"watch":    map[string]any{"type": "boolean", "description": "Run command repeatedly every interval seconds as a background loop."},
-					"command":  map[string]any{"type": "string", "description": "Shell command to run repeatedly in watch mode."},
-					"interval": map[string]any{"type": "number", "description": "Watch interval in seconds (default 2)."},
-					"until":    map[string]any{"type": "string", "description": "Stop watching when this pattern appears in the output."},
-					"task_id": map[string]any{"type": "string", "description": "ID of an existing background task (for status/wait/cancel/signal/stdin/wait_for)."},
-					"wait":       map[string]any{"type": "boolean", "description": "Block until task completes. Set with task_id. Use only when you have nothing else to do."},
-					"timeout":    map[string]any{"type": "number", "description": "Timeout in seconds for wait or wait_for (default: wait=∞, wait_for=60)."},
-					"tail_lines": map[string]any{"type": "number", "description": "Lines of live log to return in status/wait (default 100, 0=all)."},
-					"signal": map[string]any{"type": "string", "description": "Signal to send to running task: \"SIGINT\" (Ctrl+C graceful), \"SIGTERM\" (graceful stop). Requires task_id."},
-					"stdin": map[string]any{"type": "string", "description": "Text to pipe to task stdin (e.g. \"yes\\n\" to answer a prompt). Requires task_id."},
-					"cancel":     map[string]any{"type": "boolean", "description": "Kill the task (SIGKILL). Requires task_id."},
-					"list_tasks": map[string]any{"type": "boolean", "description": "List all background tasks for this session."},
+					"name":           map[string]any{"type": "string", "description": "Tool FQN to run in background, e.g. \"bash.run\". Required for launch."},
+					"params":         map[string]any{"type": "object", "description": "Parameters for the tool being launched."},
+					"notify_when":    map[string]any{"type": "string", "description": "Pattern to watch for in live output. When found, the agent is automatically woken in a NEW TURN with [BACKGROUND TASK READY] — no polling needed. Set at launch time alongside name+params."},
+					"wait_for":       map[string]any{"type": "string", "description": "Block THIS turn until this pattern appears in the task's live log (polls every 300ms). Requires task_id. Use for short waits < 30s."},
+					"watch":          map[string]any{"type": "boolean", "description": "Run command repeatedly every interval seconds as a background loop."},
+					"command":        map[string]any{"type": "string", "description": "Shell command to run repeatedly in watch mode."},
+					"interval":       map[string]any{"type": "number", "description": "Watch interval in seconds (default 2)."},
+					"until":          map[string]any{"type": "string", "description": "Stop watching when this pattern appears in the output."},
+					"task_id":        map[string]any{"type": "string", "description": "ID of an existing background task (for status/wait/cancel/signal/stdin/wait_for)."},
+					"wait":           map[string]any{"type": "boolean", "description": "Block until task completes. Set with task_id. Use only when you have nothing else to do."},
+					"timeout":        map[string]any{"type": "number", "description": "Timeout in seconds for wait or wait_for (default: wait=∞, wait_for=60)."},
+					"tail_lines":     map[string]any{"type": "number", "description": "Lines of live log to return in status/wait (default 100, 0=all)."},
+					"signal":         map[string]any{"type": "string", "description": "Signal to send to running task: \"SIGINT\" (Ctrl+C graceful), \"SIGTERM\" (graceful stop). Requires task_id."},
+					"stdin":          map[string]any{"type": "string", "description": "Text to pipe to task stdin (e.g. \"yes\\n\" to answer a prompt). Requires task_id."},
+					"cancel":         map[string]any{"type": "boolean", "description": "Kill the task (SIGKILL). Requires task_id."},
+					"list_tasks":     map[string]any{"type": "boolean", "description": "List all background tasks for this session."},
 					"settle_seconds": map[string]any{"type": "number", "description": "Seconds to wait for a fast-failing launch before returning task_id (default 2, 0=immediate)."},
 				},
 			},
@@ -215,14 +215,23 @@ func AskUserSpec() []llm.ToolSpec {
 				"• Simple — ask_user(question=\"Should I proceed with this plan?\")\n" +
 				"• Choices (clickable buttons) — ask_user(question=\"Which framework?\", choices=[\"FastAPI\",\"Django\",\"Flask\"])\n" +
 				"• Multi-select — ask_user(question=\"Which features?\", choices=[\"Auth\",\"DB\",\"Tests\"], allow_multiple=true)\n" +
-				"• Review/edit content — ask_user(question=\"Review this plan.\", content=\"## Plan\\n1. ...\") — the user may edit it; the edited text comes back\n" +
+				"• Validate a plan / proposal — ask_user(question=\"Approve this plan?\", content=\"## Plan\\n1. ...\", response_type=\"approval\") — shows Approve/Reject buttons (content is OPTIONAL: ask_user(question=\"Proceed with the migration?\", response_type=\"approval\") works too)\n" +
+				"• Review/edit content — ask_user(question=\"Review this draft.\", content=\"## Draft\\n...\") — default answer flow: the user may edit the text and it comes back\n" +
 				"• Structured form — ask_user(question=\"Configure the project\", form=[{\"type\":\"select\",\"name\":\"framework\",\"label\":\"Framework\",\"options\":[\"FastAPI\",\"Django\"]},{\"type\":\"text\",\"name\":\"app_name\",\"label\":\"Name\"}])\n" +
-				"Guidance: don't ask trivial questions you can decide yourself; ask ONE question per call (split multiple); use choices for 2–6 clear options; use a form for several related inputs at once.",
+				"Guidance: don't ask trivial questions you can decide yourself; ask ONE question per call (split multiple); use choices for 2–6 clear options; use a form for several related inputs at once. " +
+				"Set response_type=\"approval\" WHENEVER the user must VALIDATE something — approving a plan, a proposed change/design, or a go-ahead before any significant or irreversible action (Approve/Reject; content optional). Leave it default when you need the user to type or pick an answer.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"question": map[string]any{"type": "string", "description": "The question or message to show the user. Be specific about what you need."},
 					"content":  map[string]any{"type": "string", "description": "Optional markdown (plan/code/config) for the user to review and edit. The possibly-edited text is returned."},
+					"response_type": map[string]any{
+						"type": "string",
+						"enum": []string{"answer", "approval"},
+						"description": "How the user replies. \"answer\" (default) — they type or pick a response. " +
+							"\"approval\" — the user must VALIDATE something (approve a plan / proposed change / design, or give a go-ahead before a significant or irreversible action): the UI shows Approve/Reject instead of a response field. `content` is optional. " +
+							"Leave it \"answer\" when you need the user to type or pick an answer.",
+					},
 					"choices": map[string]any{
 						"type":        "array",
 						"items":       map[string]any{"type": "string"},
@@ -357,14 +366,25 @@ func AgentToolSpec() []llm.ToolSpec {
 				"FAN-OUT (recommended for parallel work):\n" +
 				"  agent(agents=[{agent:\"x\",task:\"...\"},{agent:\"y\",task:\"...\"}]) → run_ids\n" +
 				"  agent(run_ids=[r1,r2], wait=true) → all results at once\n\n" +
-				"Each sub-agent runs in full isolation. run_ids are agent runs.",
+				"FORK MODE (type=\"fork\"):\n" +
+				"  agent(agent=<id>, task=..., type=\"fork\") spawns a sub-agent that\n" +
+				"  INHERITS this conversation's full context (goal, files, decisions) —\n" +
+				"  it starts already knowing everything you know, so you don't re-brief it.\n" +
+				"  Use it to offload heavy work (deep research, a self-contained feature,\n" +
+				"  a wide investigation) into the background WITHOUT polluting your own\n" +
+				"  thread: the fork does the work and hands back only its result.\n" +
+				"  Default (no type) = isolated sub-agent that sees only memory_seed+task.\n" +
+				"  Works with fan-out too: {agent,task,type:\"fork\"} per item.\n\n" +
+				"Each sub-agent runs in full isolation (except forks, which inherit context).\n" +
+				"run_ids are agent runs.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"agent":       map[string]any{"type": "string", "description": "Target specialist agent id (mode 1)."},
-					"agents":      map[string]any{"type": "array", "description": "Batch spawn: [{agent,task,memory_seed?}, ...] (mode 2).", "items": map[string]any{"type": "object"}},
+					"agents":      map[string]any{"type": "array", "description": "Batch spawn: [{agent,task,memory_seed?,type?}, ...] (mode 2).", "items": map[string]any{"type": "object"}},
 					"task":        map[string]any{"type": "string", "description": "Instruction for the sub-agent (modes 1)."},
 					"memory_seed": map[string]any{"type": "string", "description": "Read-only context to brief the sub-agent (modes 1,2)."},
+					"type":        map[string]any{"type": "string", "enum": []any{"isolated", "fork"}, "description": "Spawn kind. \"fork\" inherits this conversation's full context; default \"isolated\" sees only memory_seed+task."},
 					"run_id":      map[string]any{"type": "string", "description": "Existing sub-agent run id (modes 3,5,7)."},
 					"run_ids":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Multiple run ids to collect (mode 4)."},
 					"wait":        map[string]any{"type": "boolean", "description": "Block until sub-agent(s) finish. Default false."},

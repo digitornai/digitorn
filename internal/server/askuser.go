@@ -34,6 +34,11 @@ func (b *askUserBridge) Ask(ctx context.Context, req meta.AskUserRequest) (strin
 	if req.Content != "" {
 		payload["content"] = req.Content
 	}
+	// Agent-declared reply shape (answer|approval); lets the client pick the
+	// verdict vs response UI without guessing from the question text.
+	if req.ResponseType != "" {
+		payload["response_type"] = req.ResponseType
+	}
 	if len(req.Choices) > 0 {
 		payload["choices"] = req.Choices
 		payload["allow_multiple"] = req.AllowMultiple
@@ -87,8 +92,30 @@ func (b *askUserBridge) Ask(ctx context.Context, req meta.AskUserRequest) (strin
 
 	res := pending.Wait(ctx, timeout)
 	switch res.Result {
-	case approval.ResultApproved, approval.ResultDenied:
+	case approval.ResultApproved:
+		// Only a declared approval request gets a verdict marker: a free-form
+		// answer must reach the agent verbatim ("blue" stays "blue").
+		if req.ResponseType == "approval" {
+			if res.Reason == "" {
+				return "The user APPROVED.", nil
+			}
+			return "The user APPROVED. Feedback: " + res.Reason, nil
+		}
 		return res.Reason, nil
+	case approval.ResultDenied:
+		// A refusal is ALWAYS explicit, whatever the response_type. Returning
+		// the bare reason made a no-comment rejection indistinguishable from a
+		// no-comment approval (both ""), so the agent proceeded as if approved.
+		if req.ResponseType == "approval" {
+			if res.Reason == "" {
+				return "The user REJECTED. Do not proceed - ask what to change.", nil
+			}
+			return "The user REJECTED. Reason: " + res.Reason, nil
+		}
+		if res.Reason == "" {
+			return "The user skipped the question.", nil
+		}
+		return "The user skipped the question. Note: " + res.Reason, nil
 	case approval.ResultTimeout:
 		return "", errors.New("no answer within " + timeout.String())
 	default:

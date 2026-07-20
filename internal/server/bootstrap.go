@@ -334,6 +334,9 @@ func Build(cfg *config.Config) (*Daemon, error) {
 	bridge.BrainFor = d.brainFor
 	bridge.SessionWindowBrain = d.sessionWindowBrain
 	bridge.PreWarmContext = d.preWarmContext
+	// Lazy: sessionRunner is created later in bootstrap, but this closure is only
+	// invoked at join-time (well after startup). IsRunning is nil-safe.
+	bridge.TurnActive = func(sid string) bool { return d.sessionRunner.IsRunning(sid) }
 	// Embedded-preview iframes authenticate their socket with the `?t=` preview
 	// token (no usable JWT), so they get live workspace_changes push instead of
 	// polling. Same HMAC check as the preview/files routes.

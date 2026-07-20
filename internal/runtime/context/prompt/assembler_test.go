@@ -37,6 +37,7 @@ func TestAssembler_SectionOrder_MatchesDoc(t *testing.T) {
 		"authority_preamble",
 		"identity",
 		"tool_instructions",
+		"intent",
 		"structural_hints",
 		"operating_guide",
 		"communicate",

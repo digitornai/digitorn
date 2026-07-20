@@ -36,6 +36,11 @@ type SubAgentSpec struct {
 	// Depth is the delegation depth (0 = spawned by the entry agent). The
 	// AgentManager enforces a max depth ; the runner just carries it.
 	Depth int
+
+	// InheritContext, when true, seeds this run with the parent session's
+	// rendered transcript (the "fork" mode). Default false = today's exact
+	// isolated sub-agent behavior — nothing changes for existing callers.
+	InheritContext bool
 }
 
 // AgentResult is the structured outcome a coordinator collects from a
@@ -73,6 +78,20 @@ func (e *Engine) RunSubAgent(ctx context.Context, spec SubAgentSpec) (AgentResul
 
 	res := AgentResult{RunID: runID, AgentID: spec.AgentID, Session: subSession, Status: "errored"}
 	start := time.Now()
+
+	// Fork mode : hérite le contexte du parent (transcript rendu, borné).
+	// Ne s'exécute QUE si InheritContext → le spawn normal est intact.
+	if spec.InheritContext && spec.ParentSession != "" {
+		if pst, perr := e.Sessions.State(spec.ParentSession); perr == nil && pst != nil {
+			if t := clampTranscript(renderParentTranscript(pst.Snapshot().Messages)); t != "" {
+				_, _ = e.Sessions.AppendDurable(ctx, sessionstore.Event{
+					Type: sessionstore.EventSystemMessage, SessionID: subSession, AppID: spec.AppID, UserID: spec.UserID,
+					Message: &sessionstore.MessagePayload{Role: "system",
+						Parts: textParts("Contexte hérité de la conversation parente :\n\n" + t)},
+				})
+			}
+		}
+	}
 
 	// Seed the isolated sub-session : read-only context first, then the task.
 	if spec.MemorySeed != "" {
@@ -130,6 +149,36 @@ func subSessionID(parent, runID string) string {
 		return "agent::" + runID
 	}
 	return parent + "::agent::" + runID
+}
+
+const maxForkSeedBytes = 100_000 // ~25k tokens : borne le coût du seed fork
+
+// renderParentTranscript aplatit la conversation parent en texte simple pour
+// le seed d'un fork (option C). Volontairement simple : role + texte.
+func renderParentTranscript(msgs []sessionstore.Message) string {
+	var b strings.Builder
+	for i := range msgs {
+		txt := strings.TrimSpace(msgs[i].Content)
+		if txt == "" {
+			continue
+		}
+		role := msgs[i].Role
+		if role == "" {
+			role = "assistant"
+		}
+		b.WriteString(role)
+		b.WriteString(": ")
+		b.WriteString(txt)
+		b.WriteString("\n\n")
+	}
+	return b.String()
+}
+
+func clampTranscript(s string) string {
+	if len(s) <= maxForkSeedBytes {
+		return s
+	}
+	return "…[début de conversation tronqué]…\n\n" + s[len(s)-maxForkSeedBytes:]
 }
 
 func textParts(s string) []sessionstore.MessagePart {

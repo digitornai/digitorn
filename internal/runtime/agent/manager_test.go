@@ -59,6 +59,40 @@ func TestSpawnWaitAndTelemetry(t *testing.T) {
 	}
 }
 
+// TestSpawnThreadsInheritContext : the manager must forward the fork lever from
+// the SpawnRequest to the SubAgentSpec the runner receives — that spec flag is
+// what makes RunSubAgent seed the parent transcript. (The Fork field emitted to
+// the frontend comes from the same req.InheritContext.)
+func TestSpawnThreadsInheritContext(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		inherit bool
+	}{{"fork", true}, {"isolated", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got dgruntime.SubAgentSpec
+			done := make(chan struct{})
+			m := newMgr(func(ctx context.Context, spec dgruntime.SubAgentSpec) (dgruntime.AgentResult, error) {
+				got = spec
+				close(done)
+				return dgruntime.AgentResult{RunID: spec.RunID, AgentID: spec.AgentID, Status: "completed"}, nil
+			})
+			if _, err := m.Spawn(context.Background(), agent.SpawnRequest{
+				AppID: "a", RootSession: "root", AgentID: "coding", Task: "t", InheritContext: tc.inherit,
+			}); err != nil {
+				t.Fatalf("Spawn: %v", err)
+			}
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+				t.Fatal("runner never invoked")
+			}
+			if got.InheritContext != tc.inherit {
+				t.Errorf("spec.InheritContext = %v, want %v", got.InheritContext, tc.inherit)
+			}
+		})
+	}
+}
+
 func TestSpawnIsNonBlocking(t *testing.T) {
 	release := make(chan struct{})
 	m := newMgr(func(ctx context.Context, _ dgruntime.SubAgentSpec) (dgruntime.AgentResult, error) {

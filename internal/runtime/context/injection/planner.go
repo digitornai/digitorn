@@ -348,6 +348,34 @@ func paramsToJSONSchema(params []tool.ParamSpec) map[string]any {
 	}
 }
 
+// AddIntentParam adds a required `intent` string to every tool schema, so the
+// model narrates each call (ui.tool_calls.inject_intent). Skips tools with no
+// params (compact/discovery) or that already declare `intent`.
+func AddIntentParam(tools []llm.ToolSpec) {
+	for i := range tools {
+		params := tools[i].Parameters
+		if params == nil {
+			continue
+		}
+		props, _ := params["properties"].(map[string]any)
+		if props == nil {
+			continue
+		}
+		if _, exists := props["intent"]; exists {
+			continue
+		}
+		props["intent"] = map[string]any{
+			"type":        "string",
+			"description": "A short present-tense phrase, in the user's language, describing what you're about to do — shown live to the user (e.g. \"Reading the cart page\").",
+		}
+		if req, ok := params["required"].([]string); ok {
+			params["required"] = append([]string{"intent"}, req...)
+		} else {
+			params["required"] = []string{"intent"}
+		}
+	}
+}
+
 func paramToSchema(p tool.ParamSpec) map[string]any {
 	m := jsonSchemaType(p.Type)
 	m["description"] = p.Description

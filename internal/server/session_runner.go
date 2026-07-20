@@ -66,6 +66,19 @@ func (r *sessionRunner) Abort(sessionID string) bool {
 	return true
 }
 
+// IsRunning reports whether a turn is currently executing for the session (a
+// cancel func is registered for the whole runOnce lifetime). Used to re-arm the
+// client's spinner on join/reconnect when a turn is in flight.
+func (r *sessionRunner) IsRunning(sessionID string) bool {
+	if r == nil {
+		return false
+	}
+	r.cancelMu.Lock()
+	_, ok := r.inflight[sessionID]
+	r.cancelMu.Unlock()
+	return ok
+}
+
 func (r *sessionRunner) registerCancel(sessionID string, cancel context.CancelCauseFunc) {
 	r.cancelMu.Lock()
 	r.inflight[sessionID] = cancel

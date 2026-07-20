@@ -139,6 +139,7 @@ func (b *Builder) assemblePrompt(in runtime.ContextRequest, e *cacheEntry) strin
 		Specialists:        specialistsFor(in.Agent, siblings),
 		ModuleSections:     e.sections,
 		DynamicToolPrompts: e.dynamic,
+		InjectIntent:       in.App.InjectIntent(),
 	})
 }
 
@@ -213,6 +214,12 @@ func (b *Builder) buildArtifacts(ctx context.Context, in runtime.ContextRequest)
 	}
 	if in.UseSkillEnabled {
 		tools = append(tools, injection.UseSkillSpec()...)
+	}
+
+	// inject_intent: add the narration `intent` arg to every tool (flag-gated;
+	// no-op for apps that don't set ui.tool_calls.inject_intent).
+	if in.App.InjectIntent() {
+		injection.AddIntentParam(tools)
 	}
 
 	// 6. Gather module-contributed prompt sections + dynamic tool prompts —

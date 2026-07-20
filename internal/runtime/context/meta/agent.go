@@ -36,6 +36,10 @@ type AgentSpawnRequest struct {
 	MemorySeed   string
 	ParentRunID  string
 	ParentCallID string
+
+	// InheritContext = fork mode (seed with the parent transcript). Default
+	// false = current isolated sub-agent behavior.
+	InheritContext bool
 }
 
 type AgentSnapshot struct {
@@ -102,10 +106,13 @@ func (m *MetaDispatcher) handleAgent(ctx context.Context, call runtime.ToolInvoc
 				return errored(fmt.Sprintf("agent batch: item %d must have 'agent' and 'task'", i))
 			}
 			seed, _ := m["memory_seed"].(string)
+			ftyp, _ := m["type"].(string)
+			finh, _ := m["inherit_context"].(bool)
 			reqs = append(reqs, AgentSpawnRequest{
 				AppID: call.AppID, RootSession: root, UserID: call.UserID,
 				UserJWT: call.UserJWT, AgentID: target, Task: task,
 				MemorySeed: seed, ParentRunID: call.AgentRunID, ParentCallID: call.CallID,
+				InheritContext: ftyp == "fork" || finh,
 			})
 		}
 		runIDs, err := m.Agents.SpawnBatch(ctx, reqs)
@@ -128,16 +135,19 @@ func (m *MetaDispatcher) handleAgent(ctx context.Context, call runtime.ToolInvoc
 			return errored("agent spawn: 'task' is required")
 		}
 		seed, _ := call.Args["memory_seed"].(string)
+		typ, _ := call.Args["type"].(string)
+		inh, _ := call.Args["inherit_context"].(bool)
 		runID, err := m.Agents.Spawn(ctx, AgentSpawnRequest{
-			AppID:        call.AppID,
-			RootSession:  root,
-			UserID:       call.UserID,
-			UserJWT:      call.UserJWT,
-			AgentID:      target,
-			Task:         task,
-			MemorySeed:   seed,
-			ParentRunID:  call.AgentRunID,
-			ParentCallID: call.CallID,
+			AppID:          call.AppID,
+			RootSession:    root,
+			UserID:         call.UserID,
+			UserJWT:        call.UserJWT,
+			AgentID:        target,
+			Task:           task,
+			MemorySeed:     seed,
+			ParentRunID:    call.AgentRunID,
+			ParentCallID:   call.CallID,
+			InheritContext: typ == "fork" || inh,
 		})
 		if err != nil {
 			return errored("agent spawn: " + err.Error())

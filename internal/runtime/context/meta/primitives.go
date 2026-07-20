@@ -28,6 +28,7 @@ type AskUserRequest struct {
 	TurnID        string
 	Question      string
 	Content       string
+	ResponseType  string
 	Choices       []string
 	AllowMultiple bool
 	AllowCustom   bool
@@ -326,9 +327,16 @@ func (m *MetaDispatcher) handleAskUser(ctx context.Context, call runtime.ToolInv
 		return errored("ask_user not wired (no AskUserBridge)")
 	}
 	content, _ := call.Args["content"].(string)
+	// Agent-declared reply shape. Only "approval" (Approve/Reject verdict on
+	// content) diverges from the default answer flow; anything else is "answer".
+	responseType, _ := call.Args["response_type"].(string)
+	responseType = strings.ToLower(strings.TrimSpace(responseType))
+	if responseType != "approval" {
+		responseType = "answer"
+	}
 	timeout, _ := call.Args["timeout"].(float64)
 	choices := stringSliceArg(call.Args["choices"])
-	allowMultiple, _ := call.Args["allow_multiple"].(bool)
+	allowMultiple := boolArg(call.Args["allow_multiple"])
 	// Normalize a model-written form so even a weak model produces a working one :
 	// every field gets a name + a canonical type (aliases folded, type inferred
 	// from options).
@@ -337,12 +345,12 @@ func (m *MetaDispatcher) handleAskUser(ctx context.Context, call runtime.ToolInv
 	// proposals — the user can always answer something the agent didn't foresee.
 	// The agent opts out only for a strict enum (allow_custom: false).
 	allowCustom := true
-	if v, ok := call.Args["allow_custom"].(bool); ok {
-		allowCustom = v
+	if _, ok := call.Args["allow_custom"]; ok {
+		allowCustom = boolArg(call.Args["allow_custom"])
 	}
 	defaultAns, _ := call.Args["default"].(string)
 	placeholder, _ := call.Args["placeholder"].(string)
-	multiline, _ := call.Args["multiline"].(bool)
+	multiline := boolArg(call.Args["multiline"])
 	minSelect, _ := call.Args["min_select"].(float64)
 	maxSelect, _ := call.Args["max_select"].(float64)
 
@@ -353,6 +361,7 @@ func (m *MetaDispatcher) handleAskUser(ctx context.Context, call runtime.ToolInv
 		TurnID:        call.AgentRunID,
 		Question:      question,
 		Content:       content,
+		ResponseType:  responseType,
 		Choices:       choices,
 		AllowMultiple: allowMultiple,
 		AllowCustom:   allowCustom,
@@ -584,19 +593,48 @@ func slugify(s string) string {
 // stringSliceArg coerces a JSON array arg into []string (nil when absent
 // or wrong-typed). JSON numbers/bools are stringified defensively.
 func stringSliceArg(v any) []string {
-	arr, ok := v.([]any)
-	if !ok || len(arr) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(arr))
-	for _, e := range arr {
-		if s, ok := e.(string); ok {
-			out = append(out, s)
-		} else if e != nil {
-			out = append(out, fmt.Sprintf("%v", e))
+	switch t := v.(type) {
+	case []string:
+		return t
+	case string:
+		// Weak models sometimes stringify array args ("[\"a\",\"b\"]")
+		// instead of emitting a native list. Recover the array.
+		s := strings.TrimSpace(t)
+		if s == "" {
+			return nil
 		}
+		if strings.HasPrefix(s, "[") {
+			var arr []any
+			if json.Unmarshal([]byte(s), &arr) == nil {
+				return stringSliceArg(arr)
+			}
+		}
+		return []string{s}
+	case []any:
+		out := make([]string, 0, len(t))
+		for _, e := range t {
+			if s, ok := e.(string); ok {
+				out = append(out, s)
+			} else if e != nil {
+				out = append(out, fmt.Sprintf("%v", e))
+			}
+		}
+		return out
 	}
-	return out
+	return nil
+}
+
+// boolArg coerces a tool arg to bool, tolerating weak models that emit
+// "true"/"True"/"1" as strings instead of a native boolean.
+func boolArg(v any) bool {
+	switch t := v.(type) {
+	case bool:
+		return t
+	case string:
+		b, _ := strconv.ParseBool(strings.TrimSpace(t))
+		return b
+	}
+	return false
 }
 
 // mapSliceArg coerces a JSON array-of-objects arg into []map[string]any

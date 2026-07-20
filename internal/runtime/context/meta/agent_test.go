@@ -88,6 +88,43 @@ func TestAgentTool_Spawn(t *testing.T) {
 	}
 }
 
+// TestAgentTool_ForkTypeSetsInheritContext locks the fork lever: type="fork"
+// (or inherit_context=true) must set InheritContext on the spawn request, while
+// the default (no type) leaves it false — so a normal spawn stays isolated.
+func TestAgentTool_ForkTypeSetsInheritContext(t *testing.T) {
+	// Default : no type → isolated (InheritContext false).
+	f := &fakeAgents{}
+	m := &meta.MetaDispatcher{Agents: f, CoordinatorLookup: allowCoordinator}
+	m.Dispatch(context.Background(), agentCall(
+		map[string]any{"agent": "coding", "task": "build X"}, "root1", "main"))
+	if f.lastSpawn.InheritContext {
+		t.Errorf("default spawn must be isolated, got InheritContext=true")
+	}
+
+	// type="fork" → inherit.
+	m.Dispatch(context.Background(), agentCall(
+		map[string]any{"agent": "coding", "task": "build X", "type": "fork"}, "root1", "main"))
+	if !f.lastSpawn.InheritContext {
+		t.Errorf("type=fork must set InheritContext=true, got %+v", f.lastSpawn)
+	}
+
+	// inherit_context=true alias → inherit.
+	m.Dispatch(context.Background(), agentCall(
+		map[string]any{"agent": "coding", "task": "build X", "inherit_context": true}, "root1", "main"))
+	if !f.lastSpawn.InheritContext {
+		t.Errorf("inherit_context=true must set InheritContext, got %+v", f.lastSpawn)
+	}
+
+	// Batch item type="fork" → inherit.
+	m.Dispatch(context.Background(), agentCall(
+		map[string]any{"agents": []any{
+			map[string]any{"agent": "coding", "task": "one", "type": "fork"},
+		}}, "root1", "main"))
+	if !f.lastSpawn.InheritContext {
+		t.Errorf("batch type=fork must set InheritContext, got %+v", f.lastSpawn)
+	}
+}
+
 // TestAgentTool_SpawnDefaultsNonBlocking locks the non-blocking default: a
 // delegation with NO wait flag must spawn and return the run_id IMMEDIATELY
 // (status running) WITHOUT ever calling Wait — so the coordinator keeps working

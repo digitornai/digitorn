@@ -34,6 +34,8 @@ type PromptContext struct {
 	ModuleSections []domainmodule.PromptSection
 
 	DynamicToolPrompts map[string]string
+
+	InjectIntent bool
 }
 
 type SkillEntry struct {

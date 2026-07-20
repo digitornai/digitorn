@@ -9,25 +9,25 @@ type EventType string
 const (
 	EventUserMessage      EventType = "user_message"
 	EventAssistantMessage EventType = "assistant_message"
-	EventSystemMessage  EventType = "system_message"
-	EventMessageStarted EventType = "message_started"
-	EventMessageDone    EventType = "message_done"
-	EventToolCall       EventType = "tool_call"
-	EventToolResult     EventType = "tool_result"
-	EventToolProgress    EventType = "tool_progress"
-	EventApprovalRequest EventType = "approval_request"
-	EventApprovalGranted EventType = "approval_granted"
-	EventApprovalDenied  EventType = "approval_denied"
-	EventToolAllowed     EventType = "tool_allowed"
-	EventMemoryRemember  EventType = "memory_remember"
-	EventMemoryFactAdded EventType = "memory_fact_added"
-	EventWorkspaceWrite  EventType = "workspace_write"
-	EventWorkspaceEdit   EventType = "workspace_edit"
-	EventWorkspaceDelete EventType = "workspace_delete"
+	EventSystemMessage    EventType = "system_message"
+	EventMessageStarted   EventType = "message_started"
+	EventMessageDone      EventType = "message_done"
+	EventToolCall         EventType = "tool_call"
+	EventToolResult       EventType = "tool_result"
+	EventToolProgress     EventType = "tool_progress"
+	EventApprovalRequest  EventType = "approval_request"
+	EventApprovalGranted  EventType = "approval_granted"
+	EventApprovalDenied   EventType = "approval_denied"
+	EventToolAllowed      EventType = "tool_allowed"
+	EventMemoryRemember   EventType = "memory_remember"
+	EventMemoryFactAdded  EventType = "memory_fact_added"
+	EventWorkspaceWrite   EventType = "workspace_write"
+	EventWorkspaceEdit    EventType = "workspace_edit"
+	EventWorkspaceDelete  EventType = "workspace_delete"
 	EventWorkspaceChanges EventType = "workspace_changes"
-	EventAgentSpawn    EventType = "agent_spawn"
-	EventAgentProgress EventType = "agent_progress"
-	EventAgentResult   EventType = "agent_result"
+	EventAgentSpawn       EventType = "agent_spawn"
+	EventAgentProgress    EventType = "agent_progress"
+	EventAgentResult      EventType = "agent_result"
 	EventWidget           EventType = "widget"
 	EventPreview          EventType = "preview"
 	EventTodoAdded        EventType = "todo_added"
@@ -38,17 +38,29 @@ const (
 	EventSessionStarted   EventType = "session_started"
 	EventSessionEnded     EventType = "session_ended"
 	EventSessionInterrupt EventType = "session_interrupted"
-	EventSessionRenamed EventType = "session_renamed"
-	EventModelChanged EventType = "model_changed"
-	EventCompactDone  EventType = "compact_done"
-	EventQuarantine   EventType = "quarantine"
-	EventError        EventType = "error"
+	EventSessionRenamed   EventType = "session_renamed"
+	EventModelChanged     EventType = "model_changed"
+	EventCompactDone      EventType = "compact_done"
+	EventQuarantine       EventType = "quarantine"
+	EventError            EventType = "error"
 
 	EventContextCompacting EventType = "context_compacting"
 
 	EventContextCompacted EventType = "context_compacted"
 
 	EventContextTokens EventType = "context_tokens"
+
+	// EventTurnState is a TRANSIENT (never durable) join-time signal telling a
+	// (re)connecting client that a turn is currently in flight, so it can re-arm
+	// its spinner. Cleared client-side by the live turn_ended/turn_terminal.
+	EventTurnState EventType = "turn_state"
+
+	// EventNotification is a TRANSIENT, USER-ROOM-only signal (never durable,
+	// never sent to a session room) — cross-session alerts like "an agent needs
+	// your approval in another session". Fanned out in the socket bridge to
+	// user:<owner> so every tab of that user sees it regardless of which session
+	// is open. Isolated by the JWT-derived user room.
+	EventNotification EventType = "notification"
 
 	EventContextSummaryPrepared EventType = "context_summary_prepared"
 
@@ -86,26 +98,27 @@ type Event struct {
 
 	CtxTokens *ContextTokensPayload `json:"ctx_tokens,omitempty"`
 
-	Message    *MessagePayload          `json:"message,omitempty"`
-	Tool       *ToolPayload             `json:"tool,omitempty"`
-	Approval   *ApprovalPayload         `json:"approval,omitempty"`
-	Memory     *MemoryPayload           `json:"memory,omitempty"`
-	Workspace  *WorkspacePayload        `json:"workspace,omitempty"`
-	Agent      *AgentPayload            `json:"agent,omitempty"`
-	Widget     *WidgetPayload           `json:"widget,omitempty"`
-	Preview    *PreviewPayload          `json:"preview,omitempty"`
-	Todo       *TodoPayload             `json:"todo,omitempty"`
-	Cost       *CostPayload             `json:"cost,omitempty"`
-	Compact    *CompactPayload          `json:"compact,omitempty"`
-	CtxCompact *ContextCompactPayload   `json:"ctx_compact,omitempty"`
-	CtxSummary *ContextSummaryPayload   `json:"ctx_summary,omitempty"`
-	Meta       *MetaPayload             `json:"meta,omitempty"`
-	Error      *ErrorPayload            `json:"error,omitempty"`
-	Turn       *TurnPayload             `json:"turn,omitempty"`
-	Retry      *RetryPayload            `json:"retry,omitempty"`
-	Security   *SecurityDecisionPayload `json:"security,omitempty"`
-	Background *BackgroundTaskPayload   `json:"background,omitempty"`
-	Flow       *FlowPayload             `json:"flow,omitempty"`
+	Message          *MessagePayload          `json:"message,omitempty"`
+	Tool             *ToolPayload             `json:"tool,omitempty"`
+	Approval         *ApprovalPayload         `json:"approval,omitempty"`
+	Notification     *NotificationPayload     `json:"notification,omitempty"`
+	Memory           *MemoryPayload           `json:"memory,omitempty"`
+	Workspace        *WorkspacePayload        `json:"workspace,omitempty"`
+	Agent            *AgentPayload            `json:"agent,omitempty"`
+	Widget           *WidgetPayload           `json:"widget,omitempty"`
+	Preview          *PreviewPayload          `json:"preview,omitempty"`
+	Todo             *TodoPayload             `json:"todo,omitempty"`
+	Cost             *CostPayload             `json:"cost,omitempty"`
+	Compact          *CompactPayload          `json:"compact,omitempty"`
+	CtxCompact       *ContextCompactPayload   `json:"ctx_compact,omitempty"`
+	CtxSummary       *ContextSummaryPayload   `json:"ctx_summary,omitempty"`
+	Meta             *MetaPayload             `json:"meta,omitempty"`
+	Error            *ErrorPayload            `json:"error,omitempty"`
+	Turn             *TurnPayload             `json:"turn,omitempty"`
+	Retry            *RetryPayload            `json:"retry,omitempty"`
+	Security         *SecurityDecisionPayload `json:"security,omitempty"`
+	Background       *BackgroundTaskPayload   `json:"background,omitempty"`
+	Flow             *FlowPayload             `json:"flow,omitempty"`
 	WorkspaceChanges *WorkspaceChangesPayload `json:"workspace_changes,omitempty"`
 	Allowed          *AllowedToolPayload      `json:"allowed,omitempty"`
 }
@@ -162,9 +175,9 @@ type MessagePayload struct {
 	Role  string        `json:"role"`
 	Parts []MessagePart `json:"parts,omitempty"`
 
-	Reasoning string `json:"reasoning,omitempty"`
-	ReasoningStartedAt int64 `json:"reasoning_started_at,omitempty"`
-	ReasoningEndedAt   int64 `json:"reasoning_ended_at,omitempty"`
+	Reasoning          string `json:"reasoning,omitempty"`
+	ReasoningStartedAt int64  `json:"reasoning_started_at,omitempty"`
+	ReasoningEndedAt   int64  `json:"reasoning_ended_at,omitempty"`
 
 	ClientMessageID string `json:"client_message_id,omitempty"`
 
@@ -211,16 +224,16 @@ type ToolResultSpec struct {
 }
 
 type ToolPayload struct {
-	CallID    string         `json:"call_id"`
-	Name      string         `json:"name"`
-	Arguments map[string]any `json:"arguments,omitempty"`
-	Status    string         `json:"status,omitempty"`
-	LiveTokens int `json:"live_tokens,omitempty"`
-	Detail string `json:"detail,omitempty"`
-	Output     any           `json:"output,omitempty"`
-	Parts      []MessagePart `json:"parts,omitempty"`
-	Error      string        `json:"error,omitempty"`
-	DurationMs int64         `json:"duration_ms,omitempty"`
+	CallID          string         `json:"call_id"`
+	Name            string         `json:"name"`
+	Arguments       map[string]any `json:"arguments,omitempty"`
+	Status          string         `json:"status,omitempty"`
+	LiveTokens      int            `json:"live_tokens,omitempty"`
+	Detail          string         `json:"detail,omitempty"`
+	Output          any            `json:"output,omitempty"`
+	Parts           []MessagePart  `json:"parts,omitempty"`
+	Error           string         `json:"error,omitempty"`
+	DurationMs      int64          `json:"duration_ms,omitempty"`
 	Diff            string         `json:"diff,omitempty"`
 	UnifiedDiff     string         `json:"unified_diff,omitempty"`
 	PreviousContent string         `json:"previous_content,omitempty"`
@@ -239,7 +252,18 @@ type ApprovalPayload struct {
 	ToolName   string         `json:"tool_name,omitempty"`
 	ToolParams map[string]any `json:"tool_params,omitempty"`
 	RiskLevel  string         `json:"risk_level,omitempty"`
-	CallID string `json:"call_id,omitempty"`
+	CallID     string         `json:"call_id,omitempty"`
+}
+
+// NotificationPayload is the body of an EventNotification (user-room only).
+// Kind: "approval_pending" (an agent is waiting on the user) or
+// "approval_cleared" (that approval resolved). SessionID/AppID let the client
+// route the user to the right session; Title is a short preview (the question).
+type NotificationPayload struct {
+	Kind      string `json:"kind"`
+	SessionID string `json:"session_id"`
+	AppID     string `json:"app_id,omitempty"`
+	Title     string `json:"title,omitempty"`
 }
 
 type MemoryPayload struct {
@@ -266,6 +290,7 @@ type AgentPayload struct {
 	Status         string `json:"status,omitempty"`
 	ResultSummary  string `json:"result_summary,omitempty"`
 	Depth          int    `json:"depth,omitempty"`
+	Fork           bool   `json:"fork,omitempty"`
 
 	ToolCalls   int64  `json:"tool_calls,omitempty"`
 	LLMCalls    int64  `json:"llm_calls,omitempty"`
@@ -296,12 +321,12 @@ type TodoPayload struct {
 }
 
 type CostPayload struct {
-	TokensIn  int64 `json:"tokens_in,omitempty"`
-	TokensOut int64 `json:"tokens_out,omitempty"`
-	ReasoningTokens int64   `json:"reasoning_tokens,omitempty"`
-	UsdTotal        float64 `json:"usd_total,omitempty"`
-	CacheReadTokens  int64 `json:"cache_read_tokens,omitempty"`
-	CacheWriteTokens int64 `json:"cache_write_tokens,omitempty"`
+	TokensIn         int64   `json:"tokens_in,omitempty"`
+	TokensOut        int64   `json:"tokens_out,omitempty"`
+	ReasoningTokens  int64   `json:"reasoning_tokens,omitempty"`
+	UsdTotal         float64 `json:"usd_total,omitempty"`
+	CacheReadTokens  int64   `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens int64   `json:"cache_write_tokens,omitempty"`
 }
 
 type CompactPayload struct {
@@ -314,14 +339,14 @@ type CompactPayload struct {
 }
 
 type ContextCompactPayload struct {
-	CutoffSeq       uint64 `json:"cutoff_seq"`
-	Summary         string `json:"summary,omitempty"`
-	KeepRecent      int    `json:"keep_recent,omitempty"`
-	Strategy        string `json:"strategy,omitempty"`
-	MessagesDropped int    `json:"messages_dropped,omitempty"`
-	TokensBefore    int    `json:"tokens_before,omitempty"`
-	TokensFreed int `json:"tokens_freed,omitempty"`
-	NewContextTokens int `json:"new_context_tokens,omitempty"`
+	CutoffSeq        uint64 `json:"cutoff_seq"`
+	Summary          string `json:"summary,omitempty"`
+	KeepRecent       int    `json:"keep_recent,omitempty"`
+	Strategy         string `json:"strategy,omitempty"`
+	MessagesDropped  int    `json:"messages_dropped,omitempty"`
+	TokensBefore     int    `json:"tokens_before,omitempty"`
+	TokensFreed      int    `json:"tokens_freed,omitempty"`
+	NewContextTokens int    `json:"new_context_tokens,omitempty"`
 }
 
 type ContextTokensPayload struct {
@@ -329,8 +354,8 @@ type ContextTokensPayload struct {
 	System   int `json:"system,omitempty"`
 	Tools    int `json:"tools,omitempty"`
 	Messages int `json:"messages,omitempty"`
-	Window int `json:"window,omitempty"`
-	Limit  int `json:"limit,omitempty"`
+	Window   int `json:"window,omitempty"`
+	Limit    int `json:"limit,omitempty"`
 }
 
 type ContextSummaryPayload struct {
@@ -341,24 +366,24 @@ type ContextSummaryPayload struct {
 }
 
 type MetaPayload struct {
-	Title       string `json:"title,omitempty"`
-	Workspace   string `json:"workspace,omitempty"`
-	Workdir     string `json:"workdir,omitempty"`
-	Interrupted bool   `json:"interrupted,omitempty"`
+	Title            string `json:"title,omitempty"`
+	Workspace        string `json:"workspace,omitempty"`
+	Workdir          string `json:"workdir,omitempty"`
+	Interrupted      bool   `json:"interrupted,omitempty"`
 	Model            string `json:"model,omitempty"`
 	AgentID          string `json:"agent_id,omitempty"`
 	MaxContextTokens int    `json:"max_ctx_tokens,omitempty"`
 	ReasoningEffort  string `json:"reasoning_effort,omitempty"`
-	Provider string `json:"provider,omitempty"`
-	MaxOutputTokens int `json:"max_output_tokens,omitempty"`
-	EntryAgent   string `json:"entry_agent,omitempty"`
-	ContextExtra string `json:"context,omitempty"`
-	Actor string `json:"actor,omitempty"`
+	Provider         string `json:"provider,omitempty"`
+	MaxOutputTokens  int    `json:"max_output_tokens,omitempty"`
+	EntryAgent       string `json:"entry_agent,omitempty"`
+	ContextExtra     string `json:"context,omitempty"`
+	Actor            string `json:"actor,omitempty"`
 }
 
 type ErrorPayload struct {
-	Code    string `json:"code,omitempty"`
-	Message string `json:"message"`
+	Code     string         `json:"code,omitempty"`
+	Message  string         `json:"message"`
 	Error    string         `json:"error,omitempty"`
 	Category string         `json:"category,omitempty"`
 	Detail   string         `json:"detail,omitempty"`

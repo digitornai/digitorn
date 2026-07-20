@@ -284,6 +284,8 @@ func eventPayload(ev *Event) any {
 		return ev.Tool
 	case ev.Approval != nil:
 		return ev.Approval
+	case ev.Notification != nil:
+		return ev.Notification
 	case ev.Flow != nil:
 		return ev.Flow
 	case ev.Memory != nil:

@@ -13,15 +13,16 @@ type agentManagerAdapter struct{ m *agent.Manager }
 
 func (a agentManagerAdapter) Spawn(ctx context.Context, req meta.AgentSpawnRequest) (string, error) {
 	return a.m.Spawn(ctx, agent.SpawnRequest{
-		AppID:        req.AppID,
-		RootSession:  req.RootSession,
-		UserID:       req.UserID,
-		UserJWT:      req.UserJWT,
-		AgentID:      req.AgentID,
-		Task:         req.Task,
-		MemorySeed:   req.MemorySeed,
-		ParentRunID:  req.ParentRunID,
-		ParentCallID: req.ParentCallID,
+		AppID:          req.AppID,
+		RootSession:    req.RootSession,
+		UserID:         req.UserID,
+		UserJWT:        req.UserJWT,
+		AgentID:        req.AgentID,
+		Task:           req.Task,
+		MemorySeed:     req.MemorySeed,
+		ParentRunID:    req.ParentRunID,
+		ParentCallID:   req.ParentCallID,
+		InheritContext: req.InheritContext,
 	})
 }
 
@@ -60,12 +61,13 @@ func (a agentManagerAdapter) SpawnBatch(ctx context.Context, reqs []meta.AgentSp
 			AppID: r.AppID, RootSession: r.RootSession, UserID: r.UserID,
 			UserJWT: r.UserJWT, AgentID: r.AgentID, Task: r.Task,
 			MemorySeed: r.MemorySeed, ParentRunID: r.ParentRunID, ParentCallID: r.ParentCallID,
+			InheritContext: r.InheritContext,
 		}
 	}
 	return a.m.SpawnBatch(ctx, batch)
 }
 
-func (a agentManagerAdapter) Cancel(root, runID string) error    { return a.m.Cancel(root, runID) }
+func (a agentManagerAdapter) Cancel(root, runID string) error   { return a.m.Cancel(root, runID) }
 func (a agentManagerAdapter) CancelTree(root, runID string) int { return a.m.CancelTree(root, runID) }
 
 func secsToDur(s float64) time.Duration {

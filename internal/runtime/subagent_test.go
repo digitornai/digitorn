@@ -151,6 +151,80 @@ func TestRunSubAgent_IsolatedFromParent(t *testing.T) {
 	}
 }
 
+// TestRunSubAgent_ForkInheritsParent : the mirror of the isolation test. In fork
+// mode (InheritContext=true) the sub-agent IS seeded with the parent's rendered
+// transcript, so its LLM prompt carries the parent fact — it starts already
+// knowing the conversation. It must still run in a SEPARATE sub-session and never
+// write back into the parent.
+func TestRunSubAgent_ForkInheritsParent(t *testing.T) {
+	app := secApp("fork-app", &schema.CapabilitiesConfig{DefaultPolicy: schema.CapAuto}, nil)
+	sess := newMultiProjecting()
+
+	// Parent carries a distinctive fact the fork must INHERIT.
+	if _, err := sess.AppendDurable(context.Background(), sessionstore.Event{
+		Type: sessionstore.EventUserMessage, SessionID: "parent-fork", AppID: "fork-app", UserID: "u",
+		Message: &sessionstore.MessagePayload{Role: "user", Parts: []sessionstore.MessagePart{
+			{Type: sessionstore.PartTypeText, Text: "PARENT_FACT_BANANE42"},
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	lc := &stubLLM{resp: &llm.ChatResponse{Content: "FORKRESULT", Model: "m"}}
+	e := newEngine(t, &stubApps{app: app}, sess, lc)
+
+	res, err := e.RunSubAgent(context.Background(), dgruntime.SubAgentSpec{
+		AppID:          "fork-app",
+		ParentSession:  "parent-fork",
+		UserID:         "u",
+		AgentID:        "main",
+		Task:           "continue the work",
+		InheritContext: true,
+	})
+	if err != nil {
+		t.Fatalf("RunSubAgent(fork): %v", err)
+	}
+	if res.Status != "completed" || res.Content != "FORKRESULT" {
+		t.Fatalf("status=%q content=%q err=%q", res.Status, res.Content, res.Error)
+	}
+	// Still an ISOLATED sub-session id — never the parent itself.
+	if res.Session == "parent-fork" || !strings.Contains(res.Session, "::agent::") {
+		t.Errorf("fork must run in an isolated sub-session, got %q", res.Session)
+	}
+
+	// INHERITANCE : the fork's LLM prompt DID carry the parent fact + its task.
+	if lc.got == nil {
+		t.Fatal("LLM not called for the fork")
+	}
+	var sawFact, sawTask bool
+	for _, mm := range lc.got.Messages {
+		text := mm.Content
+		for _, p := range mm.Parts {
+			text += p.Text
+		}
+		if strings.Contains(text, "PARENT_FACT_BANANE42") {
+			sawFact = true
+		}
+		if strings.Contains(text, "continue the work") {
+			sawTask = true
+		}
+	}
+	if !sawFact {
+		t.Error("FORK BROKEN: the sub-agent did NOT inherit the parent context")
+	}
+	if !sawTask {
+		t.Error("fork must still see its task")
+	}
+
+	// The parent session must be untouched by the fork run.
+	pst, _ := sess.State("parent-fork")
+	for _, msg := range pst.Snapshot().Messages {
+		if msg.Role == "assistant" && msg.Content == "FORKRESULT" {
+			t.Error("fork result leaked into the parent session")
+		}
+	}
+}
+
 // TestRunSubAgent_AgentSelectionAndRunID : an explicit RunID is honoured and the
 // target agent is the one that runs.
 func TestRunSubAgent_AgentSelectionAndRunID(t *testing.T) {

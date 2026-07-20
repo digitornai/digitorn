@@ -47,6 +47,10 @@ type sessionSummary struct {
 	Workdir     string `json:"workdir,omitempty"`
 	Closed      bool   `json:"closed,omitempty"`
 	Interrupted bool   `json:"interrupted,omitempty"`
+	// TurnActive is true when a turn is currently in flight for this session
+	// (from the live sessionRunner, not persisted). Lets the sidebar flag which
+	// sessions are working — including ones the user isn't viewing.
+	TurnActive bool `json:"turn_active,omitempty"`
 	// Preview is a short snippet of the session's first user message, so a list
 	// can label a session by what it's about instead of a generic/echoed title.
 	Preview string `json:"preview,omitempty"`
@@ -74,8 +78,15 @@ func (d *Daemon) listSessions(w http.ResponseWriter, r *http.Request) {
 	if end > total {
 		end = total
 	}
+	page := summaries[offset:end]
+	// Flag in-flight sessions (live sessionRunner lookup, cheap map hit each).
+	if d.sessionRunner != nil {
+		for i := range page {
+			page[i].TurnActive = d.sessionRunner.IsRunning(page[i].SessionID)
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"sessions": summaries[offset:end],
+		"sessions": page,
 		"total":    total,
 		"limit":    limit,
 		"offset":   offset,

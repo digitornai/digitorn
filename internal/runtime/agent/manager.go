@@ -46,6 +46,10 @@ type SpawnRequest struct {
 	MemorySeed   string
 	ParentRunID  string
 	ParentCallID string
+
+	// InheritContext = fork mode (seed with the parent transcript). Default
+	// false = current isolated sub-agent behavior.
+	InheritContext bool
 }
 
 type Snapshot struct {
@@ -133,6 +137,7 @@ type agentState struct {
 	parentRunID  string
 	parentCallID string
 	depth        int
+	fork         bool
 	startedNano  int64
 
 	ctx    context.Context
@@ -305,7 +310,7 @@ func (m *Manager) SpawnBatch(_ context.Context, reqs []SpawnRequest) ([]string, 
 		a := &agentState{
 			runID: runID, agentID: req.AgentID, rootSession: req.RootSession,
 			parentRunID: req.ParentRunID, parentCallID: req.ParentCallID,
-			depth: depth, startedNano: m.clock().UnixNano(),
+			depth: depth, fork: req.InheritContext, startedNano: m.clock().UnixNano(),
 			ctx: actx, cancel: cancel, done: make(chan struct{}),
 		}
 		a.status.Store("running")
@@ -354,7 +359,7 @@ func (m *Manager) Spawn(_ context.Context, req SpawnRequest) (string, error) {
 	a := &agentState{
 		runID: runID, agentID: req.AgentID, rootSession: req.RootSession,
 		parentRunID: req.ParentRunID, parentCallID: req.ParentCallID,
-		depth: depth, startedNano: m.clock().UnixNano(),
+		depth: depth, fork: req.InheritContext, startedNano: m.clock().UnixNano(),
 		ctx: actx, cancel: cancel, done: make(chan struct{}),
 	}
 	a.status.Store("running")
@@ -405,6 +410,7 @@ func (m *Manager) runAgent(a *agentState, req SpawnRequest) {
 	res, err := m.runner.RunSubAgent(ctx, runtime.SubAgentSpec{
 		AppID: req.AppID, ParentSession: req.RootSession, UserID: req.UserID, UserJWT: req.UserJWT,
 		AgentID: req.AgentID, RunID: a.runID, Task: req.Task, MemorySeed: req.MemorySeed, Depth: a.depth,
+		InheritContext: req.InheritContext,
 	})
 
 	close(tickStop)
@@ -612,6 +618,7 @@ func (m *Manager) emitProgress(a *agentState, currentTool string) {
 			Kind:        a.agentID,
 			Status:      status,
 			Depth:       a.depth,
+			Fork:        a.fork,
 			ToolCalls:   a.toolCalls.Load(),
 			LLMCalls:    a.llmCalls.Load(),
 			TokensIn:    a.tokensIn.Load(),
@@ -643,6 +650,7 @@ func (m *Manager) emit(a *agentState, status string) {
 		ChildSessionID: a.rootSession + "::agent::" + a.runID,
 		Status:         status,
 		Depth:          a.depth,
+		Fork:           a.fork,
 	}
 	evType := sessionstore.EventAgentSpawn
 	if status != "running" {

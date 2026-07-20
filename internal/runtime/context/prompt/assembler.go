@@ -12,6 +12,7 @@ func NewAssembler() *Assembler {
 			AuthorityPreambleSection{},
 			IdentitySection{},
 			ToolInstructionsSection{},
+			IntentSection{},
 			StructuralHintsSection{},
 			OperatingGuideSection{},
 			CommunicateSection{},
