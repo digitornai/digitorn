@@ -294,10 +294,12 @@ NOT every role:system message is a <digitorn-directive>. The runtime also inject
 </digitorn-protocol>`
 
 const intentDirective = "## Narrating your actions\n" +
-	"Every tool call MUST include an `intent` argument: a short present-tense " +
-	"phrase, in the user's language, describing what you're doing right now " +
-	"(e.g. \"Reading the cart page\"). Keep it human and concise — it is shown " +
-	"live to the user while you work."
+	"Every tool call carries an `intent`: the status label the user watches " +
+	"while you work. It names the action as a THING, not as something to do — " +
+	"put the verb in its noun form before you write it.\n" +
+	"  \"Ajouter le bouton\" -> \"Ajout du bouton\"\n" +
+	"  \"Install the dependencies\" -> \"Installing the dependencies\"\n" +
+	"Always in the user's language. 3-6 words, no final period, no tool names."
 
 // IntentSection renders the narration directive only when the app opts into
 // ui.tool_calls.inject_intent. Empty otherwise → the prompt is unchanged.

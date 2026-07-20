@@ -365,8 +365,12 @@ func AddIntentParam(tools []llm.ToolSpec) {
 			continue
 		}
 		props["intent"] = map[string]any{
-			"type":        "string",
-			"description": "A short present-tense phrase, in the user's language, describing what you're about to do — shown live to the user (e.g. \"Reading the cart page\").",
+			"type": "string",
+			"description": "Status label shown to the user, live, while this call runs. " +
+				"Name the action as a THING, never as something to do: take the verb you were about to write and put it in its noun form first.\n" +
+				"\"Ajouter le bouton\" -> \"Ajout du bouton\"\n" +
+				"\"Install the dependencies\" -> \"Installing the dependencies\"\n" +
+				"Write it in the user's language. 3-6 words, no final period.",
 		}
 		if req, ok := params["required"].([]string); ok {
 			params["required"] = append([]string{"intent"}, req...)
