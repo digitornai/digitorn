@@ -3,6 +3,7 @@ package server
 import (
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -93,7 +94,12 @@ const (
 	previewMaxErrors   = 25
 	previewMaxRequests = 25
 	previewMaxLogs     = 40
-	previewMaxField    = 2000
+
+	// previewHoldFor is how long an idle report is parked before answering
+	// empty. Long enough to make polling rare, short enough to stay well
+	// inside any proxy or browser idle timeout.
+	previewHoldFor  = 20 * time.Second
+	previewMaxField = 2000
 )
 
 func (d *Daemon) postPreviewRuntime(w http.ResponseWriter, r *http.Request) {
@@ -118,9 +124,23 @@ func (d *Daemon) postPreviewRuntime(w http.ResponseWriter, r *http.Request) {
 		store.Report(appID, sessionID, snap)
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
-		"commands": store.Take(appID, sessionID),
-	})
+	// Hold the request until the agent asks for something. The page reconnects
+	// immediately after each answer, so an idle preview costs one open request
+	// rather than a poll every second and a half — and a command reaches it the
+	// moment it is queued.
+	budget := previewHoldFor
+	if strings.TrimSpace(req.For) != "" {
+		// Mid-sequence: the page has more work coming, so answer at once
+		// instead of parking it.
+		budget = 0
+	}
+	var cmds []preview.Command
+	if budget > 0 {
+		cmds = store.Wait(r.Context(), appID, sessionID, budget)
+	} else {
+		cmds = store.Take(appID, sessionID)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"commands": cmds})
 }
 
 func toPreviewSnapshot(in previewSnapshotDTO) preview.Snapshot {

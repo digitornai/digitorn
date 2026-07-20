@@ -148,6 +148,10 @@ type state struct {
 	queue    []Command
 	waiters  map[string]chan Snapshot
 	lastSeen time.Time
+	// wake is closed and replaced whenever a command is queued, so a page
+	// holding a long poll is released the instant the agent asks for
+	// something instead of on the next tick of a timer.
+	wake chan struct{}
 }
 
 func NewStore() *Store { return &Store{sessions: map[key]*state{}} }
@@ -155,7 +159,7 @@ func NewStore() *Store { return &Store{sessions: map[key]*state{}} }
 func (s *Store) at(k key) *state {
 	st, ok := s.sessions[k]
 	if !ok {
-		st = &state{waiters: map[string]chan Snapshot{}}
+		st = &state{waiters: map[string]chan Snapshot{}, wake: make(chan struct{})}
 		s.sessions[k] = st
 	}
 	return st
@@ -239,12 +243,19 @@ func (s *Store) Submit(ctx context.Context, app, session string, cmd Command) (S
 
 	s.mu.Lock()
 	st := s.at(k)
+	// Fail fast on a preview that is demonstrably gone: making the agent wait
+	// the full command budget to learn the page is closed wastes its turn.
+	if !st.lastSeen.IsZero() && time.Since(st.lastSeen) > staleAfter {
+		s.mu.Unlock()
+		return Snapshot{}, ErrNoPreview
+	}
 	if len(st.queue) >= maxQueued {
 		s.mu.Unlock()
 		return Snapshot{}, ErrBusy
 	}
 	st.queue = append(st.queue, cmd)
 	st.waiters[cmd.ID] = ch
+	st.ring()
 	s.mu.Unlock()
 
 	timer := time.NewTimer(commandTimeout)
@@ -258,6 +269,41 @@ func (s *Store) Submit(ctx context.Context, app, session string, cmd Command) (S
 	case <-timer.C:
 		s.drop(k, cmd.ID)
 		return Snapshot{}, ErrNoPreview
+	}
+}
+
+// ring releases every page currently long-polling this session. Callers hold
+// the lock.
+func (st *state) ring() {
+	if st.wake != nil {
+		close(st.wake)
+	}
+	st.wake = make(chan struct{})
+}
+
+// Wait blocks until this session has commands to run, the context ends, or the
+// budget expires — then returns whatever is queued.
+//
+// A preview sitting idle costs one held request instead of a poll every second
+// and a half, and a command reaches the page the moment it is queued rather
+// than up to a tick later. Both directions win.
+func (s *Store) Wait(ctx context.Context, app, session string, budget time.Duration) []Command {
+	if cmds := s.Take(app, session); len(cmds) > 0 {
+		return cmds
+	}
+	s.mu.Lock()
+	wake := s.at(key{app, session}).wake
+	s.mu.Unlock()
+
+	timer := time.NewTimer(budget)
+	defer timer.Stop()
+	select {
+	case <-wake:
+		return s.Take(app, session)
+	case <-ctx.Done():
+		return nil
+	case <-timer.C:
+		return nil
 	}
 }
 
