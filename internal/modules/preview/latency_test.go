@@ -127,3 +127,46 @@ func TestWaitersOfDifferentSessionsDoNotWakeEachOther(t *testing.T) {
 		t.Fatal("session B never returned")
 	}
 }
+
+// The bug this pins cost the agent fifteen seconds per call in production.
+//
+// Draining the queue and reading the wake channel used to be two separate lock
+// acquisitions. A command queued in between closed the channel the waiter had
+// not read yet; the waiter then parked on its freshly-created replacement and
+// slept out the entire budget while the work sat in the queue. The caller hit
+// its own timeout and reported no preview — the tool simply hung.
+//
+// Racing the two on every iteration makes the window hit reliably.
+func TestWaitNeverMissesAWakeItRacedWith(t *testing.T) {
+	const rounds = 400
+	for i := 0; i < rounds; i++ {
+		s := NewStore()
+		s.Report("app", "A", Snapshot{})
+
+		got := make(chan []Command, 1)
+		start := make(chan struct{})
+		go func() {
+			<-start
+			got <- s.Wait(context.Background(), "app", "A", 150*time.Millisecond)
+		}()
+		go func() {
+			<-start
+			s.mu.Lock()
+			st := s.at(key{"app", "A"})
+			st.queue = append(st.queue, Command{ID: "c1", Do: "observe"})
+			st.ring()
+			s.mu.Unlock()
+		}()
+		close(start)
+
+		select {
+		case cmds := <-got:
+			if len(cmds) != 1 {
+				t.Fatalf("round %d: the waiter came back empty while a command sat in the queue — "+
+					"the wake signal was lost, which is a 15s hang for the agent", i)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("round %d: the waiter never returned", i)
+		}
+	}
+}

@@ -168,12 +168,20 @@ func TestPreviewRealBrowser(t *testing.T) {
 	}
 
 	// ── Observing costs one round trip and returns fresh state ─────────────
+	preview.Shared().ClearErrors(app, session)
 	start = time.Now()
-	if _, err := preview.Shared().Submit(ctx, app, session,
-		preview.Command{ID: "e2e-2", Do: "observe"}); err != nil {
+	seen, err := preview.Shared().Submit(ctx, app, session,
+		preview.Command{ID: "e2e-2", Do: "observe"})
+	if err != nil {
 		t.Fatalf("observe failed: %v", err)
 	}
-	if d := time.Since(start); d > 3*time.Second {
-		t.Errorf("a plain observe took %v", d)
+	if d := time.Since(start); d > 2*time.Second {
+		t.Errorf("a plain observe took %v — looking must be the cheapest thing the agent can do", d)
+	}
+	// Observing must not manufacture failures. A command the page does not
+	// understand is reported as a runtime error, so the agent would read a
+	// crash into an app that is perfectly fine — every single time it looks.
+	for _, e := range seen.Errors {
+		t.Errorf("a plain observe produced a runtime error: %s (%s)", e.Message, e.Kind)
 	}
 }

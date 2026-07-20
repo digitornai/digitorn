@@ -288,11 +288,22 @@ func (st *state) ring() {
 // and a half, and a command reaches the page the moment it is queued rather
 // than up to a tick later. Both directions win.
 func (s *Store) Wait(ctx context.Context, app, session string, budget time.Duration) []Command {
-	if cmds := s.Take(app, session); len(cmds) > 0 {
-		return cmds
-	}
+	// Draining the queue and capturing the wake channel MUST happen under one
+	// lock. Taking first and reading the channel after leaves a window where a
+	// command is queued in between: ring() then closes the channel this call
+	// has not read yet and installs a fresh one, so the wait parks on a signal
+	// that already fired and sleeps out its whole budget while the work sits
+	// in the queue. The agent sees its tool hang, then time out.
 	s.mu.Lock()
-	wake := s.at(key{app, session}).wake
+	st := s.at(key{app, session})
+	st.lastSeen = time.Now()
+	if len(st.queue) > 0 {
+		out := st.queue
+		st.queue = nil
+		s.mu.Unlock()
+		return out
+	}
+	wake := st.wake
 	s.mu.Unlock()
 
 	timer := time.NewTimer(budget)
