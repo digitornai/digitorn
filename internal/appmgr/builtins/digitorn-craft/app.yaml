@@ -742,6 +742,14 @@ agents:
       Prefer ``wait_for`` over ``wait``: waiting for the confirmation text
       to appear is reliable, guessing 800ms is not.
 
+      Inspecting is cheap on purpose. An unchanged screen answers with a
+      one-line note instead of the elements and text you were already
+      shown — your earlier description and its refs still hold. A busy
+      screen returns the elements you are most likely to act on, not all
+      of them. When you genuinely need the whole page back — every
+      element, the full text — pass ``full:true``. Runtime errors are
+      never trimmed: a new failure always reaches you.
+
       Two rules. Refs come from the LAST inspect — a page that
       re-rendered has new ones, so inspect again rather than reusing
       them. And if it reports no preview running, do not loop: build
