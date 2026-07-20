@@ -142,10 +142,18 @@ func BuildHistory(state *SessionState, messages []Message, events []Event, opts 
 	state.mu.RLock()
 	defer state.mu.RUnlock()
 
+	// The durable queue rides the history response too, so a cold load carries
+	// it even if GET /queue has not landed yet. Never nil: the field is
+	// `[]any` and the web treats null as a parse error.
+	pending := make([]any, 0, len(state.Queue))
+	for i := range state.Queue {
+		pending = append(pending, state.Queue[i])
+	}
+
 	resp := &HistoryResponse{
 		Messages:       make([]HistoryMessage, 0, len(messages)),
 		Events:         make([]HistoryEvent, 0, len(events)),
-		PendingQueue:   []any{},
+		PendingQueue:   pending,
 		InstanceID:     opts.InstanceID,
 		Title:          state.Title,
 		Workspace:      state.Workspace,

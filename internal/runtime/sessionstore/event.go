@@ -12,6 +12,11 @@ const (
 	EventSystemMessage    EventType = "system_message"
 	EventMessageStarted   EventType = "message_started"
 	EventMessageDone      EventType = "message_done"
+	// Durable message queue. Names match what the web client already listens
+	// for (stores/queue.ts) — the contract was designed, never implemented.
+	EventMessageQueued    EventType = "message_queued"
+	EventMessageCancelled EventType = "message_cancelled"
+	EventQueueCleared     EventType = "queue_cleared"
 	EventToolCall         EventType = "tool_call"
 	EventToolResult       EventType = "tool_result"
 	EventToolProgress     EventType = "tool_progress"
@@ -108,6 +113,7 @@ type Event struct {
 	Widget           *WidgetPayload           `json:"widget,omitempty"`
 	Preview          *PreviewPayload          `json:"preview,omitempty"`
 	Todo             *TodoPayload             `json:"todo,omitempty"`
+	Queue            *QueuePayload            `json:"queue,omitempty"`
 	Cost             *CostPayload             `json:"cost,omitempty"`
 	Compact          *CompactPayload          `json:"compact,omitempty"`
 	CtxCompact       *ContextCompactPayload   `json:"ctx_compact,omitempty"`
@@ -312,6 +318,24 @@ type PreviewPayload struct {
 	URL     string         `json:"url,omitempty"`
 	Status  string         `json:"status,omitempty"`
 	Payload map[string]any `json:"payload,omitempty"`
+}
+
+// QueuePayload carries one durable queue row. Field names are the contract the
+// web client parses in models/queue-entry.ts (queueEntryFromJson) — keep them
+// in sync or the panel silently renders empty rows.
+type QueuePayload struct {
+	ID            string `json:"id"`
+	CorrelationID string `json:"correlation_id,omitempty"`
+	Message       string `json:"message,omitempty"`
+	Status        string `json:"status,omitempty"`
+	Position      int    `json:"position,omitempty"`
+	EnqueuedAt    int64  `json:"enqueued_at,omitempty"`
+	StartedAt     int64  `json:"started_at,omitempty"`
+	FinishedAt    int64  `json:"finished_at,omitempty"`
+	ErrorCode     string `json:"error_code,omitempty"`
+	// Depth/Max ride the queue_full signal only.
+	Depth int `json:"depth,omitempty"`
+	Max   int `json:"max,omitempty"`
 }
 
 type TodoPayload struct {

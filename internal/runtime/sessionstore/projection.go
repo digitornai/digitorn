@@ -253,6 +253,88 @@ func applyLocked(s *SessionState, ev *Event) {
 		}
 		delete(s.WorkspaceFiles, ev.Workspace.Path)
 
+	case EventMessageQueued:
+		if ev.Queue == nil || ev.Queue.ID == "" {
+			return
+		}
+		for i := range s.Queue {
+			if s.Queue[i].ID == ev.Queue.ID {
+				return // replay / duplicate: the row is already projected
+			}
+		}
+		s.Queue = append(s.Queue, QueueEntry{
+			ID:            ev.Queue.ID,
+			CorrelationID: ev.Queue.CorrelationID,
+			Message:       ev.Queue.Message,
+			Status:        orDefault(ev.Queue.Status, "queued"),
+			EnqueuedAt:    ev.TsUnixNano,
+		})
+		reindexQueue(s)
+
+	case EventMessageStarted:
+		// The queued row becomes the running turn. Matched on correlation id:
+		// that is what the runner carries, the row id never leaves the queue.
+		if ev.CorrelationID == "" {
+			return
+		}
+		for i := range s.Queue {
+			if s.Queue[i].CorrelationID == ev.CorrelationID {
+				s.Queue[i].Status = "running"
+				s.Queue[i].StartedAt = ev.TsUnixNano
+				break
+			}
+		}
+		reindexQueue(s)
+
+	case EventMessageDone:
+		if ev.CorrelationID == "" {
+			return
+		}
+		// Settled rows leave the queue: the transcript owns the history from
+		// here, keeping them would grow the projection without bound.
+		out := s.Queue[:0]
+		for _, e := range s.Queue {
+			if e.CorrelationID != ev.CorrelationID {
+				out = append(out, e)
+			}
+		}
+		s.Queue = out
+		reindexQueue(s)
+
+	case EventMessageCancelled:
+		id := ""
+		cid := ev.CorrelationID
+		if ev.Queue != nil {
+			id = ev.Queue.ID
+			if cid == "" {
+				cid = ev.Queue.CorrelationID
+			}
+		}
+		if id == "" && cid == "" {
+			return
+		}
+		out := s.Queue[:0]
+		for _, e := range s.Queue {
+			if (id != "" && e.ID == id) || (cid != "" && e.CorrelationID == cid) {
+				continue
+			}
+			out = append(out, e)
+		}
+		s.Queue = out
+		reindexQueue(s)
+
+	case EventQueueCleared:
+		// Only PENDING rows are dropped — a running turn is not cancelled by
+		// clearing the queue behind it.
+		out := s.Queue[:0]
+		for _, e := range s.Queue {
+			if e.Status == "running" {
+				out = append(out, e)
+			}
+		}
+		s.Queue = out
+		reindexQueue(s)
+
 	case EventAgentSpawn:
 		if ev.Agent == nil || ev.Agent.RunID == "" {
 			return
@@ -635,4 +717,19 @@ func formatOutput(v any) string {
 		return s
 	}
 	return fmt.Sprintf("%v", v)
+}
+
+// reindexQueue renumbers positions after any queue mutation: 0 for the running
+// row, 1..N for the pending ones in FIFO order. The web reads `position`
+// directly to sort and to label "N in queue", so it must never go stale.
+func reindexQueue(s *SessionState) {
+	pos := 1
+	for i := range s.Queue {
+		if s.Queue[i].Status == "running" {
+			s.Queue[i].Position = 0
+			continue
+		}
+		s.Queue[i].Position = pos
+		pos++
+	}
 }

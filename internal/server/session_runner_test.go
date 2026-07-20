@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -49,7 +50,7 @@ func runnerIdle(r *sessionRunner, sid string) bool {
 	st := v.(*sessionRunState)
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	return !st.running && !st.pending
+	return !st.running && len(st.queue) == 0
 }
 
 // TestSessionRunner_ProactiveWakeReusesCachedJWT : a proactive wake (background
@@ -111,10 +112,13 @@ func TestSessionRunner_AbortCancelsInFlightTurn(t *testing.T) {
 	}
 }
 
-// TestSessionRunner_AbortDropsQueuedFollowup : abort means STOP. If a wake was
-// coalesced (a follow-up turn queued) while the current turn ran, abort must
-// cancel the running turn AND drop the queued follow-up — it must NOT auto-launch
-// the moment the cancelled turn unwinds.
+// TestSessionRunner_AbortDropsQueuedFollowup : abort means STOP for the machine,
+// not for the human. It cancels the running turn and drops a pending PROACTIVE
+// wake — "stop" must not be undone a millisecond later by a background nudge.
+//
+// A user message queued behind the turn is NOT dropped: it was typed and sent on
+// purpose and cannot be resent from the UI. That case is covered by
+// TestSessionRunner_AbortKeepsQueuedUserMessages.
 func TestSessionRunner_AbortDropsQueuedFollowup(t *testing.T) {
 	var execCount atomic.Int32
 	started := make(chan struct{}, 1)
@@ -134,15 +138,66 @@ func TestSessionRunner_AbortDropsQueuedFollowup(t *testing.T) {
 
 	r.WakeTurn(runtime.TurnInput{AppID: "a", SessionID: sid, UserID: "u"})
 	<-started // turn 1 is running and blocked
-	// Queue a follow-up while turn 1 runs (coalesced into pending).
-	r.WakeTurn(runtime.TurnInput{AppID: "a", SessionID: sid, UserID: "u"})
+	// A PROACTIVE wake lands while turn 1 runs (coalesced into pending).
+	r.WakeSession("a", sid, "u")
 	if !r.Abort(sid) {
 		t.Fatal("Abort returned false while a turn was in flight")
 	}
 	waitUntil(t, func() bool { return runnerIdle(r, sid) }, "runner returns to idle after abort")
 
 	if n := execCount.Load(); n != 1 {
-		t.Fatalf("execCount = %d, want 1 — abort must DROP the queued follow-up, not run it", n)
+		t.Fatalf("execCount = %d, want 1 — abort must DROP the pending proactive wake, not run it", n)
+	}
+}
+
+// TestSessionRunner_AbortKeepsQueuedUserMessages : the user typed those while
+// the agent was working. Aborting the turn must let them run, in order, until
+// the queue is exhausted — dropping them loses input that cannot be resent.
+func TestSessionRunner_AbortKeepsQueuedUserMessages(t *testing.T) {
+	var mu sync.Mutex
+	var ran []string
+	started := make(chan struct{}, 1)
+	block := make(chan struct{})
+
+	exec := func(ctx context.Context, in runtime.TurnInput) error {
+		mu.Lock()
+		ran = append(ran, in.Skill)
+		mu.Unlock()
+		if in.Skill == "first" {
+			select {
+			case started <- struct{}{}:
+			default:
+			}
+			<-ctx.Done() // hold until abort cancels us
+			return ctx.Err()
+		}
+		return nil
+	}
+
+	r := newSessionRunner(exec, time.Minute, testLogger())
+	const sid = "s1"
+
+	r.WakeTurn(runtime.TurnInput{AppID: "a", SessionID: sid, UserID: "u", Skill: "first"})
+	<-started
+	r.WakeTurn(runtime.TurnInput{AppID: "a", SessionID: sid, UserID: "u", Skill: "second"})
+	r.WakeTurn(runtime.TurnInput{AppID: "a", SessionID: sid, UserID: "u", Skill: "third"})
+
+	if !r.Abort(sid) {
+		t.Fatal("Abort returned false while a turn was in flight")
+	}
+	close(block)
+	waitUntil(t, func() bool { return runnerIdle(r, sid) }, "runner idle after abort")
+
+	mu.Lock()
+	defer mu.Unlock()
+	want := []string{"first", "second", "third"}
+	if len(ran) != len(want) {
+		t.Fatalf("ran = %v, want %v — abort dropped queued user messages", ran, want)
+	}
+	for i := range want {
+		if ran[i] != want[i] {
+			t.Fatalf("ran = %v, want %v (order)", ran, want)
+		}
 	}
 }
 
@@ -174,7 +229,11 @@ func TestSessionRunner_SerializesAndCoalesces(t *testing.T) {
 
 	const wakes = 20
 	for i := 0; i < wakes; i++ {
-		r.WakeTurn(in) // non-blocking : 20 calls return immediately
+		// WakeSession, not WakeTurn: coalescing is the PROACTIVE contract (a
+		// burst of background completions wakes the agent once). User messages
+		// go through WakeTurn and are queued individually — see
+		// session_queue_test.go.
+		r.WakeSession(in.AppID, in.SessionID, in.UserID)
 	}
 
 	// First turn is running ; the other 19 wakes have coalesced to pending.

@@ -530,12 +530,27 @@ func (d *Daemon) getQueue(w http.ResponseWriter, r *http.Request) {
 		writeError(w, errStatus(err), errCode(err), err.Error())
 		return
 	}
-	// V1: the pending queue is always empty — there is no runtime yet to
-	// buffer messages between turns. The shape stays consistent with Python.
+	state, err := d.sessionStore.State(sid)
+	if err != nil || state == nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"session_id": sid, "queue": []any{}, "size": 0,
+		})
+		return
+	}
+	state.RLock()
+	rows := append([]sessionstore.QueueEntry(nil), state.Queue...)
+	state.RUnlock()
+	// `queue` (not `entries`): that is the key the web's hydrate() reads first,
+	// and the shape queueEntryFromJson expects. Never nil — an absent array
+	// parses as "no queue" and wipes the panel.
+	out := make([]any, 0, len(rows))
+	for i := range rows {
+		out = append(out, rows[i])
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"session_id": sid,
-		"queue":      []any{},
-		"size":       0,
+		"queue":      out,
+		"size":       len(out),
 	})
 }
 

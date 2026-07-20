@@ -28,6 +28,10 @@ type SessionState struct {
 	WorkspaceFiles  map[string]*FileState
 	Todos           []Todo
 	Children        []ChildAgent
+	// Queue is the durable FIFO of user messages received while a turn was
+	// running. Rebuilt from events, so it survives a daemon restart — a
+	// memory-only queue would silently drop the user's pending messages.
+	Queue           []QueueEntry
 	BackgroundTasks []BackgroundTaskState
 	Widgets         map[string]*WidgetState
 	Previews        map[string]*PreviewState
@@ -151,6 +155,21 @@ type Todo struct {
 	Status    string `json:"status"`
 	CreatedAt int64  `json:"created_at"`
 	UpdatedAt int64  `json:"updated_at,omitempty"`
+}
+
+// QueueEntry is one pending/settled user message in a session's queue. Shape
+// mirrors QueuePayload (and the web's models/queue-entry.ts).
+type QueueEntry struct {
+	ID            string `json:"id"`
+	CorrelationID string `json:"correlation_id,omitempty"`
+	Message       string `json:"message"`
+	// queued | running | completed | cancelled | failed
+	Status     string `json:"status"`
+	Position   int    `json:"position"`
+	EnqueuedAt int64  `json:"enqueued_at,omitempty"`
+	StartedAt  int64  `json:"started_at,omitempty"`
+	FinishedAt int64  `json:"finished_at,omitempty"`
+	ErrorCode  string `json:"error_code,omitempty"`
 }
 
 type ChildAgent struct {
