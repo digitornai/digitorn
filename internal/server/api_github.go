@@ -248,8 +248,9 @@ func (d *Daemon) githubClone(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Repo   string `json:"repo"`
-		Branch string `json:"branch"`
+		Repo    string `json:"repo"`
+		Branch  string `json:"branch"`
+		Replace bool   `json:"replace"`
 	}
 	if err := readJSONLenient(r, &req); err != nil || strings.TrimSpace(req.Repo) == "" {
 		writeError(w, http.StatusBadRequest, "bad_request", "repo is required")
@@ -266,7 +267,7 @@ func (d *Daemon) githubClone(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := longGitOp(w, r, 30*time.Minute)
 	defer cancel()
-	branch, head, err := gitrepo.CloneRepo(ctx, wd, "https://github.com/"+full+".git", strings.TrimSpace(req.Branch), token)
+	branch, head, err := gitrepo.CloneRepo(ctx, wd, "https://github.com/"+full+".git", strings.TrimSpace(req.Branch), token, req.Replace)
 	if err != nil {
 		if errors.Is(err, gitrepo.ErrWorkdirNotEmpty) {
 			writeError(w, http.StatusConflict, "workspace_not_empty", err.Error())

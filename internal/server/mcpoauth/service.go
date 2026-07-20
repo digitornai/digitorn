@@ -142,6 +142,24 @@ func (s *Service) TakeState(ctx context.Context, state string) (*PendingState, e
 	return s.states.TakeValid(ctx, state)
 }
 
+func (s *Service) MintState(ctx context.Context, userID, appID, serverID, provider, redirectURI string) (string, error) {
+	state, err := generateState()
+	if err != nil {
+		return "", err
+	}
+	if err := s.states.Put(ctx, PendingState{
+		State:       state,
+		UserID:      userID,
+		AppID:       appID,
+		Provider:    provider,
+		ServerID:    serverID,
+		RedirectURI: redirectURI,
+	}); err != nil {
+		return "", err
+	}
+	return state, nil
+}
+
 // Exchange swaps the authorization code for a token (using the state's verifier)
 // and stores it encrypted for (user, provider).
 func (s *Service) Exchange(ctx context.Context, cfg *schema.MCPAuthConfig, p *PendingState, code string) error {

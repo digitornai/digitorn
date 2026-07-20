@@ -63,7 +63,12 @@ func NativeOrigin(workdir string) string {
 
 // CloneRepo clones remoteURL into an unused workdir (nothing on disk but the
 // daemon's .digitorn metadata). Returns the checked-out branch and HEAD sha.
-func CloneRepo(ctx context.Context, workdir, remoteURL, branch, token string) (string, string, error) {
+func CloneRepo(ctx context.Context, workdir, remoteURL, branch, token string, replace bool) (string, string, error) {
+	if replace {
+		if err := clearForClone(workdir); err != nil {
+			return "", "", err
+		}
+	}
 	if _, err := os.Stat(filepath.Join(workdir, ".git")); err == nil {
 		return "", "", fmt.Errorf("%w: a git repository already exists", ErrWorkdirNotEmpty)
 	}
@@ -91,6 +96,22 @@ func CloneRepo(ctx context.Context, workdir, remoteURL, branch, token string) (s
 		return "", "", err
 	}
 	return head.Name().Short(), head.Hash().String(), nil
+}
+
+func clearForClone(workdir string) error {
+	entries, err := os.ReadDir(workdir)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if e.Name() == metaDir {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(workdir, e.Name())); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // InitRepo turns an unused workdir into a fresh native checkout bound to

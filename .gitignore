@@ -65,7 +65,6 @@ bin/voice_reply.wav
 # .vscode/
 
 # --- vendored sub-projects (excluded from code index / repomap) -----------
-activepieces-main/
 vendor-references/
 .digitorn/
 
@@ -113,7 +112,6 @@ digitorn-worker-llm.exe
 digitorn-worker-tokenizer.exe
 digitorn-background.exe
 digitorn-voice.exe
-activepieces-main/
 bin/digitorn-bifrost-smoke
 bin/repomap-probe
 bin/streamprobe
@@ -123,3 +121,4 @@ bin/zzverify_evict
 # Compiled artifacts (never source)
 /digitorn-voice
 *.dgc
+activepieces-main

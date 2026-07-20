@@ -919,6 +919,11 @@ tools:
         # ``eslint --format=json`` matches the ``parse_eslint``
         # expected output shape.
         eslint: "eslint --format=json"
+    # Activepieces connectors (github, vercel, supabase, stripe, resend…) as
+    # native tools ``ap_{piece}__{action}``. Only the user's INSTALLED pieces
+    # surface. The agent finds them via search_tools/get_tool (lazy) so deploy,
+    # database, auth and email are all driven through the user's connectors.
+    pieces: {}
   # ``context_builder`` is a hidden system module — its actions are
   # NOT exposed by default. We explicitly grant ``ask_user`` so the
   # agent can put a multiple-choice dialog in front of the user when
@@ -933,11 +938,13 @@ tools:
     approval_timeout: 3600
     grant:
       - module: context_builder
-        actions: [ask_user]
+        actions: [ask_user, search_tools, get_tool]
       - module: filesystem
         tools: [read, write, edit, glob, grep, ls, stat, exists]
       - module: memory
         tools: [remember, task_create, task_update, set_goal]
+      - module: pieces
+        tools: ["*"]
     approve:
       - module: bash
         tools: [run]

@@ -125,6 +125,15 @@ func (d *Daemon) mcpOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		writeOAuthHTML(w, http.StatusBadRequest, "This authorization link is invalid or has expired. Please try again.")
 		return
 	}
+	if p.AppID == vercelOAuthAppID {
+		if err := d.vercelCompleteOAuth(r.Context(), p.UserID, code, p.RedirectURI); err != nil {
+			writeOAuthHTML(w, http.StatusBadGateway, "Vercel rejected the authorization. Please try again.")
+			return
+		}
+		recentOAuthCompletions.mark(state)
+		writeOAuthHTML(w, http.StatusOK, "Vercel connected. You can close this window.")
+		return
+	}
 	// Per-user managed server: rebuild the oauth2 block + the server URL the
 	// discovery needs from the managed store (the app-config lookup can't see it).
 	if p.AppID == managedMCPAppID {

@@ -268,6 +268,10 @@ func (s *Store) refreshOAuthNow(ctx context.Context, userID, pieceName string, c
 	return true
 }
 
+func (s *Store) markNeedsReconnect(ctx context.Context, userID, pieceName string) {
+	s.setNeedsReconnect(ctx, userID, canonicalPieceName(pieceName), true)
+}
+
 func (s *Store) setNeedsReconnect(ctx context.Context, userID, pieceName string, v bool) {
 	_ = s.db.WithContext(ctx).
 		Model(&models.InstalledPiece{}).

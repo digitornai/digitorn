@@ -53,7 +53,7 @@ func TestNative_CloneSyncPull(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(wd, metaDir), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	branch, head, err := CloneRepo(ctx, wd, origin, "master", "")
+	branch, head, err := CloneRepo(ctx, wd, origin, "master", "", false)
 	if err != nil {
 		t.Fatalf("clone: %v", err)
 	}
@@ -64,7 +64,7 @@ func TestNative_CloneSyncPull(t *testing.T) {
 		t.Fatalf("cloned file missing: %v", err)
 	}
 
-	if _, _, err := CloneRepo(ctx, wd, origin, "master", ""); !errors.Is(err, ErrWorkdirNotEmpty) {
+	if _, _, err := CloneRepo(ctx, wd, origin, "master", "", false); !errors.Is(err, ErrWorkdirNotEmpty) {
 		t.Fatalf("re-clone must fail with ErrWorkdirNotEmpty, got %v", err)
 	}
 
@@ -115,7 +115,7 @@ func TestNative_CloneSyncPull(t *testing.T) {
 	}
 
 	wd2 := t.TempDir()
-	if _, _, err := CloneRepo(ctx, wd2, origin, "master", ""); err != nil {
+	if _, _, err := CloneRepo(ctx, wd2, origin, "master", "", false); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(wd, "more.txt"), []byte("more\n"), 0o644); err != nil {
@@ -172,5 +172,51 @@ func TestNative_InitAndFirstSync(t *testing.T) {
 	tree, _ := commit.Tree()
 	if _, err := tree.FindEntry(metaDir); err == nil {
 		t.Fatalf("%s leaked into pushed commit", metaDir)
+	}
+}
+
+func TestNative_CloneReplace(t *testing.T) {
+	ctx := context.Background()
+	origin := seedBareOrigin(t)
+
+	wd := t.TempDir()
+	// simulate a scaffolded session: state dir + stray files
+	if err := os.MkdirAll(filepath.Join(wd, metaDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wd, metaDir, "state.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wd, "old-scaffold.txt"), []byte("scaffold"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(wd, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// without replace: must refuse
+	if _, _, err := CloneRepo(ctx, wd, origin, "master", "", false); !errors.Is(err, ErrWorkdirNotEmpty) {
+		t.Fatalf("expected ErrWorkdirNotEmpty without replace, got %v", err)
+	}
+
+	// with replace: must succeed, clear scaffold, keep .digitorn state
+	branch, head, err := CloneRepo(ctx, wd, origin, "master", "", true)
+	if err != nil {
+		t.Fatalf("replace clone: %v", err)
+	}
+	if branch != "master" || head == "" {
+		t.Fatalf("replace clone: branch=%q head=%q", branch, head)
+	}
+	if _, err := os.Stat(filepath.Join(wd, "old-scaffold.txt")); !os.IsNotExist(err) {
+		t.Fatalf("stray scaffold file not cleared")
+	}
+	if _, err := os.Stat(filepath.Join(wd, "src")); !os.IsNotExist(err) {
+		t.Fatalf("stray scaffold dir not cleared")
+	}
+	if _, err := os.Stat(filepath.Join(wd, "README.md")); err != nil {
+		t.Fatalf("cloned file missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(wd, metaDir, "state.json")); err != nil {
+		t.Fatalf(".digitorn state was wrongly removed: %v", err)
 	}
 }

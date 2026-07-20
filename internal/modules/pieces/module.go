@@ -57,6 +57,8 @@ type Module struct {
 	mu          sync.RWMutex
 	reloadMu    sync.Mutex
 	reloadTimer *time.Timer
+	authReqMu   sync.Mutex
+	authReq     map[string]bool
 }
 
 func New() *Module {
@@ -128,10 +130,13 @@ func (m *Module) Invoke(ctx context.Context, toolName string, params []byte) (to
 			fmt.Errorf("pieces: unroutable tool %q", toolName)
 	}
 
-	augmented, err := m.injectAuth(ctx, piece, params)
+	augmented, authResolved, err := m.injectAuth(ctx, piece, params)
 	if err != nil {
-		// Auth not found: tool is usable but will fail at the connector level.
 		augmented = params
+	}
+
+	if !authResolved && m.pieceRequiresAuth(piece) {
+		return notConnectedResult(piece), nil
 	}
 
 	res, callErr := m.bridge.CallTool(ctx, toolName, augmented)
@@ -147,6 +152,9 @@ func (m *Module) Invoke(ctx context.Context, toolName string, params []byte) (to
 				retried := reinjectAuth(augmented, wire)
 				res, callErr = m.bridge.CallTool(ctx, toolName, retried)
 			}
+			if isTerminalAuthFailure(res) {
+				m.store.markNeedsReconnect(ctx, id.UserID, piece)
+			}
 		}
 	}
 
@@ -159,6 +167,9 @@ func isAuthFailure(res tool.Result) bool {
 	if res.Success {
 		return false
 	}
+	if isTerminalAuthFailure(res) {
+		return true
+	}
 	e := strings.ToLower(res.Error)
 	if e == "" {
 		return false
@@ -167,6 +178,25 @@ func isAuthFailure(res tool.Result) bool {
 		"\"status\":401", "status 401", " 401", "unauthorized", "unauthenticated",
 		"invalidauthenticationtoken", "invalid_grant", "invalid_token", "invalid token",
 		"token expired", "expired token", "access token", "token has expired",
+	} {
+		if strings.Contains(e, s) {
+			return true
+		}
+	}
+	return false
+}
+
+func isTerminalAuthFailure(res tool.Result) bool {
+	if res.Success {
+		return false
+	}
+	e := strings.ToLower(res.Error)
+	if e == "" {
+		return false
+	}
+	for _, s := range []string{
+		"not_authed", "invalid_auth", "token_revoked", "account_inactive",
+		"invalid_grant", "unauthorized_client",
 	} {
 		if strings.Contains(e, s) {
 			return true
@@ -195,10 +225,10 @@ func reinjectAuth(augmented json.RawMessage, wire *APAuthWire) json.RawMessage {
 
 // injectAuth looks up the caller's credentials and merges _ap_auth + _ap_session
 // into the params JSON.
-func (m *Module) injectAuth(ctx context.Context, pieceName string, params []byte) (json.RawMessage, error) {
+func (m *Module) injectAuth(ctx context.Context, pieceName string, params []byte) (json.RawMessage, bool, error) {
 	identity, ok := tool.IdentityFromContext(ctx)
 	if !ok || identity.UserID == "" {
-		return params, fmt.Errorf("no user identity in context")
+		return params, false, fmt.Errorf("no user identity in context")
 	}
 
 	// Check per-app static auth first (if store unavailable or piece not installed
@@ -231,11 +261,39 @@ func (m *Module) injectAuth(ctx context.Context, pieceName string, params []byte
 		}
 	}
 
+	resolved := args["_ap_auth"] != nil
+
 	raw, err := json.Marshal(args)
 	if err != nil {
-		return params, err
+		return params, resolved, err
 	}
-	return raw, nil
+	return raw, resolved, nil
+}
+
+func (m *Module) pieceRequiresAuth(piece string) bool {
+	m.authReqMu.Lock()
+	defer m.authReqMu.Unlock()
+	if v, ok := m.authReq[piece]; ok {
+		return v
+	}
+	schema, err := m.bridge.GetPieceAuth(piece)
+	if err != nil {
+		return false
+	}
+	t, _ := schema["type"].(string)
+	req := t != "" && !strings.EqualFold(t, "none")
+	if m.authReq == nil {
+		m.authReq = map[string]bool{}
+	}
+	m.authReq[piece] = req
+	return req
+}
+
+func notConnectedResult(piece string) tool.Result {
+	return tool.Result{
+		Success: false,
+		Error: fmt.Sprintf("connector %q is not connected for this user — no credentials are stored. Do not retry this tool. Ask the user to connect %s first (via the Connect button in the workspace), then continue once it is connected.", piece, piece),
+	}
 }
 
 // appAuthFor reads static per-piece auth from the app's module config block.

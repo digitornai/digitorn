@@ -6,7 +6,7 @@
 # clean catalog. For production this is removed (defaults to https://hub.digitorn.ai).
 apps:
   hub:
-    url: http://localhost:8001
+    url: https://hub.digitorn.ai
     daemon_key: dev-daemon-key-digitorn-2026
 
 # Hosted OAuth bounce (auth.digitorn.ai) — one HTTPS callback for all connector
