@@ -127,14 +127,19 @@ type Snapshot struct {
 
 // Command is an instruction waiting for the page to pick up.
 type Command struct {
-	ID      string         `json:"id"`
-	Do      string         `json:"do"`
-	Ref     string         `json:"ref,omitempty"`
-	Text    string         `json:"text,omitempty"`
-	Key     string         `json:"key,omitempty"`
-	URL     string         `json:"url,omitempty"`
-	Timeout int            `json:"timeout,omitempty"`
-	Extra   map[string]any `json:"extra,omitempty"`
+	ID   string `json:"id"`
+	Do   string `json:"do"`
+	Ref  string `json:"ref,omitempty"`
+	Text string `json:"text,omitempty"`
+	Key  string `json:"key,omitempty"`
+	URL  string `json:"url,omitempty"`
+	// TextMatch targets an element by its visible label rather than by ref,
+	// which is the only way an action survives the re-render its predecessor
+	// caused.
+	TextMatch string         `json:"text_match,omitempty"`
+	Role      string         `json:"role,omitempty"`
+	Timeout   int            `json:"timeout,omitempty"`
+	Extra     map[string]any `json:"extra,omitempty"`
 }
 
 type state struct {

@@ -60,14 +60,14 @@ func New() *Module {
 			"A successful build only proves the code compiles; this proves the app works. Use it after building, whenever the user says something is broken, and to test a flow end to end. " +
 			"Returns whether the page rendered or came up blank, the route on screen, the runtime failures it hit (crashes, rejected promises, console errors, with file and line), the network calls that FAILED (a 404 or a blocked request is the usual reason data never shows up, and nothing in the console says so), whatever the code printed with console.log, the screen size in use, the visible text, and the elements you can act on, each with a `ref`. " +
 			"To TEST a flow, pass `actions`: they run in order against the live page and the resulting state comes back, so acting and checking are one call — navigate to /signup, type an email, click Submit, and read whether the confirmation appeared. " +
-			"Refs come from the elements of the LAST inspect; a page that re-renders replaces them, so inspect again rather than reusing old ones. Runtime errors are cleared once reported, so each call returns what happened since you last looked.",
+			"Refs come from the elements of the LAST inspect and only hold until the page re-renders. Inside a sequence — type, then click — target by `match` (the visible label) rather than by ref, otherwise the second action fails on an element that no longer exists. Runtime errors are cleared once reported, so each call returns what happened since you last looked.",
 		Params: []tool.ParamSpec{
 			{
 				Name: "actions",
 				Type: "array",
 				Description: "Interactions to run on the live page before reading it back, in order. Each is an object: " +
 					"{do:\"navigate\", url:\"/signup\"} to go to a route of the app; " +
-					"{do:\"click\", ref:\"e12\"} to click an element; " +
+					"{do:\"click\", ref:\"e12\"} to click an element, or {do:\"click\", match:\"S'inscrire\"} to click it by its visible label — prefer `match` in a sequence, because a ref stops resolving the moment the page re-renders; " +
 					"{do:\"type\", ref:\"e7\", text:\"a@b.com\"} to fill a field (fires the events React and Vue forms listen for); " +
 					"{do:\"press\", key:\"enter\"} to press a key, which submits a form far more reliably than clicking its button; " +
 					"{do:\"hover\", ref:\"e3\"} to open a menu that appears on mouse-over; " +
@@ -103,12 +103,18 @@ type inspectParams struct {
 }
 
 type actionParam struct {
-	Do   string `json:"do"`
-	Ref  string `json:"ref"`
-	Text string `json:"text"`
-	Key  string `json:"key"`
-	URL  string `json:"url"`
-	MS   int    `json:"ms"`
+	Do  string `json:"do"`
+	Ref string `json:"ref"`
+	// Match targets an element by its visible label instead of by ref. A ref
+	// belongs to the snapshot it came from: the moment the page re-renders —
+	// which typing into a live field does — it points at a node that no longer
+	// exists. A label survives that.
+	Match string `json:"match"`
+	Role  string `json:"role"`
+	Text  string `json:"text"`
+	Key   string `json:"key"`
+	URL   string `json:"url"`
+	MS    int    `json:"ms"`
 }
 
 func (m *Module) inspect(ctx context.Context, raw json.RawMessage) (tool.Result, error) {
@@ -189,33 +195,36 @@ func (m *Module) run(ctx context.Context, app, session string, actions []actionP
 func toCommand(id string, a actionParam) (Command, error) {
 	do := strings.ToLower(strings.TrimSpace(a.Do))
 	c := Command{ID: id, Do: do, Ref: a.Ref, Text: a.Text, Key: a.Key, URL: a.URL, Timeout: a.MS}
+	c.TextMatch = strings.TrimSpace(a.Match)
+	c.Role = strings.TrimSpace(a.Role)
+	targeted := strings.TrimSpace(a.Ref) != "" || c.TextMatch != ""
 	switch do {
 	case "navigate":
 		if strings.TrimSpace(a.URL) == "" {
 			return c, errors.New("navigate needs a url")
 		}
 	case "click":
-		if strings.TrimSpace(a.Ref) == "" {
-			return c, errors.New("click needs the ref of an element from the last inspect")
+		if !targeted {
+			return c, errors.New("click needs a ref from the last inspect, or match with the element's visible label")
 		}
 	case "type":
-		if strings.TrimSpace(a.Ref) == "" {
-			return c, errors.New("type needs the ref of a field from the last inspect")
+		if !targeted {
+			return c, errors.New("type needs a ref from the last inspect, or match with the field's visible label")
 		}
 	case "press":
 		if strings.TrimSpace(a.Key) == "" {
 			return c, errors.New("press needs a key")
 		}
 	case "detail":
-		if strings.TrimSpace(a.Ref) == "" {
-			return c, errors.New("detail needs the ref of an element from the last inspect")
+		if !targeted {
+			return c, errors.New("detail needs a ref from the last inspect, or match with the visible label")
 		}
 	case "hover", "check":
-		if strings.TrimSpace(a.Ref) == "" {
-			return c, fmt.Errorf("%s needs the ref of an element from the last inspect", do)
+		if !targeted {
+			return c, fmt.Errorf("%s needs a ref from the last inspect, or match with the visible label", do)
 		}
 	case "select":
-		if strings.TrimSpace(a.Ref) == "" || strings.TrimSpace(a.Text) == "" {
+		if !targeted || strings.TrimSpace(a.Text) == "" {
 			return c, errors.New("select needs a ref and the visible label of the option")
 		}
 	case "wait_for":

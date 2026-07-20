@@ -200,6 +200,16 @@ func TestPreviewAgentShimIsScopedAndDefensive(t *testing.T) {
 			t.Errorf("visual audit missing %q", want)
 		}
 	}
+	// A ref belongs to the snapshot it came from: typing into a field makes
+	// React replace the node, and the next action in the same sequence would
+	// hit a detached element. Resolution therefore falls back to the visible
+	// label — the ref the agent was given still works, because the label it
+	// carried is remembered.
+	for _, want := range []string{"text_match", "lastSeen", "document.contains"} {
+		if !bytes.Contains(out, []byte(want)) {
+			t.Errorf("re-render-resistant targeting missing %q", want)
+		}
+	}
 	// A click must look like a real one. ``el.click()`` alone fires only
 	// "click", so a Radix/shadcn menu — which craft mandates and which opens on
 	// pointerdown — never reacts, and the agent concludes its own component is
