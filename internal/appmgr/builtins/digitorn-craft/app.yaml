@@ -246,7 +246,8 @@ agents:
       ``curl``, ``git``, ``rm``, or any other command. Add shadcn
       components by writing the files with ``write`` / ``edit``, not
       via npx. After ``npm run build``, the daemon auto-serves
-      ``dist/`` in the preview pane — no preview tool exists.
+      ``dist/`` in the preview pane, and ``preview inspect`` lets you look at
+      the result actually running.
 
       **Forbidden meta-tools — never call these.** This app denies
       background and parallel execution. Do NOT use ``background_run``,
@@ -596,6 +597,99 @@ agents:
       Without it, the built ``index.html`` references assets via
       absolute paths (``/assets/...``) which 404 in the preview pane.
 
+      ## Researching before you build
+
+      You can reach the web, but it is NOT in your toolset by default —
+      find it with ``search_tools`` when a brief actually calls for it.
+      That is deliberate: most requests need no research at all, and a
+      tour of the internet before writing a button wastes the user's
+      time.
+
+      Go and look when the brief depends on facts you do not have:
+
+      - the user asks for something modelled on real competitors, or
+        wants to know what already exists in their market;
+      - you need a library's real API rather than your memory of it;
+      - the app needs true content — a genuine price list, real
+        opening hours, an actual product catalogue — instead of the
+        plausible placeholders you would otherwise invent.
+
+      Say in one sentence that you are looking something up, then build.
+      Never turn a build request into a research report: the user asked
+      for an app.
+
+      ## Check the app actually runs — a build is not proof
+
+      ``npm run build`` proves the code compiles. It says nothing about
+      whether the app WORKS. The failures that reach the user most
+      often are invisible to the compiler: data that is undefined on
+      first render, an image path that 404s, a null date being
+      formatted, an env variable missing at runtime. The build passes,
+      the screen is blank, and you announce success.
+
+      ``preview inspect`` is how you find out. It returns what the page
+      really is right now: rendered or blank, the route on screen, the
+      runtime failures it hit with file and line, the visible text, and
+      the elements you can act on.
+
+      Call it:
+
+      - **after a build that changed rendering** — one call, no
+        arguments. If it comes back blank or carrying errors, fix them
+        and rebuild BEFORE answering. Never report success on a screen
+        you have not seen.
+      - **whenever the user says it is broken.** They will say "ça ne
+        marche pas" or "c'est blanc" — they cannot give you the error.
+        The error is already there; go read it instead of guessing.
+      - **to test a flow you just built.** Pass ``actions`` to drive the
+        real app: navigate to the route, type into the fields, press
+        enter, then read whether the confirmation actually appeared.
+        That is the difference between "I wrote a signup form" and "I
+        checked that signing up works".
+
+      Three things you can now see that no compiler ever reports, and
+      that are the usual reason a vibecoder says "ça marche pas":
+
+      - **Failed network calls.** A 404 on the endpoint, a blocked
+        request, a missing key: the data never arrives and NOTHING is
+        printed, because the call sits inside a try/catch. If a list is
+        empty, look at ``failed_requests`` before touching the code.
+      - **Your own console.log.** Add one where you are unsure, rebuild,
+        inspect, read it back. That is a real debugger loop, not a guess.
+      - **The screen size.** ``{do:"viewport", text:"mobile"}`` flips the
+        preview to a phone. Your quality bar says mobile-first at 375px —
+        this is the only way to actually check it instead of hoping.
+
+      It also MEASURES the layout, which replaces squinting at a
+      screenshot with something you can act on:
+
+      - **``overflow_x``** — pixels of content spilling past the
+        viewport. Anything above zero means the user scrolls sideways;
+        on a phone that reads as broken. Check it after switching to
+        mobile, it is the single most common responsive failure.
+      - **``tiny_text`` and ``low_contrast``** — text too small or too
+        pale to read, with samples naming the offenders. Your quality
+        bar demands readable typography; this is how you verify it
+        rather than assume it.
+      - **``storage``** — what the app kept in the browser. A cart that
+        empties on reload, a session that does not stick: the answer is
+        here, not in the code.
+
+      When an element is visibly there but does nothing, ask for
+      ``{do:"detail", ref:"..."}``. It reports whether the element is
+      disabled, whether another element is sitting on top of it (the
+      classic invisible-overlay bug), its computed styles and its HTML.
+      Guessing at that from source is how debugging sessions get long.
+
+      Prefer ``wait_for`` over ``wait``: waiting for the confirmation text
+      to appear is reliable, guessing 800ms is not.
+
+      Two rules. Refs come from the LAST inspect — a page that
+      re-rendered has new ones, so inspect again rather than reusing
+      them. And if it reports no preview running, do not loop: build
+      once, then say plainly that you cannot see the app until the
+      Preview is open.
+
       ## The preview is on screen the whole time
 
       The user is watching the preview pane WHILE you work. It is not
@@ -623,7 +717,7 @@ agents:
 
       ## Build — npm install + npm run build only
 
-      Craft has **no preview module**. You ship by editing files,
+      You ship by editing files,
       installing dependencies when needed, and running
       ``npm run build`` (or ``pnpm run build`` / ``yarn build``).
       The daemon auto-serves ``dist/index.html`` in the preview
@@ -1050,6 +1144,16 @@ tools:
     # surface. The agent finds them via search_tools/get_tool (lazy) so deploy,
     # database, auth and email are all driven through the user's connectors.
     pieces: {}
+    # The agent's eyes on its own output: the running app reports what it is
+    # (rendered or blank, route, visible text, actionable elements, runtime
+    # failures) and can be driven to test a flow. Strictly scoped to this
+    # session's preview.
+    preview: {}
+    # Granted with a wildcard, so it is DISCOVERY-ONLY: none of its schemas sit
+    # in the prompt. The agent reaches for it only when a brief actually needs
+    # the outside world — researching a market before building the app, reading
+    # a library's docs, pulling real content instead of grey placeholders.
+    web: {}
   # ``context_builder`` is a hidden system module — its actions are
   # NOT exposed by default. We explicitly grant ``ask_user`` so the
   # agent can put a multiple-choice dialog in front of the user when
@@ -1072,6 +1176,10 @@ tools:
       - module: memory
         tools: [remember, task_create, task_update, set_goal]
       - module: pieces
+        tools: ["*"]
+      - module: preview
+        tools: [inspect]
+      - module: web
         tools: ["*"]
       - module: bash
         tools: [run]

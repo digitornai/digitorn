@@ -30,6 +30,7 @@ func (a registryActions) ForApp(appID string) []policy.AvailableAction {
 	}
 
 	declared := a.declaredModulesFor(appID)
+	discovery := a.discoveryModulesFor(appID)
 
 	out := make([]policy.AvailableAction, 0, 32)
 	for _, mf := range manifests {
@@ -41,10 +42,12 @@ func (a registryActions) ForApp(appID string) []policy.AvailableAction {
 		for _, spec := range mf.Tools {
 			fqnSpec := spec
 			fqnSpec.Name = mf.ID + "." + spec.Name
+			_, discoverable := discovery[mf.ID]
 			out = append(out, policy.AvailableAction{
-				Module: mf.ID,
-				Action: spec.Name,
-				Spec:   &fqnSpec,
+				Module:        mf.ID,
+				Action:        spec.Name,
+				Spec:          &fqnSpec,
+				DiscoveryOnly: discoverable,
 			})
 		}
 	}
@@ -114,6 +117,48 @@ func (a registryActions) declaredModulesFor(appID string) map[string]struct{} {
 		for id := range rt.Definition.Tools.Modules {
 			set[id] = struct{}{}
 		}
+	}
+	return set
+}
+
+// discoveryModulesFor returns the modules an app granted with a wildcard.
+//
+// A wildcard grant means "this app may use everything here", which for a large
+// module is a statement about REACH, not about what belongs in the prompt.
+// Injecting every schema would spend the token budget on tools the agent will
+// not use this turn, so those modules become discovery-only: the agent finds
+// them with search_tools / get_tool when a task calls for them.
+//
+// The pieces catalog already worked this way; keeping the rule there made it a
+// quirk of one module rather than a property of the platform. An app can now
+// hand the agent a broad capability — the web, a big connector set — without
+// paying for it on every turn.
+func (a registryActions) discoveryModulesFor(appID string) map[string]struct{} {
+	if a.Apps == nil || appID == "" {
+		return nil
+	}
+	rt, err := a.Apps.Get(context.Background(), appID)
+	if err != nil || rt == nil || rt.Definition == nil || rt.Definition.Tools == nil {
+		return nil
+	}
+	caps := rt.Definition.Tools.Capabilities
+	if caps == nil {
+		return nil
+	}
+	set := make(map[string]struct{})
+	for _, g := range caps.Grant {
+		if g.Module == "" || g.Module == "pieces" {
+			continue // pieces resolves its own catalog, with live tools
+		}
+		for _, t := range g.EffectiveTools() {
+			if t == "*" {
+				set[g.Module] = struct{}{}
+				break
+			}
+		}
+	}
+	if len(set) == 0 {
+		return nil
 	}
 	return set
 }

@@ -1,8 +1,15 @@
 id: preview
-version: 1.0.0
-description: Live preview rendering for client UI.
+version: 2.0.0
+description: See and drive the running app in the preview pane.
 tools:
-  - { name: render, description: Render content for preview., risk_level: low, params: [{name: content, type: string, required: true}, {name: kind, type: string}] }
-  - { name: update, description: Update the preview., risk_level: low, params: [{name: content, type: string, required: true}] }
-  - { name: get_url, description: Get the preview URL., risk_level: low, params: [] }
-  - { name: close, description: Close the preview., risk_level: low, params: [] }
+  - name: inspect
+    description: >-
+      Look at your app actually running in the user's preview, and optionally
+      interact with it first. Returns whether the page rendered or came up
+      blank, the route on screen, the runtime failures it hit, the visible
+      text, and the elements you can act on. Pass `actions` to navigate, click,
+      type or press before reading the resulting state back.
+    risk_level: low
+    params:
+      - { name: actions, type: array }
+      - { name: text, type: boolean }

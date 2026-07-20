@@ -61,6 +61,13 @@ func (d *Daemon) MountAPI() {
 	// Preview file R/W for the embedded-preview SDK — `?t=`-authed (the iframe
 	// can't carry the JWT). The read/write half of useSharedDoc; confined to the
 	// session workdir. The authenticated /workspace/files routes stay untouched.
+	// The previewed app reports what it is and collects the agent's commands
+	// here. Same `?t=` token as the routes above, so a page can only ever speak
+	// for the session it was opened for.
+	r.With(d.panicRecoverer).Post(
+		"/api/apps/{app_id}/sessions/{session_id}/preview/runtime",
+		d.postPreviewRuntime,
+	)
 	r.With(d.panicRecoverer).Get(
 		"/api/apps/{app_id}/sessions/{session_id}/preview/files/*",
 		d.getPreviewFile,
