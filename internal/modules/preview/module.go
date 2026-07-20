@@ -81,6 +81,12 @@ func New() *Module {
 					"Omit it entirely to just look without touching anything.",
 			},
 			{
+				Name:        "full",
+				Type:        "boolean",
+				Description: "Return everything: every element, the whole page text. Off by default — an unchanged screen answers with a note instead of the payload you already have, and a busy page shows the elements you are most likely to act on rather than all of them. Set it when you genuinely need the rest.",
+				Default:     false,
+			},
+			{
 				Name:        "text",
 				Type:        "boolean",
 				Description: "Include the page's visible text (default true). Set false when you only need the elements and the errors.",
@@ -100,6 +106,7 @@ func New() *Module {
 type inspectParams struct {
 	Actions []actionParam `json:"actions"`
 	Text    *bool         `json:"text"`
+	Full    bool          `json:"full"`
 }
 
 type actionParam struct {
@@ -155,19 +162,20 @@ func (m *Module) inspect(ctx context.Context, raw json.RawMessage) (tool.Result,
 		}
 	}
 
-	if p.Text != nil && !*p.Text {
-		snap.Text = ""
-	}
+	// Trim before answering. The agent inspects after every action, so handing
+	// back a page it already holds is what burns its context.
+	fp := fingerprint(snap)
+	unchanged := shared.SwapSent(app, session, fp) == fp
+	wantText := p.Text == nil || *p.Text
+	summary := summarize(snap)
+	shown, note := present(snap, unchanged, p.Full, wantText)
 	shared.ClearErrors(app, session)
 
-	return tool.Result{
-		Success: true,
-		Data:    snap,
-		Metadata: map[string]any{
-			"summary": summarize(snap),
-			"errors":  len(snap.Errors),
-		},
-	}, nil
+	meta := map[string]any{"summary": summary, "errors": len(shown.Errors)}
+	if note != "" {
+		meta["note"] = note
+	}
+	return tool.Result{Success: true, Data: shown, Metadata: meta}, nil
 }
 
 // run executes the requested actions in order, stopping at the first one the

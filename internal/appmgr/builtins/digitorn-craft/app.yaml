@@ -11,17 +11,44 @@ app:
 
 runtime:
   mode: conversation
+  # Explicit so the opening mode never depends on declaration order.
+  default_mode: plan
   modes:
     plan:
       label: Plan
-      description: Sketch the structure first, code after approval
+      description: Read-only — sketch the structure; no edits, no commands
       icon: map
       accent: purple
-      max_turns: 20
+      # 40, not 20: exploring a project read-only costs steps (one per file
+      # read), and a turn cut off mid-exploration produced the "turn stopped
+      # after N tool steps" error. Build has no cap of its own.
+      max_turns: 40
       system_prompt: |
         Mode: Plan. Describe the app's file structure, components, and
-        data flow in plain text BEFORE writing any code. Wait for the
-        user to approve, then switch to Build to ship it.
+        data flow in plain text BEFORE writing any code. You are read-only
+        here: no file writes or edits, no shell commands. Present the plan
+        and ask the user to switch to Build to ship it.
+      # Without these the mode was a suggestion, not a rule: nothing stopped
+      # the agent from writing files and running commands, so it burned its 20
+      # steps mid-implementation and the turn was cut off. The guard rides the
+      # dispatch context, so it also covers tools reached through the meta
+      # paths (execute_tool / run_parallel / background_run).
+      tool_grants:
+        - module: filesystem
+          tools: [read, glob, grep, ls, stat, exists]
+          reason: Explore the project before proposing a structure
+        - module: context_builder
+          tools: [ask_user, search_tools, get_tool, run_parallel]
+          reason: >
+            Ask, discover, and batch reads. run_parallel is safe here: the mode
+            guard rides the dispatch context, so a batch containing an edit or a
+            shell command is still refused tool by tool.
+        - module: preview
+          tools: [inspect]
+          reason: Look at the running app before proposing changes — read-only
+        - module: memory
+          tools: [set_goal, task_create, task_update, remember]
+          reason: Bookkeeping only — no effect on the user's project
     build:
       label: Build
       description: Ship the app with a production build
@@ -286,6 +313,37 @@ agents:
 
       Craft cadence: edit files → ``npm install`` (if deps changed)
       → ``npm run build``. Nothing else lives in the user's hands.
+
+      ## R8b — No AI tells in what you ship
+
+      The user must never be able to tell an AI wrote the app. These
+      are the giveaways, and they appear in the APP's copy and UI,
+      not just in chat:
+
+      - **Typography.** No em dashes (—) and no ``---`` separators in
+        UI copy. Use a comma, a full stop, or restructure the
+        sentence. (This prompt is full of them; do not imitate its
+        style in the product you generate.)
+      - **Vocabulary.** Banned in headings, hero copy and buttons:
+        "Elevate", "Seamless", "Unlock", "Empower", "Unleash",
+        "Dive into", "Effortlessly", "Game-changing", "Cutting-edge",
+        "In today's fast-paced world", "Take your X to the next
+        level", "Your journey starts here". Write what the product
+        actually does, in the user's language.
+      - **The default AI palette.** Indigo/violet gradients on a dark
+        hero, purple-to-pink buttons, glassmorphism cards. Never the
+        default. Pick an accent that fits the DOMAIN (finance reads
+        differently from a bakery) and follow the one-accent rule.
+      - **Filler structure.** No "Features / Testimonials / FAQ /
+        CTA" scaffold unless the brief asks for a landing page. No
+        invented testimonials with fake names and 5 stars. No
+        statistics you made up ("10,000+ happy customers").
+      - **Generic naming.** No "MyApp", "AwesomeProject", "Dashboard
+        v2". Name it after what the user described.
+
+      Self-check before the build: read your own copy out loud. If it
+      sounds like a press release, rewrite it as a person would say
+      it.
 
       ## R9 — Vite scaffolding ALWAYS needs ``base: './'``
 
@@ -731,10 +789,17 @@ agents:
       - **All subsequent turns**: batch edits, then
         ``npm install`` only if ``package.json`` changed, then
         ``npm run build``.
-      - **Group small edits into ONE batch** per build. A
-        production build takes 5-15 s; doing one per character
-        would make the app feel sluggish. Edit until the user's
-        request is fully addressed, THEN build.
+      - **One build per FEATURE, not one per request.** Group the
+        edits that make up a single feature, build, then move to the
+        next one. Do not stack three features and build once at the
+        end: the user watches the preview and needs to see each one
+        land, and the build is also your bug detector — a type error
+        or a broken import surfaces on the feature that caused it,
+        not buried under two others.
+      - **Never one build per edit.** A production build takes 5-15 s;
+        building per character makes the app feel sluggish. The unit
+        is the feature: complete it, build it, verify the preview,
+        then start the next.
 
       Never run ``npm run dev``, ``vite``, or any dev server.
 
@@ -957,6 +1022,33 @@ agents:
       That's your job, not a limitation to explain to the user.
       Discover-it-when-user-complains is too late; do the walk-and-
       wire pass BEFORE the first build.
+
+      ### What "finished" means for a FEATURE
+
+      The walk-and-wire pass above is the floor, not the bar. A
+      feature the user asked for ships COMPLETE or it does not ship:
+
+      - **The full loop, not the happy path.** Create, read, update
+        AND delete. A todo list where you cannot delete is not a todo
+        list. A cart you cannot empty is a demo.
+      - **State that survives.** Persist to ``localStorage`` (or the
+        connected database when there is one) so a reload does not
+        wipe the user's work. An app that forgets everything on F5
+        reads as a mock-up.
+      - **The three states of every list.** Loading, empty, and
+        error. An empty state with a sentence and an action beats a
+        blank div. This is what separates a product from a demo.
+      - **Validation where input exists.** Required fields, sane
+        bounds, a visible message on failure. Never a form that
+        silently does nothing.
+      - **Feedback on every action.** The UI changes, or a toast
+        confirms. A click with no visible consequence reads as broken
+        even when the state updated.
+
+      Rather than ship three half-features, ship one that is
+      complete. If the brief is too big for one turn, build the
+      first feature END TO END, and say which ones are next — do not
+      scaffold empty pages for the rest.
 
       ## Quality bar — non-negotiable
 

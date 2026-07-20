@@ -34,22 +34,31 @@ type EffectiveTurn struct {
 
 	ToolGrants      []schema.CapabilityGrant
 	BehaviorProfile string
-	WorkspaceMode   string
 }
 
 func (e EffectiveTurn) Filtered() bool { return e.ToolGrants != nil }
 
 
 type AppDefaults struct {
+	// DefaultMode is the app's declared ``runtime.default_mode`` ("" = none).
+	DefaultMode         string
 	MaxTurns            int
 	Timeout             float64
 	BaseBehaviorProfile string
 }
 
 
-func DefaultModeID(modes map[string]schema.ModeDef, order []string) string {
+// DefaultModeID resolves the mode a session opens on. `declared` is the app's
+// ``runtime.default_mode`` and wins whenever it names an existing mode; the
+// legacy "auto, else first declared" rule is only the fallback.
+func DefaultModeID(modes map[string]schema.ModeDef, order []string, declared string) string {
 	if len(modes) == 0 {
 		return ""
+	}
+	if declared != "" {
+		if _, ok := modes[declared]; ok {
+			return declared
+		}
 	}
 	if _, ok := modes["auto"]; ok {
 		return "auto"
@@ -66,7 +75,7 @@ func DefaultModeID(modes map[string]schema.ModeDef, order []string) string {
 func Resolve(modes map[string]schema.ModeDef, order []string, modeID string, def AppDefaults) EffectiveTurn {
 	resolvedID := modeID
 	if resolvedID == "" {
-		resolvedID = DefaultModeID(modes, order)
+		resolvedID = DefaultModeID(modes, order, def.DefaultMode)
 	}
 	md, ok := modes[resolvedID]
 	if resolvedID == "" || !ok {
@@ -99,11 +108,6 @@ func Resolve(modes map[string]schema.ModeDef, order []string, modeID string, def
 	if profile == "" {
 		profile = def.BaseBehaviorProfile
 	}
-	ws := ""
-	if md.WorkspaceMode != nil {
-		ws = *md.WorkspaceMode
-	}
-
 	return EffectiveTurn{
 		ActiveModeID:       resolvedID,
 		ModeLabel:          label,
@@ -112,7 +116,6 @@ func Resolve(modes map[string]schema.ModeDef, order []string, modeID string, def
 		SystemPromptSuffix: md.SystemPrompt,
 		ToolGrants:         grants,
 		BehaviorProfile:    profile,
-		WorkspaceMode:      ws,
 	}
 }
 
@@ -181,9 +184,12 @@ func BuildModeSwitchMessage(eff EffectiveTurn, allowed, blocked map[string]struc
 	} else {
 		parts = append(parts, "[Mode]")
 	}
-	if body := strings.TrimSpace(eff.SystemPromptSuffix); body != "" {
-		parts = append(parts, body)
-	}
+	// The mode's system_prompt is deliberately NOT repeated here. This message
+	// is durable: it stays in the transcript after the user switches away, so
+	// embedding the instructions meant a later mode's prompt (pinned per turn)
+	// would contradict an earlier mode's prompt still sitting in the history.
+	// The announcement says WHICH mode is active; the instructions ride the
+	// turn's system prompt, which always reflects the CURRENT mode.
 	if len(blocked) == 0 {
 		parts = append(parts, "All tools are available in this mode.")
 	} else {

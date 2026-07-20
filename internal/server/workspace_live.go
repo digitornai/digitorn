@@ -171,6 +171,16 @@ func (l *workspaceLive) fire(root string) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), workspaceChangesTimeout)
 	defer cancel()
+
+	// Preview FIRST, before the changed-files scan. That scan is an IPC round
+	// trip into the workspace module (a repo walk, 30s timeout) and the preview
+	// does not depend on it — pushing after meant the iframe waited seconds
+	// behind a git status for a rebuild that was already on disk, and an errored
+	// scan skipped the push entirely (the early return below).
+	if l.previewPush != nil {
+		l.previewPush(ctx, root)
+	}
+
 	files, err := l.changes(ctx, workdir)
 	if err != nil {
 		if l.log != nil {
@@ -194,12 +204,6 @@ func (l *workspaceLive) fire(root string) {
 	// (one session room only), best-effort.
 	if err := l.rt.Emit(ctx, bridgeNamespace, "session:"+root, "event", env); err != nil && l.log != nil {
 		l.log.Debug("workspace live emit failed", "root", root, "err", err.Error())
-	}
-
-	// Same debounced signal also refreshes the live preview source: re-resolve the
-	// built entry and push web_preview:attached so the iframe reloads — no polling.
-	if l.previewPush != nil {
-		l.previewPush(ctx, root)
 	}
 
 	// Same debounced signal feeds the Problems panel: re-diagnose the changed

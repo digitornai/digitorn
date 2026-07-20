@@ -837,7 +837,17 @@ func (e *Engine) runPhases(
 
 	mwPipe := e.middlewareFor(app)
 
-	modeGate, modeMaxTurns, modeTimeout, behaviorProfile := e.applyTurnMode(ctx, tr, app, in, &snap, &tools)
+	modeGate, modeMaxTurns, modeTimeout, behaviorProfile, modePrompt := e.applyTurnMode(ctx, tr, app, in, &snap, &tools)
+	// Pinned per turn, like the behaviour profile below: a mode's instructions
+	// must hold for as long as the mode is active, not until compaction drops
+	// the switch directive that carried them.
+	if modePrompt != "" {
+		if systemPrompt != "" {
+			systemPrompt += "\n\n" + modePrompt
+		} else {
+			systemPrompt = modePrompt
+		}
+	}
 	if modeTimeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeoutCause(ctx, time.Duration(modeTimeout*float64(time.Second)), errModeTimeout)

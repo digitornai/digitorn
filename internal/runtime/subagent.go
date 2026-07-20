@@ -87,7 +87,12 @@ func (e *Engine) RunSubAgent(ctx context.Context, spec SubAgentSpec) (AgentResul
 				_, _ = e.Sessions.AppendDurable(ctx, sessionstore.Event{
 					Type: sessionstore.EventSystemMessage, SessionID: subSession, AppID: spec.AppID, UserID: spec.UserID,
 					Message: &sessionstore.MessagePayload{Role: "system",
-						Parts: textParts("Contexte hérité de la conversation parente :\n\n" + t)},
+						Parts: textParts("Contexte hérité de la conversation parente :\n\n" + t),
+						// Marks the seed so clients can skip it: it restates the
+						// parent conversation the user is already looking at, and
+						// it is addressed to the model. Matching on the French
+						// prefix instead would break on any rewording.
+						Extra: map[string]any{"source": "fork_seed"}},
 				})
 			}
 		}

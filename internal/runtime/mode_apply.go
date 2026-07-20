@@ -78,22 +78,24 @@ func (e *Engine) applyTurnMode(
 	in TurnInput,
 	snap *sessionstore.SessionSnapshot,
 	tools *[]llm.ToolSpec,
-) (guard *modeGuard, maxTurns int, timeout float64, behaviorProfile string) {
+) (guard *modeGuard, maxTurns int, timeout float64, behaviorProfile, modePrompt string) {
 	var (
 		modes      map[string]schema.ModeDef
-		order      []string
-		defMax     int
-		defTimeout float64
+		order           []string
+		declaredDefault string
+		defMax          int
+		defTimeout      float64
 	)
 	if app != nil && app.Definition != nil && app.Definition.Runtime != nil {
 		rt := app.Definition.Runtime
 		modes = rt.Modes
 		order = rt.ModesOrder
+		declaredDefault = rt.DefaultMode
 		defMax = rt.MaxTurns
 		defTimeout = rt.Timeout
 	}
 	if len(modes) == 0 {
-		return nil, 0, 0, ""
+		return nil, 0, 0, "", ""
 	}
 
 	// Stickiness : an omitted mode reuses the session's active mode before
@@ -103,11 +105,12 @@ func (e *Engine) applyTurnMode(
 		requested = snap.ActiveMode
 	}
 	eff := mode.Resolve(modes, order, requested, mode.AppDefaults{
-		MaxTurns: defMax,
-		Timeout:  defTimeout,
+		DefaultMode: declaredDefault,
+		MaxTurns:    defMax,
+		Timeout:     defTimeout,
 	})
 	if eff.ActiveModeID == "" {
-		return nil, 0, 0, ""
+		return nil, 0, 0, "", ""
 	}
 
 	offered := make([]string, 0, len(*tools))
@@ -153,7 +156,12 @@ func (e *Engine) applyTurnMode(
 		}
 	}
 
-	return guard, eff.MaxTurns, eff.Timeout, eff.BehaviorProfile
+	// The mode's system_prompt goes back to the caller so it can be folded into
+	// the turn's system prompt EVERY turn. It used to travel only inside the
+	// mode-switch directive: a durable transcript message, which ApplyView drops
+	// once its seq falls before the compaction cutoff. The picker kept showing
+	// the mode while its instructions had silently left the model's context.
+	return guard, eff.MaxTurns, eff.Timeout, eff.BehaviorProfile, eff.SystemPromptSuffix
 }
 
 func sortedJoin(set map[string]struct{}) string {

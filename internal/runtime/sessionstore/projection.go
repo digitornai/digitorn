@@ -265,6 +265,7 @@ func applyLocked(s *SessionState, ev *Event) {
 			ChildSessionID: ev.Agent.ChildSessionID,
 			Status:         orDefault(ev.Agent.Status, "running"),
 			Depth:          ev.Agent.Depth,
+			Fork:           ev.Agent.Fork,
 			SpawnedAt:      ev.TsUnixNano,
 			UpdatedAt:      ev.TsUnixNano,
 		})

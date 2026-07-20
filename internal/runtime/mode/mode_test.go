@@ -23,20 +23,34 @@ func keys(m map[string]struct{}) []string {
 
 
 func TestDefaultModeID(t *testing.T) {
+	three := map[string]schema.ModeDef{"ask": {}, "auto": {}, "plan": {}}
 	cases := []struct {
-		name  string
-		modes map[string]schema.ModeDef
-		order []string
-		want  string
+		name     string
+		modes    map[string]schema.ModeDef
+		order    []string
+		declared string
+		want     string
 	}{
-		{"empty", nil, nil, ""},
-		{"auto wins", map[string]schema.ModeDef{"ask": {}, "auto": {}}, []string{"ask", "auto"}, "auto"},
-		{"first declared", map[string]schema.ModeDef{"ask": {}, "plan": {}}, []string{"ask", "plan"}, "ask"},
-		{"first declared (other order)", map[string]schema.ModeDef{"ask": {}, "plan": {}}, []string{"plan", "ask"}, "plan"},
+		{"empty", nil, nil, "", ""},
+		{"auto wins", map[string]schema.ModeDef{"ask": {}, "auto": {}}, []string{"ask", "auto"}, "", "auto"},
+		{"first declared", map[string]schema.ModeDef{"ask": {}, "plan": {}}, []string{"ask", "plan"}, "", "ask"},
+		{"first declared (other order)", map[string]schema.ModeDef{"ask": {}, "plan": {}}, []string{"plan", "ask"}, "", "plan"},
+
+		// runtime.default_mode — the app declares it instead of the engine
+		// guessing. It must beat both legacy rules.
+		{"declared beats auto", three, []string{"ask", "auto", "plan"}, "plan", "plan"},
+		{"declared beats first", map[string]schema.ModeDef{"ask": {}, "plan": {}}, []string{"ask", "plan"}, "plan", "plan"},
+		{"declared can name auto", three, []string{"ask", "auto", "plan"}, "auto", "auto"},
+
+		// A default naming a mode the app doesn't have must not strand the
+		// session on an unknown id — fall back to the legacy policy.
+		{"unknown declared falls back to auto", three, []string{"ask", "auto", "plan"}, "ghost", "auto"},
+		{"unknown declared falls back to first", map[string]schema.ModeDef{"ask": {}, "plan": {}}, []string{"plan", "ask"}, "ghost", "plan"},
+		{"declared ignored when no modes", nil, nil, "plan", ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := mode.DefaultModeID(c.modes, c.order); got != c.want {
+			if got := mode.DefaultModeID(c.modes, c.order, c.declared); got != c.want {
 				t.Errorf("DefaultModeID = %q, want %q", got, c.want)
 			}
 		})
@@ -213,7 +227,6 @@ func TestSwitchMessage_WithBlocked(t *testing.T) {
 
 	for _, want := range []string{
 		"[Mode: Ask]",
-		"Read-only investigation.",
 		"Tools available in this mode: filesystem.glob, filesystem.read",
 		"Tools blocked in this mode: filesystem.delete, shell.bash",
 		"ask the user to switch",
@@ -222,5 +235,13 @@ func TestSwitchMessage_WithBlocked(t *testing.T) {
 		if !strings.Contains(msg, want) {
 			t.Errorf("switch message missing %q\n---\n%s", want, msg)
 		}
+	}
+
+	// The mode's system_prompt must NOT be embedded. This message is durable:
+	// it survives in the transcript after switching away, so an old mode's
+	// instructions would contradict the current mode's prompt (pinned on every
+	// turn). The announcement carries the mode NAME, never its rules.
+	if strings.Contains(msg, "Read-only investigation.") {
+		t.Errorf("system_prompt leaked into the durable switch message — it will collide with the next mode:\n%s", msg)
 	}
 }

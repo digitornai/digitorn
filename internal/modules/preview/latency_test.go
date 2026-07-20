@@ -12,7 +12,7 @@ import (
 
 func TestWaitReleasesTheInstantACommandArrives(t *testing.T) {
 	s := NewStore()
-	s.Report("app", "A", Snapshot{URL: "http://a/"})
+	s.Report("app", "A", Snapshot{URL: "http://a/"}, false)
 
 	released := make(chan []Command, 1)
 	go func() { released <- s.Wait(context.Background(), "app", "A", 5*time.Second) }()
@@ -38,7 +38,7 @@ func TestWaitReleasesTheInstantACommandArrives(t *testing.T) {
 
 func TestWaitReturnsEmptyAfterItsBudget(t *testing.T) {
 	s := NewStore()
-	s.Report("app", "A", Snapshot{})
+	s.Report("app", "A", Snapshot{}, false)
 
 	start := time.Now()
 	cmds := s.Wait(context.Background(), "app", "A", 120*time.Millisecond)
@@ -90,7 +90,7 @@ func TestWaitEndsWithItsRequest(t *testing.T) {
 func TestSubmitFailsFastWhenThePreviewIsGone(t *testing.T) {
 	s := NewStore()
 	// A page that checked in long ago and never came back.
-	s.Report("app", "A", Snapshot{})
+	s.Report("app", "A", Snapshot{}, false)
 	s.mu.Lock()
 	s.sessions[key{"app", "A"}].lastSeen = time.Now().Add(-2 * staleAfter)
 	s.mu.Unlock()
@@ -109,8 +109,8 @@ func TestSubmitFailsFastWhenThePreviewIsGone(t *testing.T) {
 
 func TestWaitersOfDifferentSessionsDoNotWakeEachOther(t *testing.T) {
 	s := NewStore()
-	s.Report("app", "A", Snapshot{})
-	s.Report("app", "B", Snapshot{})
+	s.Report("app", "A", Snapshot{}, false)
+	s.Report("app", "B", Snapshot{}, false)
 
 	woke := make(chan []Command, 1)
 	go func() { woke <- s.Wait(context.Background(), "app", "B", 400*time.Millisecond) }()
@@ -141,7 +141,7 @@ func TestWaitNeverMissesAWakeItRacedWith(t *testing.T) {
 	const rounds = 400
 	for i := 0; i < rounds; i++ {
 		s := NewStore()
-		s.Report("app", "A", Snapshot{})
+		s.Report("app", "A", Snapshot{}, false)
 
 		got := make(chan []Command, 1)
 		start := make(chan struct{})

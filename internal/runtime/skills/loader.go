@@ -93,7 +93,7 @@ func (l *BundleLoader) resolve(ctx context.Context, appID, command string) (meta
 		if normalizeCommand(entry.Command) != command {
 			continue
 		}
-		content, err := readSkillContent(rt.BundleDir, entry.Path)
+		content, absPath, err := readSkillContent(rt.BundleDir, entry.Path)
 		if err != nil {
 			return meta.SkillEntry{}, fmt.Errorf("skills: %q: %w", entry.Command, err)
 		}
@@ -101,6 +101,7 @@ func (l *BundleLoader) resolve(ctx context.Context, appID, command string) (meta
 			Command:     prefixSlash(entry.Command),
 			Description: entry.Description,
 			Content:     content,
+			Dir:         filepath.Dir(absPath),
 		}, nil
 	}
 	return meta.SkillEntry{}, fmt.Errorf("skills: %q not found in dev.skills", command)
@@ -108,20 +109,22 @@ func (l *BundleLoader) resolve(ctx context.Context, appID, command string) (meta
 
 // readSkillContent reads {bundleDir}/{path} with traversal
 // protection. The path must stay inside the bundle directory.
-func readSkillContent(bundleDir, path string) (string, error) {
+// Returns the file content AND its resolved absolute path, so the caller can
+// hand the skill's own directory to the agent (sibling files / scripts).
+func readSkillContent(bundleDir, path string) (string, string, error) {
 	if bundleDir == "" {
-		return "", errors.New("bundle dir not set")
+		return "", "", errors.New("bundle dir not set")
 	}
 	if path == "" {
-		return "", errors.New("skill path empty")
+		return "", "", errors.New("skill path empty")
 	}
 	absRoot, err := filepath.Abs(bundleDir)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	absSkill, err := filepath.Abs(filepath.Join(bundleDir, path))
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	// Resolve symlinks so a symlink planted inside the bundle can't point the
 	// "contained" path outside it (the Rel check below is purely lexical). When
@@ -139,13 +142,13 @@ func readSkillContent(bundleDir, path string) (string, error) {
 	// but NOT a legitimate file whose name merely starts with ".." (e.g.
 	// "..keep.md") — the old HasPrefix(rel, "..") rejected those too.
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("skill path %q escapes bundle dir", path)
+		return "", "", fmt.Errorf("skill path %q escapes bundle dir", path)
 	}
 	data, err := os.ReadFile(absSkill)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	return string(data), nil
+	return string(data), absSkill, nil
 }
 
 // normalizeCommand strips a leading "/" so equality matches both

@@ -148,6 +148,9 @@ type state struct {
 	queue    []Command
 	waiters  map[string]chan Snapshot
 	lastSeen time.Time
+	// lastSent fingerprints what the agent was last shown, so an unchanged page
+	// can be answered with a note instead of a payload it already holds.
+	lastSent string
 	// wake is closed and replaced whenever a command is queued, so a page
 	// holding a long poll is released the instant the agent asks for
 	// something instead of on the next tick of a timer.
@@ -168,7 +171,12 @@ func (s *Store) at(k key) *state {
 // Report records the page's current state. Errors accumulate across reports
 // (deduplicated) because the agent may only look after several have piled up,
 // while the rest of the snapshot is simply replaced by the latest truth.
-func (s *Store) Report(app, session string, snap Snapshot) {
+// Report records the page's state. When reloaded is true this is a freshly
+// loaded page, which resolves any command still in flight: clicking a real link
+// unloads the document before it can answer, so the caller would otherwise wait
+// out its whole budget for a reply that can never come. The state of the page
+// that replaced it IS the outcome of that click.
+func (s *Store) Report(app, session string, snap Snapshot, reloaded bool) {
 	if app == "" || session == "" {
 		return
 	}
@@ -184,6 +192,19 @@ func (s *Store) Report(app, session string, snap Snapshot) {
 	for _, e := range incoming {
 		st.appendError(e)
 	}
+	if !reloaded || len(st.waiters) == 0 {
+		return
+	}
+	out := st.snap
+	out.Errors = append([]RuntimeError(nil), st.errors...)
+	for id, ch := range st.waiters {
+		delete(st.waiters, id)
+		select {
+		case ch <- out:
+		default:
+		}
+	}
+	st.queue = nil
 }
 
 func (st *state) appendError(e RuntimeError) {
@@ -384,6 +405,19 @@ func (s *Store) Complete(app, session, id string, snap Snapshot) {
 		default:
 		}
 	}
+}
+
+// SwapSent records the fingerprint of what is about to be handed to the agent
+// and returns the previous one. Equal fingerprints mean the page is unchanged,
+// so the full payload is already sitting in the agent's context and re-sending
+// it buys nothing but tokens.
+func (s *Store) SwapSent(app, session, fingerprint string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st := s.at(key{app, session})
+	prev := st.lastSent
+	st.lastSent = fingerprint
+	return prev
 }
 
 // Forget removes a session's preview state entirely.

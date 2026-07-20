@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -101,6 +102,9 @@ func TestPreviewRealBrowser(t *testing.T) {
 		t.Fatal("the real app never reported to the daemon — the shim did not run, or could not reach the runtime endpoint")
 	}
 
+	if raw, err := json.Marshal(snap); err == nil {
+		t.Logf("PAYLOAD: %d chars of JSON ≈ %d tokens for ONE inspect", len(raw), len(raw)/4)
+	}
 	t.Logf("url=%s title=%q elements=%d text=%dch viewport=%s",
 		snap.URL, snap.Title, len(snap.Elements), len(snap.Text), snap.Viewport)
 
@@ -155,6 +159,7 @@ func TestPreviewRealBrowser(t *testing.T) {
 	start := time.Now()
 	after, err := preview.Shared().Submit(ctx, app, session,
 		preview.Command{ID: "e2e-1", Do: "click", TextMatch: target})
+	_ = after
 	if err != nil {
 		t.Fatalf("clicking %q in a real browser failed: %v", target, err)
 	}

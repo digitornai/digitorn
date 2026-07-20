@@ -162,6 +162,10 @@ type ChildAgent struct {
 	Status         string `json:"status"`
 	ResultSummary  string `json:"result_summary,omitempty"`
 	Depth          int    `json:"depth,omitempty"`
+	// Fork mode — the sub-agent inherited the parent transcript. Carried on
+	// the spawn event; kept in the durable projection so a client that
+	// reloads can still show it instead of only ever seeing it live.
+	Fork           bool   `json:"fork,omitempty"`
 	SpawnedAt      int64  `json:"spawned_at"`
 	CompletedAt    int64  `json:"completed_at,omitempty"`
 	UpdatedAt      int64  `json:"updated_at,omitempty"`

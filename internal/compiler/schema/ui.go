@@ -59,7 +59,13 @@ type ChatThinkingBlock struct {
 }
 
 type ChatToolCallsBlock struct {
-	CollapsedDefault *bool                `yaml:"collapsed_default,omitempty" json:"collapsed_default,omitempty"`
+	// NOTE: there used to be a `collapsed_default` here. The web client always
+	// mounts a tool call as a compact chip and expands only on user click —
+	// tool-call-block.tsx says so explicitly ("Overrides forceOpen and the
+	// manifest collapsed_default"). The key was parsed, validated and served,
+	// and had no effect whatsoever. Removed rather than left promising a
+	// behaviour the product doesn't implement. YAML decoding is lenient, so an
+	// app still declaring it is ignored, not rejected.
 	ShowSilent       *bool                `yaml:"show_silent,omitempty" json:"show_silent,omitempty"`
 	InjectIntent     *bool                `yaml:"inject_intent,omitempty" json:"inject_intent,omitempty"`
 	HideDetails      *bool                `yaml:"hide_details,omitempty" json:"hide_details,omitempty"`

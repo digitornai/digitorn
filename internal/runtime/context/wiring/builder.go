@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/digitornai/digitorn/internal/compiler/schema"
@@ -124,10 +125,31 @@ func (b *Builder) assemblePrompt(in runtime.ContextRequest, e *cacheEntry) strin
 		asm = prompt.NewAssembler()
 	}
 	var siblings []schema.Agent
+	// The app's bundled skills, as the catalogue the agent is shown. Only
+	// name + description — the body is fetched on demand through use_skill
+	// (progressive disclosure). This was never populated: SkillsSection is
+	// registered in the assembler and renders "Available skills (invoke via
+	// use_skill)", but with an empty list it short-circuits to "", so the
+	// model was handed the use_skill TOOL without ever being told what it
+	// could invoke.
+	var skills []prompt.SkillEntry
 	if in.App != nil && in.App.Definition != nil {
 		siblings = in.App.Definition.Agents
+		if dev := in.App.Definition.Dev; dev != nil {
+			for _, sk := range dev.Skills {
+				name := strings.TrimPrefix(sk.Command, "/")
+				if name == "" {
+					continue
+				}
+				skills = append(skills, prompt.SkillEntry{
+					Name:        name,
+					Description: sk.Description,
+				})
+			}
+		}
 	}
 	return asm.Assemble(prompt.PromptContext{
+		Skills:             skills,
 		Agent:              in.Agent,
 		AppName:            in.AppName,
 		AppVersion:         in.AppVersion,

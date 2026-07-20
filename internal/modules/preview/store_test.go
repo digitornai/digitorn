@@ -13,8 +13,8 @@ import (
 
 func TestSessionsAreIsolated(t *testing.T) {
 	s := NewStore()
-	s.Report("app", "A", Snapshot{URL: "http://a/", Text: "secret A"})
-	s.Report("app", "B", Snapshot{URL: "http://b/", Text: "secret B"})
+	s.Report("app", "A", Snapshot{URL: "http://a/", Text: "secret A"}, false)
+	s.Report("app", "B", Snapshot{URL: "http://b/", Text: "secret B"}, false)
 
 	a, ok := s.Observe("app", "A")
 	if !ok || a.Text != "secret A" {
@@ -33,8 +33,8 @@ func TestSameSessionIDUnderAnotherAppIsADifferentPreview(t *testing.T) {
 	// Session ids are not globally unique across apps; the key must carry both
 	// or one app could read another's preview by reusing an id.
 	s := NewStore()
-	s.Report("app-one", "S", Snapshot{Text: "one"})
-	s.Report("app-two", "S", Snapshot{Text: "two"})
+	s.Report("app-one", "S", Snapshot{Text: "one"}, false)
+	s.Report("app-two", "S", Snapshot{Text: "two"}, false)
 
 	if got, _ := s.Observe("app-one", "S"); got.Text != "one" {
 		t.Errorf("app-one sees %q", got.Text)
@@ -46,7 +46,7 @@ func TestSameSessionIDUnderAnotherAppIsADifferentPreview(t *testing.T) {
 
 func TestUnknownSessionReportsNothingRatherThanSomeoneElsesState(t *testing.T) {
 	s := NewStore()
-	s.Report("app", "A", Snapshot{Text: "secret A"})
+	s.Report("app", "A", Snapshot{Text: "secret A"}, false)
 
 	if snap, seen := s.Observe("app", "ghost"); seen || snap.Text != "" {
 		t.Fatalf("an unknown session must observe nothing, got %+v (seen=%v)", snap, seen)
@@ -132,7 +132,7 @@ func TestErrorsAccumulateDeduplicatedAndBounded(t *testing.T) {
 	s := NewStore()
 	boom := RuntimeError{Kind: "error", Message: "x is not a function", Line: 12}
 	for i := 0; i < 5; i++ {
-		s.Report("app", "A", Snapshot{Errors: []RuntimeError{boom}})
+		s.Report("app", "A", Snapshot{Errors: []RuntimeError{boom}}, false)
 	}
 	snap, _ := s.Observe("app", "A")
 	if len(snap.Errors) != 1 {
@@ -143,7 +143,7 @@ func TestErrorsAccumulateDeduplicatedAndBounded(t *testing.T) {
 	}
 
 	for i := 0; i < maxErrors*2; i++ {
-		s.Report("app", "A", Snapshot{Errors: []RuntimeError{{Kind: "error", Message: string(rune('a' + i%26)), Line: i}}})
+		s.Report("app", "A", Snapshot{Errors: []RuntimeError{{Kind: "error", Message: string(rune('a' + i%26)), Line: i}}}, false)
 	}
 	snap, _ = s.Observe("app", "A")
 	if len(snap.Errors) > maxErrors {
@@ -153,8 +153,8 @@ func TestErrorsAccumulateDeduplicatedAndBounded(t *testing.T) {
 
 func TestReportReplacesStateButKeepsErrors(t *testing.T) {
 	s := NewStore()
-	s.Report("app", "A", Snapshot{URL: "http://a/#/one", Errors: []RuntimeError{{Kind: "error", Message: "boom"}}})
-	s.Report("app", "A", Snapshot{URL: "http://a/#/two"})
+	s.Report("app", "A", Snapshot{URL: "http://a/#/one", Errors: []RuntimeError{{Kind: "error", Message: "boom"}}}, false)
+	s.Report("app", "A", Snapshot{URL: "http://a/#/two"}, false)
 
 	snap, _ := s.Observe("app", "A")
 	if snap.URL != "http://a/#/two" {
@@ -193,7 +193,7 @@ func TestConcurrentSessionsDoNotRace(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			sess := string(rune('A' + i%5))
-			s.Report("app", sess, Snapshot{Text: sess})
+			s.Report("app", sess, Snapshot{Text: sess}, false)
 			s.Take("app", sess)
 			s.Observe("app", sess)
 			s.Live("app", sess)
@@ -224,4 +224,73 @@ func waitFor(t *testing.T, cond func() bool) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatal("condition never became true")
+}
+
+// Clicking a real link is the case that broke in production: the browser
+// unloads the document before the page can answer, so the reply the caller is
+// waiting for can never arrive. It waited out its whole budget and reported
+// "the preview did not respond" — on a click that had in fact worked.
+//
+// The page that loads next announces itself as fresh, and that IS the outcome
+// of the click.
+func TestAReloadedPageAnswersTheCommandThatCausedIt(t *testing.T) {
+	s := NewStore()
+	s.Report("app", "A", Snapshot{URL: "http://a/#/dashboard"}, true)
+
+	done := make(chan Snapshot, 1)
+	go func() {
+		snap, err := s.Submit(context.Background(), "app", "A",
+			Command{ID: "c1", Do: "click", TextMatch: "E-Commerce"})
+		if err != nil {
+			t.Errorf("the click was reported as failed: %v", err)
+		}
+		done <- snap
+	}()
+	waitFor(t, func() bool { return len(s.peekQueue("app", "A")) == 1 })
+	s.Take("app", "A") // the page picked it up, then navigated away
+
+	// The document that replaces it checks in.
+	start := time.Now()
+	s.Report("app", "A", Snapshot{URL: "http://a/#/ecommerce", Text: "Produits"}, true)
+
+	select {
+	case snap := <-done:
+		if took := time.Since(start); took > 500*time.Millisecond {
+			t.Errorf("the caller was released after %v; a navigation must not cost it a timeout", took)
+		}
+		if snap.URL != "http://a/#/ecommerce" {
+			t.Errorf("the caller got %q, not the page the click led to", snap.URL)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the caller was never released: a click that navigates still hangs until it times out")
+	}
+}
+
+func TestAnOrdinaryReportDoesNotAnswerACommandStillRunning(t *testing.T) {
+	// The heartbeat and error bursts must not be mistaken for a command's
+	// result, or the agent reads the state from BEFORE its action.
+	s := NewStore()
+	s.Report("app", "A", Snapshot{URL: "http://a/#/one"}, true)
+
+	done := make(chan struct{})
+	go func() {
+		_, _ = s.Submit(context.Background(), "app", "A", Command{ID: "c1", Do: "click", Ref: "e1"})
+		close(done)
+	}()
+	waitFor(t, func() bool { return len(s.peekQueue("app", "A")) == 1 })
+	s.Take("app", "A")
+
+	s.Report("app", "A", Snapshot{URL: "http://a/#/one"}, false) // heartbeat
+	select {
+	case <-done:
+		t.Fatal("a routine report released a command that had not finished")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	s.Complete("app", "A", "c1", Snapshot{URL: "http://a/#/two"})
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the real completion never released the caller")
+	}
 }

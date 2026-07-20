@@ -36,6 +36,7 @@ type previewSnapshotDTO struct {
 	URL      string `json:"url"`
 	Title    string `json:"title"`
 	Ready    bool   `json:"ready"`
+	Fresh    bool   `json:"fresh"`
 	Blank    bool   `json:"blank"`
 	Text     string `json:"text"`
 	Elements []struct {
@@ -121,7 +122,7 @@ func (d *Daemon) postPreviewRuntime(w http.ResponseWriter, r *http.Request) {
 	if id := strings.TrimSpace(req.For); id != "" {
 		store.Complete(appID, sessionID, id, snap)
 	} else {
-		store.Report(appID, sessionID, snap)
+		store.Report(appID, sessionID, snap, req.Snapshot.Fresh)
 	}
 
 	// Hold the request until the agent asks for something. The page reconnects

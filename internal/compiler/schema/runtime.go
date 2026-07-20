@@ -36,11 +36,22 @@ type RuntimeBlock struct {
 	WorkbenchErrorMemory     *bool                `yaml:"workbench_error_memory,omitempty" json:"workbench_error_memory,omitempty"`
 	Flow                     *FlowConfig          `yaml:"flow,omitempty" json:"flow,omitempty"`
 	ProjectMemoryPath        string               `yaml:"-" json:"-"`
+	// DefaultMode names the mode a session starts on. Declared, not guessed:
+	// before it existed the default was hard-coded to "auto when present, else
+	// first declared", so an app could not open in `plan` without dropping or
+	// reordering its modes. Ignored when it names a mode the app doesn't have.
+	DefaultMode string `yaml:"default_mode,omitempty" json:"default_mode,omitempty"`
 	// ModesOrder is the YAML insertion order of the Modes map keys, captured
 	// at compile time (Go maps don't preserve order). The mode default-policy
 	// ("first declared when no auto") needs it ; without it the default would
 	// be non-deterministic.
-	ModesOrder []string `yaml:"-" json:"-"`
+	//
+	// It MUST be serialized: the compiled app is stored as JSON (codegen/codec)
+	// and `json:"-"` dropped the order on write. Reloading then rebuilt it by
+	// ranging the Modes map — Go randomizes that — so both the picker order and
+	// the default mode changed between daemon restarts. Still `yaml:"-"`: it is
+	// derived from the document, never authored by hand.
+	ModesOrder []string `yaml:"-" json:"modes_order,omitempty"`
 }
 
 type ModeDef struct {
@@ -50,7 +61,12 @@ type ModeDef struct {
 	Accent          string            `yaml:"accent,omitempty" json:"accent,omitempty"`
 	MaxTurns        *int              `yaml:"max_turns,omitempty" json:"max_turns,omitempty"`
 	Timeout         *float64          `yaml:"timeout,omitempty" json:"timeout,omitempty"`
-	WorkspaceMode   *string           `yaml:"workspace_mode,omitempty" json:"workspace_mode,omitempty"`
+	// NOTE: there used to be a `workspace_mode` here. It was copied into
+	// EffectiveTurn and read by nobody — no allowed values, no validation, no
+	// documentation, no app declaring it. Removed rather than left promising a
+	// behaviour that was never designed. (App-level `workdir_mode` is a
+	// different, real thing.) YAML decoding is lenient: an app still declaring
+	// it is ignored, not rejected.
 	SystemPrompt    string            `yaml:"system_prompt,omitempty" json:"system_prompt,omitempty"`
 	ToolGrants      []CapabilityGrant `yaml:"tool_grants,omitempty" json:"tool_grants,omitempty"`
 	BehaviorProfile string            `yaml:"behavior_profile,omitempty" json:"behavior_profile,omitempty"`

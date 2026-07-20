@@ -49,6 +49,13 @@ type SkillEntry struct {
 	Command     string
 	Description string
 	Content     string
+	// Dir is the absolute directory the skill file lives in, when the skill
+	// comes from an app bundle. Handed to the agent so a SKILL.md can point at
+	// its OWN sibling files and scripts ("run scripts/validate.py") and have
+	// them actually resolve — the progressive-disclosure level where a skill
+	// stops being a text blob and becomes a packaged capability. Empty for
+	// user-authored skills, which are a single stored text field.
+	Dir string
 }
 
 type AppCaller interface {
@@ -1062,15 +1069,22 @@ func (m *MetaDispatcher) handleUseSkill(ctx context.Context, call runtime.ToolIn
 	if err != nil {
 		return errored("use_skill: " + err.Error())
 	}
-	return jsonOutcome(map[string]any{
-		"success": true,
-		"data": map[string]any{
-			"command":     entry.Command,
-			"description": entry.Description,
-			"content":     entry.Content,
-			"note":        "Follow these instructions to complete the task.",
-		},
-	})
+	data := map[string]any{
+		"command":     entry.Command,
+		"description": entry.Description,
+		"content":     entry.Content,
+		"note":        "Follow these instructions to complete the task.",
+	}
+	// Bundled skills ship sibling files and scripts. Without an anchor the
+	// agent cannot resolve a relative reference in the markdown ("run
+	// scripts/validate.py") and has to guess a path. Handing over the skill's
+	// own directory is what turns a text blob into a packaged capability.
+	if entry.Dir != "" {
+		data["dir"] = entry.Dir
+		data["note"] = "Follow these instructions to complete the task. " +
+			"Files they reference are relative to `dir` — read or execute them from there."
+	}
+	return jsonOutcome(map[string]any{"success": true, "data": data})
 }
 
 // handleCallApp : invoke another deployed app and return its

@@ -12,6 +12,7 @@ import (
 
 	"github.com/digitornai/digitorn/internal/compiler"
 	"github.com/digitornai/digitorn/internal/compiler/schema"
+	"github.com/digitornai/digitorn/internal/runtime/mode"
 	"github.com/digitornai/digitorn/internal/persistence/models"
 )
 
@@ -358,11 +359,10 @@ func deriveModes(def *schema.AppDefinition) (modes []AppMode, defaultMode string
 			Accent:      md.Accent,
 		})
 	}
-	if _, ok := def.Runtime.Modes["auto"]; ok {
-		defaultMode = "auto"
-	} else if len(modes) > 0 {
-		defaultMode = modes[0].ID
-	}
+	// Single source of truth for the policy — it used to be duplicated here
+	// and in runtime/mode, which meant the API could advertise a default the
+	// turn engine would not actually use.
+	defaultMode = mode.DefaultModeID(def.Runtime.Modes, order, def.Runtime.DefaultMode)
 	return modes, defaultMode
 }
 
