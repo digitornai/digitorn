@@ -295,7 +295,15 @@ func vercelIsGithubAppMissing(e *vercelAPIError) bool {
 		return false
 	}
 	m := strings.ToLower(e.Error.Message)
-	return strings.Contains(m, "github") && (strings.Contains(m, "install") || strings.Contains(m, "integration"))
+	if !strings.Contains(m, "github") {
+		return false
+	}
+	// "login connection" is the wording Vercel actually returns when the
+	// account is not linked; matching only install/integration let the real
+	// message fall through to a raw error the user could not act on.
+	return strings.Contains(m, "install") ||
+		strings.Contains(m, "integration") ||
+		strings.Contains(m, "login connection")
 }
 
 func vercelCreateOrGetProject(ctx context.Context, token, teamID, name, repo string) (*vercelProject, bool, error) {
