@@ -737,6 +737,11 @@ func (d *Daemon) buildEngine() {
 		_, err := eng.Run(ctx, in)
 		return err
 	}, idleWindow, d.logger)
+	// Durable mirror of the in-memory FIFO + realtime notification. Strictly
+	// session-scoped: the row is appended to THAT session's event log and the
+	// event goes to THAT session's room, never a broadcast.
+	d.sessionRunner.queuedHook = d.onTurnQueued
+	d.sessionRunner.dequeuedHook = d.onTurnDequeued
 	bgMgr.AttachWaker(d.sessionRunner)
 	eng.BackgroundNotifications = &bgNotifierAdapter{mgr: bgMgr}
 

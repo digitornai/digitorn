@@ -646,7 +646,7 @@ func (d *Daemon) postMessage(w http.ResponseWriter, r *http.Request) {
 	// messages are write-throughs from upstream callers and must NOT
 	// re-enter the runtime (assistant in particular would loop).
 	if role == "user" && d.engine != nil && appID != "" {
-		d.runTurnAsync(r.Context(), sid, appID, userIDOf(r.Context()), extractBearer(r), req.Mode, req.Skill, req.Template)
+		d.runTurnAsyncMsg(sid, appID, userIDOf(r.Context()), extractBearer(r), req.Mode, req.Skill, req.Template, req.ClientMessageID, content)
 	}
 
 	writeJSON(w, http.StatusCreated, map[string]any{
@@ -665,17 +665,26 @@ func (d *Daemon) postMessage(w http.ResponseWriter, r *http.Request) {
 // once. The assistant reply reaches the client via the session-store →
 // Socket.IO bridge ; errors are logged inside the runner.
 func (d *Daemon) runTurnAsync(_ context.Context, sid, appID, userID, userJWT, mode, skill, template string) {
+	d.runTurnAsyncMsg(sid, appID, userID, userJWT, mode, skill, template, "", "")
+}
+
+// runTurnAsyncMsg carries the queue metadata (correlation + preview text) so a
+// turn that ends up waiting behind another can be mirrored durably and shown in
+// the client's queue panel.
+func (d *Daemon) runTurnAsyncMsg(sid, appID, userID, userJWT, mode, skill, template, clientMessageID, message string) {
 	if d.sessionRunner == nil {
 		return
 	}
 	d.sessionRunner.WakeTurn(runtime.TurnInput{
-		AppID:     appID,
-		SessionID: sid,
-		UserID:    userID,
-		UserJWT:   userJWT,
-		Mode:      mode,
-		Skill:     skill,
-		Template:  template,
+		AppID:           appID,
+		SessionID:       sid,
+		UserID:          userID,
+		UserJWT:         userJWT,
+		Mode:            mode,
+		Skill:           skill,
+		Template:        template,
+		ClientMessageID: clientMessageID,
+		Message:         message,
 	})
 }
 

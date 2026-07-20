@@ -483,6 +483,13 @@ type TurnInput struct {
 	AgentRunID string
 
 	SubAgent bool
+
+	// Queue metadata — set only on the user-message path (postMessage), used to
+	// mirror a queued turn durably and to let the web reconcile its optimistic
+	// row. ClientMessageID is the correlation the client already generates and
+	// sends; Message is the preview text shown in the queue panel.
+	ClientMessageID string
+	Message         string
 }
 
 // injectTemplateDirective injects the selected template's system_prompt as a
