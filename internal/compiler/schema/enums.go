@@ -466,3 +466,24 @@ var AllPayloadFieldTypes = []PayloadFieldType{
 	PayloadFieldString, PayloadFieldNumber, PayloadFieldInteger,
 	PayloadFieldBoolean, PayloadFieldSelect, PayloadFieldText,
 }
+
+// MidTurnMode is how a session treats a user message that arrives mid-turn.
+type MidTurnMode string
+
+const (
+	// MidTurnQueue holds the message until the running turn ends.
+	MidTurnQueue MidTurnMode = "queue"
+	// MidTurnInject folds it into the running turn at the next safe boundary.
+	MidTurnInject MidTurnMode = "inject"
+)
+
+var AllMidTurnModes = []MidTurnMode{MidTurnQueue, MidTurnInject}
+
+// Resolved returns the effective mode, defaulting to queue (the conservative
+// choice: an unset app behaves exactly as before).
+func (m MidTurnMode) Resolved() MidTurnMode {
+	if m == MidTurnInject {
+		return MidTurnInject
+	}
+	return MidTurnQueue
+}

@@ -36,6 +36,18 @@ type RuntimeBlock struct {
 	WorkbenchErrorMemory     *bool                `yaml:"workbench_error_memory,omitempty" json:"workbench_error_memory,omitempty"`
 	Flow                     *FlowConfig          `yaml:"flow,omitempty" json:"flow,omitempty"`
 	ProjectMemoryPath        string               `yaml:"-" json:"-"`
+	// MidTurnMessages decides what happens to a message sent WHILE a turn runs:
+	//
+	//   "queue"  (default) — it waits for the turn to finish, then runs as its
+	//                        own turn. The running agent never sees it.
+	//   "inject"           — it enters the RUNNING turn at the next safe
+	//                        boundary (after the current tool's results are
+	//                        persisted, so the provider contract holds) and no
+	//                        follow-up turn is scheduled.
+	//
+	// Before this existed both happened at once: the running turn saw the
+	// message AND a follow-up turn replayed it.
+	MidTurnMessages MidTurnMode `yaml:"mid_turn_messages,omitempty" json:"mid_turn_messages,omitempty"`
 	// DefaultMode names the mode a session starts on. Declared, not guessed:
 	// before it existed the default was hard-coded to "auto when present, else
 	// first declared", so an app could not open in `plan` without dropping or

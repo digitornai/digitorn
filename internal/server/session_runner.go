@@ -60,10 +60,21 @@ type sessionRunState struct {
 	// Both are decided under `mu`, because append and drain must be atomic
 	// against `running`; the durable `message_queued` events are the mirror the
 	// client reads and the daemon replays after a restart.
-	queue       []runtime.TurnInput
+	queue       []queuedTurn
 	wakePending bool
 	wakeInput   runtime.TurnInput
 	lastJWT     string
+}
+
+// queuedTurn is one waiting USER turn. `persist` is the deferred write of its
+// user_message: nil means "already persisted" (the WakeTurn / voice path, whose
+// caller wrote the message before enqueuing) and the loop skips it; non-nil is
+// the postMessage queue path, where the message must NOT enter the chat until
+// its turn actually starts — the loop calls persist() at dequeue, so the bubble
+// appears exactly then, not on send.
+type queuedTurn struct {
+	in      runtime.TurnInput
+	persist func() (uint64, error)
 }
 
 func newSessionRunner(
@@ -146,7 +157,9 @@ func (r *sessionRunner) WakeTurn(in runtime.TurnInput) {
 		in.UserJWT = st.lastJWT
 	}
 	if st.running {
-		st.queue = append(st.queue, in)
+		// persist nil: WakeTurn's callers (voice) already wrote the message, so
+		// there is nothing to defer — the loop just runs it when its turn comes.
+		st.queue = append(st.queue, queuedTurn{in: in})
 		depth := len(st.queue)
 		st.mu.Unlock()
 		// Durable mirror + client notification happen OUTSIDE the lock: they do
@@ -158,6 +171,59 @@ func (r *sessionRunner) WakeTurn(in runtime.TurnInput) {
 	st.mu.Unlock()
 
 	go r.loop(st, in)
+}
+
+// SubmitUserTurn is the USER-MESSAGE path (postMessage). Unlike WakeTurn it
+// owns WHEN the message is written, so a message sent mid-turn does not enter
+// the chat until its turn starts:
+//
+//   idle   → persist NOW (the message is in the chat + snapshot), then run.
+//   busy   → enqueue with the deferred persist; the message is NOT written yet,
+//            only message_queued is emitted; the loop persists it at dequeue.
+//
+// The decision is atomic under st.mu against `running`, so no message can slip
+// between "is a turn running?" and the action. persist returns the durable seq
+// (for the idle path's HTTP response); it must use a detached context because
+// on the queued path it runs long after the request is gone.
+func (r *sessionRunner) SubmitUserTurn(in runtime.TurnInput, persist func() (uint64, error)) (queued bool, depth int, seq uint64, err error) {
+	if r == nil || in.SessionID == "" || in.AppID == "" || persist == nil {
+		return false, 0, 0, errors.New("submit: missing runner, ids, or persist")
+	}
+	v, _ := r.states.LoadOrStore(in.SessionID, &sessionRunState{})
+	st := v.(*sessionRunState)
+
+	st.mu.Lock()
+	if in.UserJWT != "" {
+		st.lastJWT = in.UserJWT
+	} else if st.lastJWT != "" {
+		in.UserJWT = st.lastJWT
+	}
+	if st.running {
+		st.queue = append(st.queue, queuedTurn{in: in, persist: persist})
+		depth = len(st.queue)
+		st.mu.Unlock()
+		r.onQueued(in, depth)
+		return true, depth, 0, nil
+	}
+	st.running = true
+	st.mu.Unlock()
+
+	seq, err = persist()
+	if err != nil {
+		// The write failed, so there is no turn to start. Release the lane; if a
+		// message landed in the queue during our persist, wake the session so it
+		// still gets drained rather than stranded behind running=false.
+		st.mu.Lock()
+		st.running = false
+		drain := len(st.queue) > 0
+		st.mu.Unlock()
+		if drain {
+			r.WakeSession(in.AppID, in.SessionID, in.UserID)
+		}
+		return false, 0, 0, err
+	}
+	go r.loop(st, in)
+	return false, 0, seq, nil
 }
 
 // WakeSession is the PROACTIVE path (background completion, voice barge-in):
@@ -213,9 +279,24 @@ func (r *sessionRunner) loop(st *sessionRunState, in runtime.TurnInput) {
 		st.mu.Lock()
 		// User messages first, in order: they are what the user is waiting on.
 		if len(st.queue) > 0 {
-			in = st.queue[0]
+			qt := st.queue[0]
 			st.queue = st.queue[1:]
 			st.mu.Unlock()
+			// Deferred write: a postMessage-queued message becomes a real
+			// user_message HERE, at the start of its turn, not when it was sent.
+			// A persist failure is a hard storage error; log and skip this one
+			// rather than block the whole queue behind it.
+			if qt.persist != nil {
+				if _, perr := qt.persist(); perr != nil {
+					if r.logger != nil {
+						r.logger.Error("session_runner: queued message persist failed, skipping",
+							slog.String("session_id", qt.in.SessionID),
+							slog.String("err", perr.Error()))
+					}
+					continue
+				}
+			}
+			in = qt.in
 			// Same lock guards append and drain, so a message enqueued while
 			// this turn was finishing can never be stranded by `running=false`.
 			r.onDequeued(in)

@@ -630,25 +630,75 @@ func (d *Daemon) postMessage(w http.ResponseWriter, r *http.Request) {
 			TriggerEvent:    req.TriggerEvent,
 		},
 	}
-	ctxApp, cancelApp := appendCtx(r.Context())
-	defer cancelApp()
-	seq, err := d.sessionStore.AppendDurable(ctxApp, ev)
-	if err != nil {
-		writeError(w, appendErrStatus(err), "append_failed", err.Error())
+	// Non-user writes (assistant / system / tool write-throughs) and the
+	// no-runtime fallback keep the ORIGINAL behaviour untouched: persist now,
+	// schedule nothing. This is the common branch and it must not change.
+	isUserTurn := role == "user" && d.engine != nil && appID != "" && d.sessionRunner != nil
+	if !isUserTurn {
+		ctxApp, cancelApp := appendCtx(r.Context())
+		defer cancelApp()
+		seq, err := d.sessionStore.AppendDurable(ctxApp, ev)
+		if err != nil {
+			writeError(w, appendErrStatus(err), "append_failed", err.Error())
+			return
+		}
+		d.touchContext(sid)
+		writeJSON(w, http.StatusCreated, map[string]any{
+			"session_id": sid,
+			"seq":        seq,
+			"role":       role,
+			"ts":         time.Now().UTC().Format(time.RFC3339Nano),
+		})
 		return
 	}
-	// A new message changed the context : refresh the exact gauge NOW (per-session,
-	// non-blocking) so the occupancy is up to date the instant the message lands,
-	// not only once the turn builds its first request. sid is this session's own id.
-	d.touchContext(sid)
 
-	// User messages trigger the agent turn. Assistant / system / tool
-	// messages are write-throughs from upstream callers and must NOT
-	// re-enter the runtime (assistant in particular would loop).
-	if role == "user" && d.engine != nil && appID != "" {
-		d.runTurnAsyncMsg(sid, appID, userIDOf(r.Context()), extractBearer(r), req.Mode, req.Skill, req.Template, req.ClientMessageID, content)
+	// User turn. The runner decides ATOMICALLY whether this runs now or waits
+	// behind a running turn. The write is DEFERRED to whichever moment the turn
+	// actually starts, so a message sent mid-turn does not appear in the chat
+	// until then — it lives in the queue panel meanwhile.
+	//
+	// Detached context inside persist: on the queued path it runs long after
+	// this request has returned. The idempotency re-check guards a client retry
+	// that lands while the message is still waiting.
+	persist := func() (uint64, error) {
+		if existing, ok := state.SeenClientMessage(req.ClientMessageID); ok && req.ClientMessageID != "" {
+			return existing, nil
+		}
+		ctxA, cancelA := appendCtx(context.Background())
+		defer cancelA()
+		return d.sessionStore.AppendDurable(ctxA, ev)
 	}
-
+	in := runtime.TurnInput{
+		AppID:           appID,
+		SessionID:       sid,
+		UserID:          userIDOf(r.Context()),
+		UserJWT:         extractBearer(r),
+		Mode:            req.Mode,
+		Skill:           req.Skill,
+		Template:        req.Template,
+		ClientMessageID: req.ClientMessageID,
+		Message:         content,
+	}
+	queued, depth, seq, serr := d.sessionRunner.SubmitUserTurn(in, persist)
+	if serr != nil {
+		writeError(w, appendErrStatus(serr), "append_failed", serr.Error())
+		return
+	}
+	if queued {
+		// The message is buffered, NOT written to the transcript yet. The client
+		// keeps its optimistic queue row on this "queued" status.
+		writeJSON(w, http.StatusAccepted, map[string]any{
+			"session_id":     sid,
+			"role":           role,
+			"status":         "queued",
+			"correlation_id": req.ClientMessageID,
+			"position":       depth,
+			"ts":             time.Now().UTC().Format(time.RFC3339Nano),
+		})
+		return
+	}
+	// Ran immediately: the message is now in the transcript with `seq`.
+	d.touchContext(sid)
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"session_id": sid,
 		"seq":        seq,
@@ -665,13 +715,13 @@ func (d *Daemon) postMessage(w http.ResponseWriter, r *http.Request) {
 // once. The assistant reply reaches the client via the session-store →
 // Socket.IO bridge ; errors are logged inside the runner.
 func (d *Daemon) runTurnAsync(_ context.Context, sid, appID, userID, userJWT, mode, skill, template string) {
-	d.runTurnAsyncMsg(sid, appID, userID, userJWT, mode, skill, template, "", "")
+	d.runTurnAsyncMsg(sid, appID, userID, userJWT, mode, skill, template, "", "", 0)
 }
 
 // runTurnAsyncMsg carries the queue metadata (correlation + preview text) so a
 // turn that ends up waiting behind another can be mirrored durably and shown in
 // the client's queue panel.
-func (d *Daemon) runTurnAsyncMsg(sid, appID, userID, userJWT, mode, skill, template, clientMessageID, message string) {
+func (d *Daemon) runTurnAsyncMsg(sid, appID, userID, userJWT, mode, skill, template, clientMessageID, message string, messageSeq uint64) {
 	if d.sessionRunner == nil {
 		return
 	}
@@ -685,6 +735,7 @@ func (d *Daemon) runTurnAsyncMsg(sid, appID, userID, userJWT, mode, skill, templ
 		Template:        template,
 		ClientMessageID: clientMessageID,
 		Message:         message,
+		MessageSeq:      messageSeq,
 	})
 }
 

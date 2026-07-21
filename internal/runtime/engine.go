@@ -490,6 +490,10 @@ type TurnInput struct {
 	// sends; Message is the preview text shown in the queue panel.
 	ClientMessageID string
 	Message         string
+	// MessageSeq is the durable seq of the user message this turn answers. The
+	// mid-turn cutoff is raised to it when the message is injected into a
+	// running turn.
+	MessageSeq uint64
 }
 
 // injectTemplateDirective injects the selected template's system_prompt as a
