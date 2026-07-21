@@ -152,3 +152,90 @@ func (d *Daemon) emitQueueCancelled(sid, appID, uid, clientMessageID string) {
 			"session_id", sid, "err", err.Error())
 	}
 }
+
+// rehydrateQueue recovers queued messages that survived a daemon restart. The
+// durable projection still has them, but the in-memory runner lost them, so
+// they display "in queue" and never run. Runs ONCE per session (TryMarkRehydrated).
+//
+// Strategy: for each still-queued row, cancel the stale durable row, then
+// re-submit it through the normal path (SubmitUserTurn), which runs it now if
+// the lane is free or re-queues it — preserving FIFO order. A row with
+// attachments cannot be rebuilt (only the COUNT was persisted, not the blobs),
+// so it is cancelled without re-submit rather than sent stripped of its files.
+func (d *Daemon) rehydrateQueue(sid, appID, userID, userJWT string) {
+	if d == nil || d.sessionRunner == nil || d.sessionStore == nil {
+		return
+	}
+	// One-shot: only the first opener recovers the queue.
+	if !d.sessionRunner.TryMarkRehydrated(sid) {
+		return
+	}
+	// A turn already running for this session means its queue is live in memory,
+	// not orphaned — nothing to recover.
+	if d.sessionRunner.IsRunning(sid) {
+		return
+	}
+	state, err := d.sessionStore.State(sid)
+	if err != nil || state == nil {
+		return
+	}
+	state.RLock()
+	orphans := make([]sessionstore.QueueEntry, 0, len(state.Queue))
+	for _, e := range state.Queue {
+		if e.Status == "queued" && e.CorrelationID != "" {
+			orphans = append(orphans, e)
+		}
+	}
+	state.RUnlock()
+	if len(orphans) == 0 {
+		return
+	}
+
+	for i := range orphans {
+		e := orphans[i]
+		// Drop the stale durable row first; the re-submit (if any) creates a
+		// fresh one, and the client converges on the new state.
+		d.emitQueueCancelled(sid, appID, userID, e.CorrelationID)
+
+		if e.AttachmentCount > 0 {
+			// Blobs are gone — only the count was persisted. Cancelling is the
+			// honest outcome: better a missing message the user can resend than
+			// one silently stripped of its images.
+			if d.logger != nil {
+				d.logger.Warn("queue: dropping orphaned message with attachments (blobs not recoverable)",
+					"session_id", sid, "correlation_id", e.CorrelationID, "attachments", e.AttachmentCount)
+			}
+			continue
+		}
+
+		in := runtime.TurnInput{
+			AppID:           appID,
+			SessionID:       sid,
+			UserID:          userID,
+			UserJWT:         userJWT,
+			ClientMessageID: e.CorrelationID,
+			Message:         e.Message,
+		}
+		msg := e.Message
+		cid := e.CorrelationID
+		persist := func() (uint64, error) {
+			ctxA, cancelA := appendCtx(context.Background())
+			defer cancelA()
+			return d.sessionStore.AppendDurable(ctxA, sessionstore.Event{
+				Type:      sessionstore.EventUserMessage,
+				SessionID: sid,
+				AppID:     appID,
+				UserID:    userID,
+				Message: &sessionstore.MessagePayload{
+					Role:            "user",
+					Content:         msg,
+					ClientMessageID: cid,
+				},
+			})
+		}
+		if _, _, _, serr := d.sessionRunner.SubmitUserTurn(in, persist); serr != nil && d.logger != nil {
+			d.logger.Warn("queue: rehydrate re-submit failed",
+				"session_id", sid, "correlation_id", cid, "err", serr.Error())
+		}
+	}
+}

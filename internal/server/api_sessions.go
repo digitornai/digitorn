@@ -537,6 +537,12 @@ func (d *Daemon) getQueue(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	// Recover messages orphaned by a daemon restart (durable but lost from the
+	// in-memory runner) BEFORE snapshotting, so the response reflects the
+	// recovered state. One-shot per session; no-op when nothing is orphaned.
+	appID := chi.URLParam(r, "app_id")
+	d.rehydrateQueue(sid, appID, userIDOf(r.Context()), extractBearer(r))
+
 	state.RLock()
 	rows := append([]sessionstore.QueueEntry(nil), state.Queue...)
 	state.RUnlock()

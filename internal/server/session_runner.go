@@ -64,6 +64,10 @@ type sessionRunState struct {
 	wakePending bool
 	wakeInput   runtime.TurnInput
 	lastJWT     string
+	// rehydrated guards the one-shot queue recovery: after a daemon restart the
+	// durable projection still holds queued rows the in-memory runner lost, so
+	// the first client that opens the session re-submits them. Set once.
+	rehydrated bool
 }
 
 // queuedTurn is one waiting USER turn. `persist` is the deferred write of its
@@ -168,6 +172,24 @@ func (r *sessionRunner) ClearQueued(sessionID string) []string {
 	}
 	st.queue = nil
 	return ids
+}
+
+// TryMarkRehydrated returns true exactly once per session (per daemon lifetime):
+// the caller that gets true owns the queue recovery. Idempotent and concurrency
+// safe — a second opener, a reconnect, or a parallel GET /queue gets false.
+func (r *sessionRunner) TryMarkRehydrated(sessionID string) bool {
+	if r == nil || sessionID == "" {
+		return false
+	}
+	v, _ := r.states.LoadOrStore(sessionID, &sessionRunState{})
+	st := v.(*sessionRunState)
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if st.rehydrated {
+		return false
+	}
+	st.rehydrated = true
+	return true
 }
 
 // IsRunning reports whether a turn is currently executing for the session (a
