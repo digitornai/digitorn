@@ -140,6 +140,11 @@ func (b *SocketIOBridge) Stop(ctx context.Context) error {
 }
 
 func (b *SocketIOBridge) dispatchToRealtime(ev sessionstore.Event) {
+	// Internal steering directives (e.g. the mid-turn inject nudge) live in the
+	// durable log for the model but must never reach the client transcript.
+	if ev.HiddenFromClient() {
+		return
+	}
 	room := sessionstore.PrimaryRoomFor(&ev)
 	if room == "" {
 		b.dropsNoRouting.Add(1)

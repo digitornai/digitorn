@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"net/http"
-	"time"
 
 	"github.com/digitornai/digitorn/internal/compiler/schema"
 	"github.com/digitornai/digitorn/internal/runtime"
@@ -61,6 +60,42 @@ func (d *Daemon) onTurnQueued(in runtime.TurnInput, depth int) {
 		d.logger.Warn("queue: message_queued append failed",
 			"session_id", in.SessionID, "err", err.Error())
 	}
+}
+
+// enqueueMidTurnInject writes an inject-tagged queue row for a message sent
+// while a turn is running (mid_turn_messages: inject). It is NOT fed to the
+// runner FIFO — the engine's drain (drainMidTurnInject) folds it into the
+// CURRENT turn at the next tool-call boundary, where its user_message gets its
+// seq. Until then it shows in the queue panel exactly like a normal queued row.
+func (d *Daemon) enqueueMidTurnInject(sid, appID, uid, cid, message string, attachmentCount int) error {
+	if cid == "" {
+		cid = uuid.NewString()
+	}
+	position := 1
+	if state, err := d.sessionStore.State(sid); err == nil && state != nil {
+		state.RLock()
+		position = len(state.Queue) + 1
+		state.RUnlock()
+	}
+	ctxA, cancelA := appendCtx(context.Background())
+	defer cancelA()
+	_, err := d.sessionStore.AppendDurable(ctxA, sessionstore.Event{
+		Type:          sessionstore.EventMessageQueued,
+		SessionID:     sid,
+		AppID:         appID,
+		UserID:        uid,
+		CorrelationID: cid,
+		Queue: &sessionstore.QueuePayload{
+			ID:              uuid.NewString(),
+			CorrelationID:   cid,
+			Message:         message,
+			Status:          "queued",
+			Position:        position,
+			AttachmentCount: attachmentCount,
+			Inject:          true,
+		},
+	})
+	return err
 }
 
 // onTurnDequeued fires when a queued row leaves the FIFO to become the running
@@ -257,12 +292,59 @@ func (d *Daemon) midTurnMode(ctx context.Context, appID string) schema.MidTurnMo
 	return rt.Definition.Runtime.MidTurnMessages.Resolved()
 }
 
+// drainMidTurnInject folds every queued inject row into the RUNNING turn at a
+// tool-call boundary: each becomes a user_message (its seq allocated HERE, so it
+// sorts into its injection position instead of stuck at the turn's tail) plus
+// the steering directive, and its queue row is removed (message_started). Called
+// by the engine at each iteration boundary before it rebuilds the LLM messages;
+// returns true if anything was injected so the engine refreshes its snapshot.
+// Cheap no-op for queue-mode apps — they never enqueue Inject rows.
+func (d *Daemon) drainMidTurnInject(_ context.Context, sid, appID string) bool {
+	if d == nil || d.sessionStore == nil || sid == "" {
+		return false
+	}
+	state, err := d.sessionStore.State(sid)
+	if err != nil || state == nil {
+		return false
+	}
+	type pending struct{ cid, msg string }
+	var todo []pending
+	var uid string
+	state.RLock()
+	uid = state.UserID
+	for _, e := range state.Queue {
+		if e.Inject {
+			todo = append(todo, pending{cid: e.CorrelationID, msg: e.Message})
+		}
+	}
+	state.RUnlock()
+	if len(todo) == 0 {
+		return false
+	}
+	for _, p := range todo {
+		if _, ierr := d.injectMidTurn(sid, appID, uid, p.cid, p.msg); ierr != nil {
+			if d.logger != nil {
+				d.logger.Warn("inject: drain append failed",
+					"session_id", sid, "cid", p.cid, "err", ierr.Error())
+			}
+			continue
+		}
+		// Remove the panel row NOW (before any re-entrant drain) so the same
+		// message can never be injected twice.
+		d.onTurnDequeued(runtime.TurnInput{
+			SessionID: sid, AppID: appID, UserID: uid, ClientMessageID: p.cid,
+		})
+	}
+	return true
+}
+
 // injectMidTurn persists a user message so the RUNNING turn picks it up on its
 // next iteration (buildLLMMessages re-reads the snapshot every loop), then a
 // short system directive right after that tells the agent to act on it — the
 // same shape the user's own harness uses. The user message shows as a normal
 // bubble; the directive is hidden from the transcript (source mid_turn_inject,
-// filtered client-side) but seen by the model.
+// filtered client-side) but seen by the model. Called from the mid-turn drain
+// at a tool-call boundary, so its seq lands at the injection point.
 //
 // Order matters: user message first (seq N), directive after (seq N+1), so the
 // directive's "message above" refers to it. repairToolPairing guarantees the
@@ -322,26 +404,18 @@ func (d *Daemon) midTurnRefire(sid string) bool {
 		return false
 	}
 	state.RLock()
-	appID := state.AppID
-	unanswered := lastTurnMessageIsUnansweredUser(state.Messages)
-	state.RUnlock()
-	if !unanswered {
-		return false
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	return d.midTurnMode(ctx, appID) == schema.MidTurnInject
+	defer state.RUnlock()
+	return hasPendingInject(state.Queue)
 }
 
-// lastTurnMessageIsUnansweredUser: the last non-system message is a user message
-// (an assistant reply after it would mean it was handled). System messages are
-// the injected directives and are skipped.
-func lastTurnMessageIsUnansweredUser(msgs []sessionstore.Message) bool {
-	for i := len(msgs) - 1; i >= 0; i-- {
-		if msgs[i].Role == "system" {
-			continue
+// hasPendingInject reports whether any queue row is an undrained inject message
+// (only inject-mode apps ever create these). The follow-up turn's iter-0 drain
+// consumes them, so this flips to false as soon as they are handled.
+func hasPendingInject(queue []sessionstore.QueueEntry) bool {
+	for i := range queue {
+		if queue[i].Inject {
+			return true
 		}
-		return msgs[i].Role == "user"
 	}
 	return false
 }

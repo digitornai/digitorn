@@ -171,6 +171,10 @@ type QueueEntry struct {
 	StartedAt  int64  `json:"started_at,omitempty"`
 	FinishedAt int64  `json:"finished_at,omitempty"`
 	ErrorCode  string `json:"error_code,omitempty"`
+	// Inject: this row is folded into the RUNNING turn at the next tool-call
+	// boundary (mid_turn_messages: inject), not run as a separate turn after it.
+	// The runner never claims it; the engine's mid-turn drain consumes it.
+	Inject bool `json:"inject,omitempty"`
 }
 
 type ChildAgent struct {

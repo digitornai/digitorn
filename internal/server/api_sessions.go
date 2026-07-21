@@ -432,8 +432,9 @@ func (d *Daemon) getHistory(w http.ResponseWriter, r *http.Request) {
 	// in-memory state — whose message slice is bounded to the model's window.
 	// Durable-append (fsync before projection) guarantees disk is never behind.
 	snap, _, _ := sessionstore.ReadSnapshot(d.sessionPaths.SessionDir(sid))
-	transcript := sessionstore.TranscriptFromParts(snap, jres.Events)
-	resp := sessionstore.BuildHistory(state, transcript, jres.Events, sessionstore.ViewOptions{
+	visible := filterClientHidden(jres.Events)
+	transcript := sessionstore.TranscriptFromParts(snap, visible)
+	resp := sessionstore.BuildHistory(state, transcript, visible, sessionstore.ViewOptions{
 		IncludePayload: true,
 		StartSeq:       since,
 		MaxEvents:      limit,
@@ -455,12 +456,34 @@ func (d *Daemon) getEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	since := parseUint64Query(r, "since", 0)
 	limit := parseIntQuery(r, "limit", 0)
-	resp := sessionstore.BuildEvents(jres.Events, sessionstore.ViewOptions{
+	resp := sessionstore.BuildEvents(filterClientHidden(jres.Events), sessionstore.ViewOptions{
 		IncludePayload: true,
 		StartSeq:       since,
 		MaxEvents:      limit,
 	})
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// filterClientHidden drops internal steering directives (mid-turn inject, …)
+// from a slice bound for the frontend. Returns the input unchanged when there
+// is nothing to hide, so the common path allocates nothing.
+func filterClientHidden(events []sessionstore.Event) []sessionstore.Event {
+	hidden := 0
+	for i := range events {
+		if events[i].HiddenFromClient() {
+			hidden++
+		}
+	}
+	if hidden == 0 {
+		return events
+	}
+	out := make([]sessionstore.Event, 0, len(events)-hidden)
+	for i := range events {
+		if !events[i].HiddenFromClient() {
+			out = append(out, events[i])
+		}
+	}
+	return out
 }
 
 func (d *Daemon) getState(w http.ResponseWriter, r *http.Request) {
@@ -580,6 +603,10 @@ type postMessageRequest struct {
 	// as a forced system directive for this turn.
 	Skill string `json:"skill,omitempty"`
 	Template string `json:"template_id,omitempty"`
+	// MidTurnMode is the per-app client override for a message sent while a turn
+	// runs ("queue" | "inject"). Empty → the app's .dgc default (midTurnMode).
+	// The app-settings toggle sends it; it decides queue vs mid-turn inject here.
+	MidTurnMode string `json:"mid_turn_mode,omitempty"`
 	// TriggerEvent is the structured inbound event for non-human launchers.
 	TriggerEvent map[string]any `json:"trigger_event,omitempty"`
 }
@@ -661,25 +688,31 @@ func (d *Daemon) postMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Mid-turn INJECT: if the app opts into inject mode AND a turn is running,
-	// fold the message into that turn NOW instead of queueing. It is persisted
-	// immediately, so the running turn sees it on its next iteration
-	// (buildLLMMessages re-reads the snapshot each loop). A message that lands
-	// after the turn has stopped iterating is caught by the runner loop's
-	// mid-turn safety net; a message on an idle session falls through to the
-	// normal SubmitUserTurn path below (a fresh turn).
-	if d.midTurnMode(r.Context(), appID) == schema.MidTurnInject && d.sessionRunner.IsRunning(sid) {
-		seq, ierr := d.injectMidTurn(sid, appID, userIDOf(r.Context()), req.ClientMessageID, content)
-		if ierr != nil {
+	// the message WAITS in the queue panel and is folded into that turn at the
+	// next tool-call boundary — NOT injected into the chat immediately. The
+	// engine's drain (drainMidTurnInject) turns the row into a user_message
+	// there, so its seq lands at the injection point (not stuck at the tail) and
+	// the model sees it between tool calls, the way the user's own harness
+	// surfaces a mid-turn message. It never enters the runner FIFO, so it is
+	// never re-run as a separate turn. A message that lands after the turn's last
+	// boundary is caught by the runner loop's mid-turn safety net; a message on
+	// an idle session falls through to the normal SubmitUserTurn path (fresh turn).
+	// Per-app client override wins over the .dgc default when present.
+	effectiveMidTurn := d.midTurnMode(r.Context(), appID)
+	if req.MidTurnMode != "" {
+		effectiveMidTurn = schema.MidTurnMode(req.MidTurnMode).Resolved()
+	}
+	if effectiveMidTurn == schema.MidTurnInject && d.sessionRunner.IsRunning(sid) {
+		if ierr := d.enqueueMidTurnInject(sid, appID, userIDOf(r.Context()), req.ClientMessageID, content, len(req.Attachments)); ierr != nil {
 			writeError(w, appendErrStatus(ierr), "append_failed", ierr.Error())
 			return
 		}
-		d.touchContext(sid)
-		writeJSON(w, http.StatusCreated, map[string]any{
-			"session_id": sid,
-			"seq":        seq,
-			"role":       role,
-			"status":     "injected",
-			"ts":         time.Now().UTC().Format(time.RFC3339Nano),
+		writeJSON(w, http.StatusAccepted, map[string]any{
+			"session_id":     sid,
+			"role":           role,
+			"status":         "queued",
+			"correlation_id": req.ClientMessageID,
+			"ts":             time.Now().UTC().Format(time.RFC3339Nano),
 		})
 		return
 	}

@@ -53,6 +53,14 @@ type Options struct {
 type Turn struct {
 	ID        string
 	StepID    string
+	// SegmentID keys the correlation of CONTENT events (assistant message,
+	// tool call/result, streaming deltas) so they group into one chat bubble.
+	// It equals ID for the whole turn EXCEPT after a mid-turn inject: the drain
+	// bumps it to "<ID>#iN" so post-injection content starts a NEW bubble that
+	// sorts BELOW the injected user message (instead of stuck at the turn tail).
+	// Lifecycle events (started/ended/error/retry-telemetry) keep ID. Empty =
+	// "not set" → Corr() falls back to ID (sub-agent turns, tests).
+	SegmentID string
 	SessionID string
 	AppID     string
 	AgentID   string
@@ -201,6 +209,16 @@ func (t *Turn) Phase() Phase {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.currentPhase
+}
+
+// Corr is the correlation id CONTENT events must use to group into a chat
+// bubble: the current segment if one was set (after a mid-turn inject), else
+// the turn ID. Lifecycle events keep t.ID directly. Safe on a nil-segment turn.
+func (t *Turn) Corr() string {
+	if t.SegmentID != "" {
+		return t.SegmentID
+	}
+	return t.ID
 }
 
 // CloseDone is the success terminal. Transitions to PhaseDone (if not

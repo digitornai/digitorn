@@ -476,6 +476,9 @@ func (d *Daemon) buildEngine() {
 	// provider anchor keeps the gauge exact per turn.
 	eng.ContextTouch = d.touchContext
 	eng.ContextIncrement = d.touchContextIncrement
+	// Mid-turn inject (mid_turn_messages: inject): the engine calls this at each
+	// tool-call boundary to fold queued inject rows into the running turn.
+	eng.DrainMidTurnInject = d.drainMidTurnInject
 	// CTX-7 breakdown : the engine reports the assembled system prompt + tool
 	// schemas at request-build so the background recount can attribute the
 	// system / tools / messages buckets. Non-blocking (a map store + a Touch).

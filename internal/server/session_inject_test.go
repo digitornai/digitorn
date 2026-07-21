@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -10,28 +11,68 @@ import (
 	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
 )
 
-func msg(role string) sessionstore.Message { return sessionstore.Message{Role: role} }
-
-// Detection: an injected message unanswered = last non-system message is user.
-func TestInject_UnansweredDetection(t *testing.T) {
+// Detection: the turn-end safety net fires only while an undrained inject row
+// is still waiting in the queue.
+func TestInject_HasPendingDetection(t *testing.T) {
 	cases := []struct {
-		name string
-		msgs []sessionstore.Message
-		want bool
+		name  string
+		queue []sessionstore.QueueEntry
+		want  bool
 	}{
 		{"empty", nil, false},
-		{"user waiting", []sessionstore.Message{msg("assistant"), msg("user")}, true},
-		{"answered", []sessionstore.Message{msg("user"), msg("assistant")}, false},
-		{"user + directive still waiting", []sessionstore.Message{msg("assistant"), msg("user"), msg("system")}, true},
-		{"answered then directive", []sessionstore.Message{msg("user"), msg("assistant"), msg("system")}, false},
-		{"only system", []sessionstore.Message{msg("system"), msg("system")}, false},
+		{"plain queued row (queue mode)", []sessionstore.QueueEntry{{ID: "a"}}, false},
+		{"one inject row", []sessionstore.QueueEntry{{ID: "a", Inject: true}}, true},
+		{"mixed", []sessionstore.QueueEntry{{ID: "a"}, {ID: "b", Inject: true}}, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := lastTurnMessageIsUnansweredUser(c.msgs); got != c.want {
+			if got := hasPendingInject(c.queue); got != c.want {
 				t.Errorf("got %v, want %v", got, c.want)
 			}
 		})
+	}
+}
+
+// End-to-end of the mechanic: an inject send enqueues a tagged row (queue panel,
+// NOT the transcript); the drain then folds it into the transcript as a
+// user_message + directive and removes the row. This is what makes the message
+// wait in the queue until the injection window, then land with its seq.
+func TestInject_EnqueueThenDrain(t *testing.T) {
+	d, done := newQueueTestDaemon(t)
+	defer done()
+
+	if err := d.enqueueMidTurnInject("s1", "app", "u", "cid-1", "fais plutôt X", 0); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	// Before the drain: a row in the queue, nothing in the transcript.
+	if q := queueOf(t, d, "s1"); len(q) != 1 || !q[0].Inject || q[0].Message != "fais plutôt X" {
+		t.Fatalf("after enqueue: %+v, want one inject row", q)
+	}
+	state, _ := d.sessionStore.State("s1")
+	state.RLock()
+	nMsgs := len(state.Messages)
+	state.RUnlock()
+	if nMsgs != 0 {
+		t.Fatalf("transcript has %d msgs before drain, want 0 (message waits in queue)", nMsgs)
+	}
+
+	// The drain (what the engine calls at a tool-call boundary).
+	if !d.drainMidTurnInject(context.Background(), "s1", "app") {
+		t.Fatal("drain reported nothing injected")
+	}
+	if q := queueOf(t, d, "s1"); len(q) != 0 {
+		t.Fatalf("after drain: %+v, want empty (row folded in)", q)
+	}
+	state.RLock()
+	defer state.RUnlock()
+	if len(state.Messages) != 2 ||
+		state.Messages[0].Role != "user" || state.Messages[0].Content != "fais plutôt X" ||
+		state.Messages[1].Role != "system" || state.Messages[1].Content != midTurnInjectDirective {
+		t.Fatalf("transcript after drain = %+v, want user bubble + directive", state.Messages)
+	}
+	// Idempotent: a second drain finds nothing (row already gone).
+	if d.drainMidTurnInject(context.Background(), "s1", "app") {
+		t.Error("second drain injected again — not idempotent")
 	}
 }
 
@@ -66,9 +107,10 @@ func TestInject_PersistsUserThenDirective(t *testing.T) {
 	}
 }
 
-// The loop re-runs one turn when refire says a late message is waiting, then
-// stops (refire false the second time) — no infinite loop.
-func TestInject_LoopRefiresOnce(t *testing.T) {
+// The loop re-runs one turn for a late inject row, then stops — mirroring the
+// real flow where the follow-up turn's drain removes the row so refire flips to
+// false. It must NOT loop forever even if the very first check reports pending.
+func TestInject_LoopRefiresThenStops(t *testing.T) {
 	var mu sync.Mutex
 	var runs int
 	r := newTestRunner(func(_ context.Context, _ runtime.TurnInput) error {
@@ -77,7 +119,8 @@ func TestInject_LoopRefiresOnce(t *testing.T) {
 		mu.Unlock()
 		return nil
 	})
-	// refire: true the first time (a message landed late), false after.
+	// First check: a late row is waiting → refire. After the follow-up turn the
+	// drain consumed it → false. (The real midTurnRefire flips the same way.)
 	var calls int
 	r.midTurnRefire = func(_ string) bool {
 		mu.Lock()
@@ -86,7 +129,6 @@ func TestInject_LoopRefiresOnce(t *testing.T) {
 		return calls == 1
 	}
 
-	// First turn (idle path).
 	r.SubmitUserTurn(runtime.TurnInput{AppID: "a", SessionID: "s1", ClientMessageID: "c1"},
 		func() (uint64, error) { return 1, nil })
 
@@ -106,11 +148,36 @@ func TestInject_LoopRefiresOnce(t *testing.T) {
 		case <-time.After(5 * time.Millisecond):
 		}
 	}
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(150 * time.Millisecond)
 	mu.Lock()
 	defer mu.Unlock()
 	if runs != 2 {
-		t.Fatalf("runs=%d, want exactly 2 (refire must fire once, not loop)", runs)
+		t.Fatalf("runs=%d, want exactly 2 (refire once, then stop)", runs)
+	}
+}
+
+// A turn that ERRORS (rate limit, provider error) must NOT refire even if an
+// inject row is still pending — re-running would just re-hit the failure. The
+// row stays queued for a later turn.
+func TestInject_NoRefireOnTurnError(t *testing.T) {
+	var mu sync.Mutex
+	var runs int
+	r := newTestRunner(func(_ context.Context, _ runtime.TurnInput) error {
+		mu.Lock()
+		runs++
+		mu.Unlock()
+		return errors.New("rate limited")
+	})
+	// refire would say "yes, a row is pending" — the error gate must veto it.
+	r.midTurnRefire = func(_ string) bool { return true }
+
+	r.SubmitUserTurn(runtime.TurnInput{AppID: "a", SessionID: "s1"},
+		func() (uint64, error) { return 1, nil })
+	time.Sleep(200 * time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	if runs != 1 {
+		t.Fatalf("runs=%d, want 1 (a failed turn must never refire)", runs)
 	}
 }
 

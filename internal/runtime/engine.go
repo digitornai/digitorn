@@ -108,6 +108,11 @@ type Engine struct {
 	SkillLoader       SkillLoader
 	ModelWindowLookup func(model string) int
 
+	// DrainMidTurnInject folds any queued inject-mode messages into the running
+	// turn at a tool-call boundary (returns true if it appended any, so the loop
+	// refreshes its snapshot). nil = disabled (queue-only / test engines).
+	DrainMidTurnInject func(ctx context.Context, sessionID, appID string) bool
+
 	Compactor          EmergencyCompactor
 	ContextTouch       func(sessionID string)
 	ContextIncrement   func(sessionID string, deltaTokens int)
@@ -216,7 +221,7 @@ func (e *Engine) CleanupBehaviorSession(appID, sid string) {
 
 const defaultMaxToolIterations = 100
 
-const defaultMaxStopVetoes = 2
+const defaultMaxStopVetoes = 1
 
 func resolveMaxStopVetoes(rt *schema.RuntimeBlock) int {
 	if rt != nil && rt.MaxStopRetries != nil {
@@ -1002,12 +1007,30 @@ func (e *Engine) runPhases(
 	if cv := e.freshContextView(in.SessionID, snap, agent.Brain); cv.EstimateRatio > 0 {
 		calibRatio = cv.EstimateRatio
 	}
+	injCount := 0
 	for iter := 0; iter < maxIter; iter++ {
 		if err := ctx.Err(); err != nil {
 			return nil, hooks.Payload{}, fmt.Errorf("runtime: turn cancelled at iter %d: %w", iter, err)
 		}
 		tr.StepID = fmt.Sprintf("%s:s%d", tr.ID, iter)
 		PingTurnKeepalive(ctx)
+
+		// Mid-turn inject: fold any queued inject-mode messages into THIS turn at
+		// the tool-call boundary, BEFORE building the request — their user_message
+		// seq lands here (correct injection position, not the turn's tail) and the
+		// model sees them between tool calls. No-op at iter 0 / for queue apps.
+		if e.DrainMidTurnInject != nil && e.DrainMidTurnInject(ctx, in.SessionID, in.AppID) {
+			if st, sErr := e.Sessions.State(in.SessionID); sErr == nil && st != nil {
+				snap = st.Snapshot()
+			}
+			// Bump the content segment so assistant output AFTER this injection
+			// starts a NEW bubble (correlation "<turnID>#iN"), rendered BELOW the
+			// just-injected user message instead of merged into the pre-injection
+			// bubble (which is anchored at a lower seq → the message looked stuck
+			// at the bottom). Lifecycle events keep tr.ID.
+			injCount++
+			tr.SegmentID = fmt.Sprintf("%s#i%d", tr.ID, injCount)
+		}
 
 		e.guardContextPressure(ctx, in, agent, &snap, compactPol, &guardKeep, usage.PromptTokens)
 
@@ -1152,6 +1175,15 @@ func (e *Engine) runPhases(
 		}
 
 		canonicalizeToolCallNames(resp.ToolCalls, tools)
+
+		// Deliberate silent stop: an empty response (no text, no tool calls)
+		// that arrives AFTER the stop hook already nudged the agent means the
+		// agent read the directive and chose to end without repeating itself.
+		// Honour it — persist no phantom empty bubble, don't re-veto, just end.
+		if stopVetoes > 0 && len(resp.ToolCalls) == 0 && strings.TrimSpace(resp.Content) == "" {
+			finalAnswer = true
+			break
+		}
 
 		seq, err := e.persistAssistantStep(ctx, tr, in, resp)
 		if err != nil {
@@ -1669,7 +1701,7 @@ func (e *Engine) persistAssistantStep(
 		SessionID:     in.SessionID,
 		AppID:         in.AppID,
 		UserID:        in.UserID,
-		CorrelationID: tr.ID,
+		CorrelationID: tr.Corr(),
 		StepID:        tr.StepID,
 		Message: &sessionstore.MessagePayload{
 			Role:               "assistant",
@@ -1747,7 +1779,7 @@ func (e *Engine) emitTurnRetry(in TurnInput, tr *turn.Turn, cause error, attempt
 		SessionID:     in.SessionID,
 		AppID:         in.AppID,
 		UserID:        in.UserID,
-		CorrelationID: tr.ID,
+		CorrelationID: tr.Corr(),
 		Retry: &sessionstore.RetryPayload{
 			Attempt:   attempt + 1,
 			Max:       maxTurnRetries + 1,
@@ -1840,7 +1872,7 @@ func (e *Engine) persistInterruptedAssistant(tr *turn.Turn, in TurnInput, conten
 		SessionID:     in.SessionID,
 		AppID:         in.AppID,
 		UserID:        in.UserID,
-		CorrelationID: tr.ID,
+		CorrelationID: tr.Corr(),
 		StepID:        tr.StepID,
 		Message: &sessionstore.MessagePayload{
 			Role:    "assistant",
@@ -1955,7 +1987,7 @@ func (e *Engine) persistToolCallEvents(
 			SessionID:     in.SessionID,
 			AppID:         in.AppID,
 			UserID:        in.UserID,
-			CorrelationID: tr.ID,
+			CorrelationID: tr.Corr(),
 			StepID:        tr.StepID,
 			Tool: &sessionstore.ToolPayload{
 				CallID:    tc.ID,
@@ -2047,7 +2079,7 @@ func (e *Engine) dispatchToolsParallel(
 				}
 			}
 
-			if blocked := e.enforceGate(ctx, in.SessionID, in.AppID, in.UserID, tr.ID, app, agent, tc.Name, tc.ID, tc.Arguments, tr, &in); blocked != nil {
+			if blocked := e.enforceGate(ctx, in.SessionID, in.AppID, in.UserID, tr.Corr(), app, agent, tc.Name, tc.ID, tc.Arguments, tr, &in); blocked != nil {
 				blocked.DurationMs = time.Since(start).Milliseconds()
 				outcomes[i] = *blocked
 				return
@@ -2685,7 +2717,7 @@ func (e *Engine) persistToolResults(
 			SessionID:     in.SessionID,
 			AppID:         in.AppID,
 			UserID:        in.UserID,
-			CorrelationID: tr.ID,
+			CorrelationID: tr.Corr(),
 			StepID:        tr.StepID,
 			Tool:          tp,
 		}

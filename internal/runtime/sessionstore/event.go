@@ -337,6 +337,9 @@ type QueuePayload struct {
 	// Depth/Max ride the queue_full signal only.
 	Depth int `json:"depth,omitempty"`
 	Max   int `json:"max,omitempty"`
+	// Inject marks a row that the running turn folds in at the next tool-call
+	// boundary (mid_turn_messages: inject) instead of running as a later turn.
+	Inject bool `json:"inject,omitempty"`
 }
 
 type TodoPayload struct {
@@ -436,6 +439,24 @@ type TurnPayload struct {
 }
 
 func (e Event) Time() time.Time { return time.Unix(0, e.TsUnixNano).UTC() }
+
+// clientHiddenSources are system_message sources that steer the model but must
+// never render in the client transcript. They live in the durable log (the
+// model reads them via the snapshot) but are stripped at every frontend
+// boundary — live emit and history replay.
+var clientHiddenSources = map[string]bool{
+	"mid_turn_inject": true,
+}
+
+// HiddenFromClient reports whether an event is an internal steering directive
+// that the frontend must not display, while the model still consumes it.
+func (e Event) HiddenFromClient() bool {
+	if e.Type != EventSystemMessage || e.Message == nil || e.Message.Extra == nil {
+		return false
+	}
+	src, _ := e.Message.Extra["source"].(string)
+	return clientHiddenSources[src]
+}
 
 type FlowPayload struct {
 	FlowID    string `json:"flow_id,omitempty"`

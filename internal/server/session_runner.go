@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -27,9 +28,13 @@ type sessionRunner struct {
 	// exactly the previous behaviour).
 	queuedHook   func(in runtime.TurnInput, depth int)
 	dequeuedHook func(in runtime.TurnInput)
-	// midTurnRefire (inject mode only) answers, after a turn ends: did an
-	// injected message land too late for the turn to see it? If yes the loop
-	// runs one more turn to handle it. Nil = no-op (queue-only apps unaffected).
+	// midTurnRefire (inject mode only) answers, after a turn ends: is an inject
+	// row still waiting in the queue — a message that arrived after the turn's
+	// last tool-call boundary, so no drain folded it in? If yes the loop runs one
+	// more turn; that turn's iter-0 drain converts the row into a user_message
+	// and answers it. The drain REMOVES the row, so this is naturally idempotent
+	// (returns false once consumed) — no infinite loop. Nil = no-op (queue-only
+	// apps unaffected).
 	midTurnRefire func(sessionID string) bool
 }
 
@@ -352,7 +357,7 @@ func (r *sessionRunner) Forget(sessionID string) {
 
 func (r *sessionRunner) loop(st *sessionRunState, in runtime.TurnInput) {
 	for {
-		r.runOnce(in)
+		turnErr := r.runOnce(in)
 
 		st.mu.Lock()
 		// User messages first, in order: they are what the user is waiting on.
@@ -392,13 +397,19 @@ func (r *sessionRunner) loop(st *sessionRunState, in runtime.TurnInput) {
 		st.mu.Unlock()
 
 		// Mid-turn inject safety net (checked OUTSIDE the lock — it reads the
-		// session). A message injected in the last instants of the turn, after
-		// its final snapshot read, would otherwise sit unanswered. If one is
-		// waiting, re-claim the lane and run one more turn for it.
-		if r.midTurnRefire != nil && r.midTurnRefire(in.SessionID) {
+		// session). A message enqueued after the turn's last tool-call boundary
+		// was never drained, so it still sits as an inject row. Run one more turn
+		// to answer it — its iter-0 drain folds the row into the transcript. Two
+		// properties keep this from looping:
+		//   * turnErr != nil — a FAILED turn (rate limit, provider error, panic)
+		//     would just re-hit the same failure; leave the row queued for a
+		//     later turn rather than re-running into the error.
+		//   * the drain REMOVES the row, so once the follow-up turn consumes it
+		//     midTurnRefire returns false — idempotent by construction.
+		if turnErr == nil && r.midTurnRefire != nil && r.midTurnRefire(in.SessionID) {
 			st.mu.Lock()
 			// Someone (an idle postMessage) may have re-taken the lane between
-			// running=false and here — then it owns the message, we stop.
+			// running=false and here — then it owns the message.
 			if st.running {
 				st.mu.Unlock()
 				return
@@ -416,13 +427,15 @@ func (r *sessionRunner) loop(st *sessionRunState, in runtime.TurnInput) {
 	}
 }
 
-func (r *sessionRunner) runOnce(in runtime.TurnInput) {
+func (r *sessionRunner) runOnce(in runtime.TurnInput) (turnErr error) {
 	defer func() {
 		if rec := recover(); rec != nil {
 			r.logger.Error("session_runner: turn panicked",
 				slog.String("session_id", in.SessionID),
 				slog.String("app_id", in.AppID),
 				slog.Any("panic", rec))
+			// A panicked turn counts as failed → the caller must not refire it.
+			turnErr = fmt.Errorf("turn panicked: %v", rec)
 		}
 	}()
 	base, abort := context.WithCancelCause(context.Background())
@@ -437,5 +450,7 @@ func (r *sessionRunner) runOnce(in runtime.TurnInput) {
 			slog.String("session_id", in.SessionID),
 			slog.String("app_id", in.AppID),
 			slog.String("err", err.Error()))
+		return err
 	}
+	return nil
 }

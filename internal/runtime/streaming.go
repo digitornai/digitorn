@@ -120,7 +120,7 @@ func (e *Engine) callLLM(
 					SessionID:        in.SessionID,
 					AppID:            in.AppID,
 					UserID:           in.UserID,
-					CorrelationID:    tr.ID,
+					CorrelationID:    tr.Corr(),
 					StepID:           tr.StepID,
 					LiveOutputTokens: liveOut,
 					Message: &sessionstore.MessagePayload{
@@ -153,7 +153,7 @@ func (e *Engine) callLLM(
 					SessionID:     in.SessionID,
 					AppID:         in.AppID,
 					UserID:        in.UserID,
-					CorrelationID: tr.ID,
+					CorrelationID: tr.Corr(),
 					StepID:        tr.StepID,
 					Message: &sessionstore.MessagePayload{
 						Role:      "assistant",
@@ -302,7 +302,7 @@ func (e *Engine) emitToolCallStreamDeltas(
 			SessionID:     in.SessionID,
 			AppID:         in.AppID,
 			UserID:        in.UserID,
-			CorrelationID: tr.ID,
+			CorrelationID: tr.Corr(),
 			StepID:        tr.StepID,
 			// The running output-token count (text + tool args) so the client's
 			// single live counter includes tool-call arguments, like assistant_delta.

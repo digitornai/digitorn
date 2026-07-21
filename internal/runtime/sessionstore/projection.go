@@ -269,6 +269,7 @@ func applyLocked(s *SessionState, ev *Event) {
 			Status:          orDefault(ev.Queue.Status, "queued"),
 			AttachmentCount: ev.Queue.AttachmentCount,
 			EnqueuedAt:      ev.TsUnixNano,
+			Inject:          ev.Queue.Inject,
 		})
 		reindexQueue(s)
 
