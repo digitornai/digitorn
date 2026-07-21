@@ -272,18 +272,20 @@ func applyLocked(s *SessionState, ev *Event) {
 		reindexQueue(s)
 
 	case EventMessageStarted:
-		// The queued row becomes the running turn. Matched on correlation id:
-		// that is what the runner carries, the row id never leaves the queue.
+		// The message left the queue to become the running turn: remove its row.
+		// Aligned with the web (onMessageStarted drops the row) and with cold
+		// rebuild — a message being handled must NOT reappear as "waiting". Its
+		// history now lives in the transcript (the user_message bubble).
 		if ev.CorrelationID == "" {
 			return
 		}
-		for i := range s.Queue {
-			if s.Queue[i].CorrelationID == ev.CorrelationID {
-				s.Queue[i].Status = "running"
-				s.Queue[i].StartedAt = ev.TsUnixNano
-				break
+		out := s.Queue[:0]
+		for _, e := range s.Queue {
+			if e.CorrelationID != ev.CorrelationID {
+				out = append(out, e)
 			}
 		}
+		s.Queue = out
 		reindexQueue(s)
 
 	case EventMessageDone:

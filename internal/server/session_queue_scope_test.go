@@ -2,69 +2,70 @@ package server
 
 import (
 	"context"
-	"sync"
+	"io"
+	"log/slog"
 	"testing"
+	"time"
 
-	"github.com/digitornai/digitorn/internal/ports"
 	"github.com/digitornai/digitorn/internal/runtime"
+	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
 )
 
-// A queued row belongs to ONE session: the durable append targets that session
-// and the realtime event goes to that session's room. Never a broadcast.
-//
-// These assert the property through the emit surface rather than by reading the
-// code — a future refactor that reintroduces a broadcast fails here.
+// The queue hooks append durable events; the bridge fans each to its session's
+// room by SessionID, so isolation is structural. These drive the hooks through
+// a real bus and assert each session's projection independently — one session's
+// queue can never carry another's row.
 
-type capturedEmit struct {
-	room    string
-	name    string
-	payload map[string]any
+func newQueueTestDaemon(t *testing.T) (*Daemon, func()) {
+	t.Helper()
+	paths := sessionstore.NewPaths(t.TempDir())
+	flusher, err := sessionstore.NewDiskFlusher(sessionstore.DiskFlusherConfig{
+		Paths: paths, NumShards: 2, QueueCapPerShard: 4096,
+		BatchMax: 100, FlushInterval: 2 * time.Millisecond, Fsync: false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := flusher.Start(); err != nil {
+		t.Fatal(err)
+	}
+	bus, err := sessionstore.NewBus(sessionstore.BusConfig{
+		Paths: paths, Flusher: flusher,
+		EvictionInterval: time.Hour, StateIdleEvictAfter: time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := bus.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	d := &Daemon{
+		sessionStore: bus,
+		logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	cleanup := func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		bus.Stop(ctx)
+		flusher.Stop(ctx)
+	}
+	return d, cleanup
 }
 
-type recordingRT struct {
-	mu         sync.Mutex
-	sent       []capturedEmit
-	broadcasts int
+func queueOf(t *testing.T, d *Daemon, sid string) []sessionstore.QueueEntry {
+	t.Helper()
+	st, err := d.sessionStore.State(sid)
+	if err != nil {
+		t.Fatalf("state %s: %v", sid, err)
+	}
+	st.RLock()
+	defer st.RUnlock()
+	return append([]sessionstore.QueueEntry(nil), st.Queue...)
 }
 
-func (r *recordingRT) Emit(_ context.Context, _ string, room, name string, payload any) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	m, _ := payload.(map[string]any)
-	r.sent = append(r.sent, capturedEmit{room: room, name: name, payload: m})
-	return nil
-}
-
-// Broadcast reaches EVERY connected client. A queue event must never take this
-// path; the counter turns that into a test failure instead of a silent leak.
-func (r *recordingRT) Broadcast(_ context.Context, _, _ string, _ any) error {
-	r.mu.Lock()
-	r.broadcasts++
-	r.mu.Unlock()
-	return nil
-}
-
-func (r *recordingRT) SetAuthHandler(ports.AuthHandler)          {}
-func (r *recordingRT) OnConnection(ports.ConnectionHandler)      {}
-func (r *recordingRT) OnDisconnection(ports.DisconnectHandler)   {}
-func (r *recordingRT) OnEvent(string, ports.EventHandler)        {}
-func (r *recordingRT) Close(context.Context) error               { return nil }
-
-func (r *recordingRT) broadcastCount() int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.broadcasts
-}
-
-func (r *recordingRT) all() []capturedEmit {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return append([]capturedEmit(nil), r.sent...)
-}
-
-func TestQueueEvent_GoesOnlyToItsOwnSessionRoom(t *testing.T) {
-	rt := &recordingRT{}
-	d := &Daemon{rt: rt}
+func TestQueueHooks_RowLandsInItsOwnSessionOnly(t *testing.T) {
+	d, done := newQueueTestDaemon(t)
+	defer done()
 
 	d.onTurnQueued(runtime.TurnInput{
 		AppID: "app", SessionID: "session-a", UserID: "u",
@@ -75,101 +76,46 @@ func TestQueueEvent_GoesOnlyToItsOwnSessionRoom(t *testing.T) {
 		ClientMessageID: "cid-b", Message: "salut",
 	}, 1)
 
-	sent := rt.all()
-	if len(sent) != 2 {
-		t.Fatalf("emitted %d events, want 2", len(sent))
+	a := queueOf(t, d, "session-a")
+	b := queueOf(t, d, "session-b")
+	if len(a) != 1 || a[0].CorrelationID != "cid-a" || a[0].Message != "bonjour" {
+		t.Fatalf("session-a queue = %+v", a)
 	}
-	for _, e := range sent {
-		switch e.payload["correlation_id"] {
-		case "cid-a":
-			if e.room != "session:session-a" {
-				t.Errorf("session A event went to room %q", e.room)
-			}
-			if e.payload["session_id"] != "session-a" {
-				t.Errorf("session A payload carries session_id %v", e.payload["session_id"])
-			}
-		case "cid-b":
-			if e.room != "session:session-b" {
-				t.Errorf("session B event went to room %q", e.room)
-			}
-		default:
-			t.Errorf("unexpected correlation %v", e.payload["correlation_id"])
-		}
-		// A room-less emit would reach every connected client.
-		if e.room == "" {
-			t.Error("queue event emitted without a room (broadcast)")
-		}
+	if len(b) != 1 || b[0].CorrelationID != "cid-b" {
+		t.Fatalf("session-b queue = %+v", b)
 	}
-	if n := rt.broadcastCount(); n != 0 {
-		t.Errorf("%d queue events went out as broadcasts — every session saw them", n)
+	if a[0].Status != "queued" || a[0].Position != 1 {
+		t.Errorf("row a = %+v, want queued/pos1", a[0])
 	}
 }
 
-func TestQueueEvent_CarriesTheContractTheWebParses(t *testing.T) {
-	rt := &recordingRT{}
-	d := &Daemon{rt: rt}
+func TestQueueHooks_DequeueRemovesTheRow(t *testing.T) {
+	d, done := newQueueTestDaemon(t)
+	defer done()
 
-	d.onTurnQueued(runtime.TurnInput{
+	in := runtime.TurnInput{
 		AppID: "app", SessionID: "s1", UserID: "u",
-		ClientMessageID: "cid-1", Message: "construis un dashboard",
-	}, 3)
+		ClientMessageID: "cid-1", Message: "un",
+	}
+	d.onTurnQueued(in, 1)
+	if q := queueOf(t, d, "s1"); len(q) != 1 {
+		t.Fatalf("after queued: %+v", q)
+	}
 
-	sent := rt.all()
-	if len(sent) != 1 || sent[0].name != "message_queued" {
-		t.Fatalf("unexpected emits: %+v", sent)
-	}
-	p := sent[0].payload
-	// Keys the web's queueEntryFromJson reads. A rename here silently empties
-	// the queue panel, so pin them.
-	for _, k := range []string{"id", "correlation_id", "message", "status", "position", "session_id"} {
-		if _, ok := p[k]; !ok {
-			t.Errorf("payload missing %q: %+v", k, p)
-		}
-	}
-	if p["status"] != "queued" {
-		t.Errorf("status = %v, want queued", p["status"])
-	}
-	if p["position"] != 3 {
-		t.Errorf("position = %v, want 3 (queue depth)", p["position"])
-	}
-	if p["message"] != "construis un dashboard" {
-		t.Errorf("message = %v", p["message"])
-	}
-	if p["id"] == p["correlation_id"] {
-		t.Error("row id must be distinct from the correlation id")
+	// The message's turn starts: the row must leave the queue.
+	d.onTurnDequeued(in)
+	if q := queueOf(t, d, "s1"); len(q) != 0 {
+		t.Fatalf("after dequeue: %+v, want empty", q)
 	}
 }
 
-// The dequeue signal must name the row it promotes, or the panel cannot clear it.
-func TestQueueEvent_DequeueNamesItsRow(t *testing.T) {
-	rt := &recordingRT{}
-	d := &Daemon{rt: rt}
-
-	d.onTurnDequeued(runtime.TurnInput{
-		AppID: "app", SessionID: "s1", ClientMessageID: "cid-1",
-	})
-
-	sent := rt.all()
-	if len(sent) != 1 {
-		t.Fatalf("emitted %d events, want 1", len(sent))
-	}
-	if sent[0].name != "message_started" || sent[0].room != "session:s1" {
-		t.Fatalf("unexpected emit: %+v", sent[0])
-	}
-	if sent[0].payload["correlation_id"] != "cid-1" {
-		t.Errorf("correlation = %v, want cid-1", sent[0].payload["correlation_id"])
-	}
-}
-
-// A proactive wake carries no client message id: it is not a user message and
-// must not produce a phantom queue row.
-func TestQueueEvent_NoRowForAProactiveWake(t *testing.T) {
-	rt := &recordingRT{}
-	d := &Daemon{rt: rt}
+// A dequeue with no client message id (proactive wake path) writes nothing.
+func TestQueueHooks_NoOpWithoutCorrelation(t *testing.T) {
+	d, done := newQueueTestDaemon(t)
+	defer done()
 
 	d.onTurnDequeued(runtime.TurnInput{AppID: "app", SessionID: "s1"})
-
-	if n := len(rt.all()); n != 0 {
-		t.Errorf("emitted %d events for a wake with no correlation, want 0", n)
+	if q := queueOf(t, d, "s1"); len(q) != 0 {
+		t.Errorf("a wake with no correlation created a row: %+v", q)
 	}
 }

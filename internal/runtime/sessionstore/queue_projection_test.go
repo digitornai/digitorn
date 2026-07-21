@@ -47,25 +47,25 @@ func TestQueue_FIFOAndPositions(t *testing.T) {
 	}
 }
 
-func TestQueue_StartedThenDoneLeavesTheQueue(t *testing.T) {
+func TestQueue_StartedRemovesRowAndRenumbers(t *testing.T) {
 	s := sessionstore.NewSessionState("s1")
 	apply(s, queued("q1", "c1", "un"), queued("q2", "c2", "deux"))
 
+	// message_started = the message left the queue to become the running turn:
+	// the row is REMOVED (it is a chat bubble now), not kept as "running".
 	apply(s, sessionstore.Event{Type: sessionstore.EventMessageStarted, CorrelationID: "c1"})
-	if s.Queue[0].Status != "running" || s.Queue[0].Position != 0 {
-		t.Fatalf("running row = (%q, pos %d), want (running, pos 0)", s.Queue[0].Status, s.Queue[0].Position)
+	if len(s.Queue) != 1 || s.Queue[0].CorrelationID != "c2" {
+		t.Fatalf("after started: %+v, want only c2 left", s.Queue)
 	}
 	// The one still pending must be renumbered to 1, not left at 2.
-	if s.Queue[1].Position != 1 {
-		t.Errorf("pending row position = %d, want 1", s.Queue[1].Position)
+	if s.Queue[0].Position != 1 {
+		t.Errorf("pending row position = %d, want 1", s.Queue[0].Position)
 	}
 
+	// message_done for a row already gone is a harmless no-op.
 	apply(s, sessionstore.Event{Type: sessionstore.EventMessageDone, CorrelationID: "c1"})
 	if len(s.Queue) != 1 || s.Queue[0].CorrelationID != "c2" {
 		t.Fatalf("after done: %+v", s.Queue)
-	}
-	if s.Queue[0].Position != 1 {
-		t.Errorf("remaining row position = %d, want 1", s.Queue[0].Position)
 	}
 }
 
@@ -90,19 +90,22 @@ func TestQueue_CancelByIDAndByCorrelation(t *testing.T) {
 	}
 }
 
-// Clearing drops what is WAITING, never the turn already in flight.
-func TestQueue_ClearKeepsTheRunningRow(t *testing.T) {
+// Clearing drops what is WAITING. The turn already in flight is NOT in the queue
+// anymore (message_started removed its row), so clearing can never touch it —
+// the guarantee "clear does not stop the running turn" holds by construction.
+func TestQueue_ClearDropsWaitingRows(t *testing.T) {
 	s := sessionstore.NewSessionState("s1")
 	apply(s, queued("q1", "c1", "un"), queued("q2", "c2", "deux"), queued("q3", "c3", "trois"))
+	// c1's turn starts → its row leaves the queue; c2, c3 still waiting.
 	apply(s, sessionstore.Event{Type: sessionstore.EventMessageStarted, CorrelationID: "c1"})
+	if len(s.Queue) != 2 {
+		t.Fatalf("before clear: %+v, want c2 and c3 waiting", s.Queue)
+	}
 
 	apply(s, sessionstore.Event{Type: sessionstore.EventQueueCleared})
 
-	if len(s.Queue) != 1 {
-		t.Fatalf("after clear: %+v", s.Queue)
-	}
-	if s.Queue[0].CorrelationID != "c1" || s.Queue[0].Status != "running" {
-		t.Errorf("clear removed the running row: %+v", s.Queue[0])
+	if len(s.Queue) != 0 {
+		t.Fatalf("after clear: %+v, want empty (all were waiting)", s.Queue)
 	}
 }
 
