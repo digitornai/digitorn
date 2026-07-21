@@ -133,6 +133,9 @@ context:
 
 runtime:
   mode: conversation
+  # A message sent while a turn runs is folded INTO the running turn (like the
+  # user notifying the agent mid-work), not queued for after.
+  mid_turn_messages: inject
   entry_agent: main
   workdir_mode: auto
   max_turns: 200

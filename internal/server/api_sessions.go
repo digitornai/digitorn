@@ -660,6 +660,30 @@ func (d *Daemon) postMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Mid-turn INJECT: if the app opts into inject mode AND a turn is running,
+	// fold the message into that turn NOW instead of queueing. It is persisted
+	// immediately, so the running turn sees it on its next iteration
+	// (buildLLMMessages re-reads the snapshot each loop). A message that lands
+	// after the turn has stopped iterating is caught by the runner loop's
+	// mid-turn safety net; a message on an idle session falls through to the
+	// normal SubmitUserTurn path below (a fresh turn).
+	if d.midTurnMode(r.Context(), appID) == schema.MidTurnInject && d.sessionRunner.IsRunning(sid) {
+		seq, ierr := d.injectMidTurn(sid, appID, userIDOf(r.Context()), req.ClientMessageID, content)
+		if ierr != nil {
+			writeError(w, appendErrStatus(ierr), "append_failed", ierr.Error())
+			return
+		}
+		d.touchContext(sid)
+		writeJSON(w, http.StatusCreated, map[string]any{
+			"session_id": sid,
+			"seq":        seq,
+			"role":       role,
+			"status":     "injected",
+			"ts":         time.Now().UTC().Format(time.RFC3339Nano),
+		})
+		return
+	}
+
 	// User turn. The runner decides ATOMICALLY whether this runs now or waits
 	// behind a running turn. The write is DEFERRED to whichever moment the turn
 	// actually starts, so a message sent mid-turn does not appear in the chat

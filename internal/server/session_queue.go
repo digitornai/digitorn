@@ -3,7 +3,9 @@ package server
 import (
 	"context"
 	"net/http"
+	"time"
 
+	"github.com/digitornai/digitorn/internal/compiler/schema"
 	"github.com/digitornai/digitorn/internal/runtime"
 	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
 	"github.com/go-chi/chi/v5"
@@ -238,4 +240,108 @@ func (d *Daemon) rehydrateQueue(sid, appID, userID, userJWT string) {
 				"session_id", sid, "correlation_id", cid, "err", serr.Error())
 		}
 	}
+}
+
+// midTurnMode reads the app's ui/runtime `mid_turn_messages` policy: "queue"
+// (default) makes a message sent during a turn wait for the turn to end;
+// "inject" folds it into the running turn. Any read failure falls back to
+// queue — the conservative, existing behaviour.
+func (d *Daemon) midTurnMode(ctx context.Context, appID string) schema.MidTurnMode {
+	if d == nil || d.appMgr == nil || appID == "" {
+		return schema.MidTurnQueue
+	}
+	rt, err := d.appMgr.Get(ctx, appID)
+	if err != nil || rt == nil || rt.Definition == nil || rt.Definition.Runtime == nil {
+		return schema.MidTurnQueue
+	}
+	return rt.Definition.Runtime.MidTurnMessages.Resolved()
+}
+
+// injectMidTurn persists a user message so the RUNNING turn picks it up on its
+// next iteration (buildLLMMessages re-reads the snapshot every loop), then a
+// short system directive right after that tells the agent to act on it — the
+// same shape the user's own harness uses. The user message shows as a normal
+// bubble; the directive is hidden from the transcript (source mid_turn_inject,
+// filtered client-side) but seen by the model.
+//
+// Order matters: user message first (seq N), directive after (seq N+1), so the
+// directive's "message above" refers to it. repairToolPairing guarantees the
+// provider sequence stays valid whatever the interleaving with tool results.
+const midTurnInjectDirective = "The user sent a new message while you were working (shown above). " +
+	"This is how Digitorn surfaces messages the user sends mid-turn — within the running turn, " +
+	"often alongside the next tool result, rather than as a separate conversation turn. " +
+	"Address the message above as you continue this turn."
+
+func (d *Daemon) injectMidTurn(sid, appID, uid, clientMessageID, content string) (uint64, error) {
+	ctxA, cancelA := appendCtx(context.Background())
+	defer cancelA()
+	// 1. The user message — a normal bubble, seen by the model.
+	seq, err := d.sessionStore.AppendDurable(ctxA, sessionstore.Event{
+		Type:      sessionstore.EventUserMessage,
+		SessionID: sid,
+		AppID:     appID,
+		UserID:    uid,
+		Message: &sessionstore.MessagePayload{
+			Role:            "user",
+			Content:         content,
+			ClientMessageID: clientMessageID,
+		},
+	})
+	if err != nil {
+		return 0, err
+	}
+	// 2. The steering directive — hidden from the transcript, seen by the model.
+	if _, derr := d.sessionStore.AppendDurable(ctxA, sessionstore.Event{
+		Type:      sessionstore.EventSystemMessage,
+		SessionID: sid,
+		AppID:     appID,
+		UserID:    uid,
+		Message: &sessionstore.MessagePayload{
+			Role:    "system",
+			Content: midTurnInjectDirective,
+			Extra:   map[string]any{"source": "mid_turn_inject", "position": "append"},
+		},
+	}); derr != nil && d.logger != nil {
+		// The user message already landed; a missing directive only weakens the
+		// nudge, it does not lose the message. Log and continue.
+		d.logger.Warn("queue: mid-turn directive append failed",
+			"session_id", sid, "err", derr.Error())
+	}
+	return seq, nil
+}
+
+// midTurnRefire reports whether an injected message is sitting unanswered after
+// a turn ended — the last non-system message is a user message with no
+// assistant reply after it. Inject mode only; queue apps always return false.
+func (d *Daemon) midTurnRefire(sid string) bool {
+	if d == nil || d.sessionStore == nil {
+		return false
+	}
+	state, err := d.sessionStore.State(sid)
+	if err != nil || state == nil {
+		return false
+	}
+	state.RLock()
+	appID := state.AppID
+	unanswered := lastTurnMessageIsUnansweredUser(state.Messages)
+	state.RUnlock()
+	if !unanswered {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	return d.midTurnMode(ctx, appID) == schema.MidTurnInject
+}
+
+// lastTurnMessageIsUnansweredUser: the last non-system message is a user message
+// (an assistant reply after it would mean it was handled). System messages are
+// the injected directives and are skipped.
+func lastTurnMessageIsUnansweredUser(msgs []sessionstore.Message) bool {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == "system" {
+			continue
+		}
+		return msgs[i].Role == "user"
+	}
+	return false
 }

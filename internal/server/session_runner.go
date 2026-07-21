@@ -27,6 +27,10 @@ type sessionRunner struct {
 	// exactly the previous behaviour).
 	queuedHook   func(in runtime.TurnInput, depth int)
 	dequeuedHook func(in runtime.TurnInput)
+	// midTurnRefire (inject mode only) answers, after a turn ends: did an
+	// injected message land too late for the turn to see it? If yes the loop
+	// runs one more turn to handle it. Nil = no-op (queue-only apps unaffected).
+	midTurnRefire func(sessionID string) bool
 }
 
 // onQueued mirrors an enqueued turn durably and tells the session's room.
@@ -386,6 +390,28 @@ func (r *sessionRunner) loop(st *sessionRunState, in runtime.TurnInput) {
 		}
 		st.running = false
 		st.mu.Unlock()
+
+		// Mid-turn inject safety net (checked OUTSIDE the lock — it reads the
+		// session). A message injected in the last instants of the turn, after
+		// its final snapshot read, would otherwise sit unanswered. If one is
+		// waiting, re-claim the lane and run one more turn for it.
+		if r.midTurnRefire != nil && r.midTurnRefire(in.SessionID) {
+			st.mu.Lock()
+			// Someone (an idle postMessage) may have re-taken the lane between
+			// running=false and here — then it owns the message, we stop.
+			if st.running {
+				st.mu.Unlock()
+				return
+			}
+			st.running = true
+			jwt := st.lastJWT
+			st.mu.Unlock()
+			in = runtime.TurnInput{
+				AppID: in.AppID, SessionID: in.SessionID,
+				UserID: in.UserID, UserJWT: jwt,
+			}
+			continue
+		}
 		return
 	}
 }

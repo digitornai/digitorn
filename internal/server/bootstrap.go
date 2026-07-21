@@ -742,6 +742,7 @@ func (d *Daemon) buildEngine() {
 	// event goes to THAT session's room, never a broadcast.
 	d.sessionRunner.queuedHook = d.onTurnQueued
 	d.sessionRunner.dequeuedHook = d.onTurnDequeued
+	d.sessionRunner.midTurnRefire = d.midTurnRefire
 	bgMgr.AttachWaker(d.sessionRunner)
 	eng.BackgroundNotifications = &bgNotifierAdapter{mgr: bgMgr}
 

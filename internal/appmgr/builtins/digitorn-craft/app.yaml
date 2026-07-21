@@ -11,6 +11,9 @@ app:
 
 runtime:
   mode: conversation
+  # Messages sent during a build wait for the turn to finish (queue), so the
+  # agent is never interrupted mid-build.
+  mid_turn_messages: queue
   # Explicit so the opening mode never depends on declaration order.
   default_mode: plan
   modes:
