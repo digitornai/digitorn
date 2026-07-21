@@ -47,9 +47,10 @@ func (d *Daemon) onTurnQueued(in runtime.TurnInput, depth int) {
 		Queue: &sessionstore.QueuePayload{
 			ID:            uuid.NewString(),
 			CorrelationID: cid,
-			Message:       in.Message,
-			Status:        "queued",
-			Position:      depth,
+			Message:         in.Message,
+			Status:          "queued",
+			Position:        depth,
+			AttachmentCount: in.AttachmentCount,
 		},
 	}
 	if _, err := d.sessionStore.AppendDurable(context.Background(), ev); err != nil && d.logger != nil {

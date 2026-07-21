@@ -164,3 +164,15 @@ func TestQueue_IgnoresMalformedEvents(t *testing.T) {
 		t.Fatalf("malformed events created rows: %+v", s.Queue)
 	}
 }
+
+// Attachment count rides the queued row so the panel can show "N files".
+func TestQueue_AttachmentCountProjected(t *testing.T) {
+	s := sessionstore.NewSessionState("s1")
+	apply(s, sessionstore.Event{
+		Type:  sessionstore.EventMessageQueued,
+		Queue: &sessionstore.QueuePayload{ID: "q1", CorrelationID: "c1", Message: "", AttachmentCount: 3},
+	})
+	if len(s.Queue) != 1 || s.Queue[0].AttachmentCount != 3 {
+		t.Fatalf("attachment count not projected: %+v", s.Queue)
+	}
+}

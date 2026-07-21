@@ -490,6 +490,9 @@ type TurnInput struct {
 	// sends; Message is the preview text shown in the queue panel.
 	ClientMessageID string
 	Message         string
+	// AttachmentCount lets the queue panel show "N files" on a waiting row
+	// without carrying the blobs themselves through the queue.
+	AttachmentCount int
 	// MessageSeq is the durable seq of the user message this turn answers. The
 	// mid-turn cutoff is raised to it when the message is injected into a
 	// running turn.

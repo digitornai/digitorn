@@ -164,9 +164,10 @@ type QueueEntry struct {
 	CorrelationID string `json:"correlation_id,omitempty"`
 	Message       string `json:"message"`
 	// queued | running | completed | cancelled | failed
-	Status     string `json:"status"`
-	Position   int    `json:"position"`
-	EnqueuedAt int64  `json:"enqueued_at,omitempty"`
+	Status          string `json:"status"`
+	Position        int    `json:"position"`
+	AttachmentCount int    `json:"attachment_count,omitempty"`
+	EnqueuedAt      int64  `json:"enqueued_at,omitempty"`
 	StartedAt  int64  `json:"started_at,omitempty"`
 	FinishedAt int64  `json:"finished_at,omitempty"`
 	ErrorCode  string `json:"error_code,omitempty"`

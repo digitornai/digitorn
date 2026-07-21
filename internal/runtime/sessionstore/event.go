@@ -328,8 +328,9 @@ type QueuePayload struct {
 	CorrelationID string `json:"correlation_id,omitempty"`
 	Message       string `json:"message,omitempty"`
 	Status        string `json:"status,omitempty"`
-	Position      int    `json:"position,omitempty"`
-	EnqueuedAt    int64  `json:"enqueued_at,omitempty"`
+	Position        int   `json:"position,omitempty"`
+	AttachmentCount int   `json:"attachment_count,omitempty"`
+	EnqueuedAt      int64 `json:"enqueued_at,omitempty"`
 	StartedAt     int64  `json:"started_at,omitempty"`
 	FinishedAt    int64  `json:"finished_at,omitempty"`
 	ErrorCode     string `json:"error_code,omitempty"`

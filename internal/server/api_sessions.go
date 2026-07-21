@@ -599,7 +599,9 @@ func (d *Daemon) postMessage(w http.ResponseWriter, r *http.Request) {
 	if content == "" {
 		content = req.Message
 	}
-	if content == "" {
+	if content == "" && len(req.Attachments) == 0 {
+		// Empty is allowed WITH attachments: an image-only message is valid
+		// (the LLM adapter builds blob-only parts, effectiveParts handles it).
 		writeError(w, http.StatusBadRequest, "bad_request", "content, text or message required")
 		return
 	}
@@ -678,6 +680,7 @@ func (d *Daemon) postMessage(w http.ResponseWriter, r *http.Request) {
 		Template:        req.Template,
 		ClientMessageID: req.ClientMessageID,
 		Message:         content,
+		AttachmentCount: len(req.Attachments),
 	}
 	queued, depth, seq, serr := d.sessionRunner.SubmitUserTurn(in, persist)
 	if serr != nil {

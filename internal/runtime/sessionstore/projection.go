@@ -263,11 +263,12 @@ func applyLocked(s *SessionState, ev *Event) {
 			}
 		}
 		s.Queue = append(s.Queue, QueueEntry{
-			ID:            ev.Queue.ID,
-			CorrelationID: ev.Queue.CorrelationID,
-			Message:       ev.Queue.Message,
-			Status:        orDefault(ev.Queue.Status, "queued"),
-			EnqueuedAt:    ev.TsUnixNano,
+			ID:              ev.Queue.ID,
+			CorrelationID:   ev.Queue.CorrelationID,
+			Message:         ev.Queue.Message,
+			Status:          orDefault(ev.Queue.Status, "queued"),
+			AttachmentCount: ev.Queue.AttachmentCount,
+			EnqueuedAt:      ev.TsUnixNano,
 		})
 		reindexQueue(s)
 
