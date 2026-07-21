@@ -145,6 +145,8 @@ func (d *Daemon) MountAPI() {
 				r.Get("/agents", d.getAgents)
 				r.Post("/agents/{agent_id}/cancel", d.cancelAgent)
 				r.Get("/queue", d.getQueue)
+				r.Post("/queue/clear", d.clearQueue)
+				r.Delete("/queue/{entry_id}", d.deleteQueueEntry)
 
 				r.Post("/messages", d.postMessage)
 				r.Post("/abort", d.abortTurn)

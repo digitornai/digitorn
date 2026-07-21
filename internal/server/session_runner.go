@@ -118,6 +118,58 @@ func (r *sessionRunner) Abort(sessionID string) bool {
 	return true
 }
 
+// CancelQueued removes ONE waiting message from the session's queue, matched on
+// its client message id. It runs under the same mutex as enqueue/dequeue, so a
+// message can never be cancelled in the instant it is being promoted to the
+// running turn: either it is still waiting (removed here) or it already left
+// the queue (not found, and its turn proceeds). Returns true if a row left.
+func (r *sessionRunner) CancelQueued(sessionID, clientMessageID string) bool {
+	if r == nil || sessionID == "" || clientMessageID == "" {
+		return false
+	}
+	v, ok := r.states.Load(sessionID)
+	if !ok {
+		return false
+	}
+	st := v.(*sessionRunState)
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	for i := range st.queue {
+		if st.queue[i].in.ClientMessageID == clientMessageID {
+			st.queue = append(st.queue[:i], st.queue[i+1:]...)
+			return true
+		}
+	}
+	return false
+}
+
+// ClearQueued drops every WAITING message and returns their client message ids
+// (for the durable message_cancelled events). The running turn is untouched —
+// it is not in the queue. Same lock as scheduling.
+func (r *sessionRunner) ClearQueued(sessionID string) []string {
+	if r == nil || sessionID == "" {
+		return nil
+	}
+	v, ok := r.states.Load(sessionID)
+	if !ok {
+		return nil
+	}
+	st := v.(*sessionRunState)
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if len(st.queue) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(st.queue))
+	for i := range st.queue {
+		if cid := st.queue[i].in.ClientMessageID; cid != "" {
+			ids = append(ids, cid)
+		}
+	}
+	st.queue = nil
+	return ids
+}
+
 // IsRunning reports whether a turn is currently executing for the session (a
 // cancel func is registered for the whole runOnce lifetime). Used to re-arm the
 // client's spinner on join/reconnect when a turn is in flight.

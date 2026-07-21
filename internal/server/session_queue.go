@@ -2,9 +2,11 @@ package server
 
 import (
 	"context"
+	"net/http"
 
 	"github.com/digitornai/digitorn/internal/runtime"
 	"github.com/digitornai/digitorn/internal/runtime/sessionstore"
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 )
 
@@ -77,5 +79,76 @@ func (d *Daemon) onTurnDequeued(in runtime.TurnInput) {
 	if _, err := d.sessionStore.AppendDurable(context.Background(), ev); err != nil && d.logger != nil {
 		d.logger.Warn("queue: message_started append failed",
 			"session_id", in.SessionID, "err", err.Error())
+	}
+}
+
+// deleteQueueEntry cancels ONE waiting message (DELETE /queue/{entry_id}). The
+// entry id the web sends is the message's client id (see queue.ts: the row's id
+// becomes its correlation id after reconcile).
+func (d *Daemon) deleteQueueEntry(w http.ResponseWriter, r *http.Request) {
+	sid := sessionIDParam(r)
+	if _, err := d.requireOwnedSession(r.Context(), sid); err != nil {
+		writeError(w, errStatus(err), errCode(err), err.Error())
+		return
+	}
+	entryID := chi.URLParam(r, "entry_id")
+	appID := chi.URLParam(r, "app_id")
+	uid := userIDOf(r.Context())
+
+	removed := d.sessionRunner != nil && d.sessionRunner.CancelQueued(sid, entryID)
+	if removed {
+		d.emitQueueCancelled(sid, appID, uid, entryID)
+	}
+	// Idempotent: a row already gone (dequeued a moment ago, or a double click)
+	// is a 200 with cancelled:false, not an error — the client's optimistic
+	// removal already reflects the intent.
+	writeJSON(w, http.StatusOK, map[string]any{
+		"session_id": sid,
+		"entry_id":   entryID,
+		"cancelled":  removed,
+	})
+}
+
+// clearQueue drops every WAITING message (POST /queue/clear). The running turn
+// is never in the queue, so it is untouched.
+func (d *Daemon) clearQueue(w http.ResponseWriter, r *http.Request) {
+	sid := sessionIDParam(r)
+	if _, err := d.requireOwnedSession(r.Context(), sid); err != nil {
+		writeError(w, errStatus(err), errCode(err), err.Error())
+		return
+	}
+	appID := chi.URLParam(r, "app_id")
+	uid := userIDOf(r.Context())
+
+	var ids []string
+	if d.sessionRunner != nil {
+		ids = d.sessionRunner.ClearQueued(sid)
+	}
+	for _, cid := range ids {
+		d.emitQueueCancelled(sid, appID, uid, cid)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"session_id": sid,
+		"cleared":    len(ids),
+	})
+}
+
+// emitQueueCancelled removes a waiting row everywhere: durable so a cold rebuild
+// agrees, and fanned to the session's room so the panel drops it live. Same
+// SessionID-scoped path as the other queue events — never a broadcast.
+func (d *Daemon) emitQueueCancelled(sid, appID, uid, clientMessageID string) {
+	if d == nil || d.sessionStore == nil || sid == "" || clientMessageID == "" {
+		return
+	}
+	ev := sessionstore.Event{
+		Type:          sessionstore.EventMessageCancelled,
+		SessionID:     sid,
+		AppID:         appID,
+		UserID:        uid,
+		CorrelationID: clientMessageID,
+	}
+	if _, err := d.sessionStore.AppendDurable(context.Background(), ev); err != nil && d.logger != nil {
+		d.logger.Warn("queue: message_cancelled append failed",
+			"session_id", sid, "err", err.Error())
 	}
 }

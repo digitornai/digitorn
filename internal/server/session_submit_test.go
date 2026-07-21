@@ -200,3 +200,113 @@ func TestSubmit_QueuedPersistOrderIsFIFO(t *testing.T) {
 		}
 	}
 }
+
+// Cancelling a WAITING message removes it so its turn never runs.
+func TestSubmit_CancelQueuedRemovesWaitingMessage(t *testing.T) {
+	var mu sync.Mutex
+	var ran []string
+	release := make(chan struct{})
+	firstRunning := make(chan struct{})
+	var once sync.Once
+	r := newTestRunner(func(_ context.Context, in runtime.TurnInput) error {
+		mu.Lock()
+		ran = append(ran, in.ClientMessageID)
+		mu.Unlock()
+		if in.ClientMessageID == "first" {
+			once.Do(func() { close(firstRunning) })
+			<-release
+		}
+		return nil
+	})
+	P := func() (uint64, error) { return 1, nil }
+
+	r.SubmitUserTurn(runtime.TurnInput{AppID: "a", SessionID: "s1", ClientMessageID: "first"}, P)
+	<-firstRunning
+	r.SubmitUserTurn(runtime.TurnInput{AppID: "a", SessionID: "s1", ClientMessageID: "a"}, P)
+	r.SubmitUserTurn(runtime.TurnInput{AppID: "a", SessionID: "s1", ClientMessageID: "b"}, P)
+
+	if !r.CancelQueued("s1", "a") {
+		t.Fatal("CancelQueued(a) returned false, want true")
+	}
+	if r.CancelQueued("s1", "ghost") {
+		t.Fatal("CancelQueued(ghost) returned true for a non-existent id")
+	}
+
+	close(release)
+	deadline := time.After(5 * time.Second)
+	for {
+		mu.Lock()
+		n := len(ran)
+		mu.Unlock()
+		if n == 2 { // first + b, never a
+			break
+		}
+		select {
+		case <-deadline:
+			mu.Lock()
+			t.Fatalf("ran = %v, want [first b]", ran)
+			mu.Unlock()
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, id := range ran {
+		if id == "a" {
+			t.Fatalf("cancelled message 'a' ran anyway: %v", ran)
+		}
+	}
+}
+
+// Clearing drops every waiting message and returns their ids.
+func TestSubmit_ClearQueuedDropsAllWaiting(t *testing.T) {
+	var mu sync.Mutex
+	var ran []string
+	release := make(chan struct{})
+	firstRunning := make(chan struct{})
+	var once sync.Once
+	r := newTestRunner(func(_ context.Context, in runtime.TurnInput) error {
+		mu.Lock()
+		ran = append(ran, in.ClientMessageID)
+		mu.Unlock()
+		if in.ClientMessageID == "first" {
+			once.Do(func() { close(firstRunning) })
+			<-release
+		}
+		return nil
+	})
+	P := func() (uint64, error) { return 1, nil }
+
+	r.SubmitUserTurn(runtime.TurnInput{AppID: "a", SessionID: "s1", ClientMessageID: "first"}, P)
+	<-firstRunning
+	r.SubmitUserTurn(runtime.TurnInput{AppID: "a", SessionID: "s1", ClientMessageID: "a"}, P)
+	r.SubmitUserTurn(runtime.TurnInput{AppID: "a", SessionID: "s1", ClientMessageID: "b"}, P)
+
+	ids := r.ClearQueued("s1")
+	if len(ids) != 2 {
+		t.Fatalf("ClearQueued returned %v, want [a b]", ids)
+	}
+
+	close(release)
+	// Give the loop a moment; only "first" should ever run.
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case <-deadline:
+			goto check
+		case <-time.After(20 * time.Millisecond):
+			mu.Lock()
+			n := len(ran)
+			mu.Unlock()
+			if n > 1 {
+				goto check
+			}
+		}
+	}
+check:
+	mu.Lock()
+	defer mu.Unlock()
+	if len(ran) != 1 || ran[0] != "first" {
+		t.Fatalf("ran = %v, want [first] (a, b cleared)", ran)
+	}
+}
