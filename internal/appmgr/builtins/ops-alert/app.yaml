@@ -12,7 +12,7 @@ app:
     triages severity, summarizes impact, and recommends next steps. One session per
     alert for a full audit trail.
   author: "Digitorn"
-  category: "automation"
+  category: "productivity"
   tags: [ops, webhook, background, monitoring]
 
 runtime:

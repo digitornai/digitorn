@@ -14,8 +14,7 @@ app:
   version: "0.6.2"
   description: "General-purpose assistant that also creates & edits Word, PDF, PowerPoint and Excel files. Zero setup — chat in the web app or CLI."
   author: "you@example.com"
-  category: "coding"
-
+  category: "assistant"
 ui:
   workspace:
     position: hidden

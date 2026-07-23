@@ -9,7 +9,7 @@ app:
   version: "0.3.1"
   description: "Write and compile LaTeX documents live; the agent plans, asks when unsure, builds a well-structured document, compiles, and fixes errors."
   author: "you@example.com"
-  category: "writing"
+  category: "creative"
   tags: [latex, pdf, document, writing]
 
 # External binaries this app needs but does not ship. The daemon provisions them

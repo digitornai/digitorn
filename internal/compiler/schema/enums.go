@@ -89,7 +89,11 @@ var AllCategories = []Category{
 	CategoryCoding, CategoryWriting, CategoryResearch, CategoryData,
 	CategoryDevOps, CategoryDesign, CategoryCommunication, CategoryAutomation,
 	CategoryGeneral,
+	// Hub-canonical ids (GET /api/v1/categories). "assistant" + "creative" were
+	// missing, so a chat app couldn't declare its real category and fell back to
+	// the ugly uppercased id in the store.
 	"developer-tools", "development", "productivity", "education", "ai", "support",
+	"assistant", "creative",
 }
 
 type ClassifierFrequency string

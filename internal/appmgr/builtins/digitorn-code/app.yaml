@@ -9,8 +9,7 @@ app:
   version: "0.1.0"
   description: "Digitorn Code — a senior-engineer coding agent: reads the codebase before it acts, edits and runs and verifies, delegates broad search to sub-agents, reports honestly, and asks only when the call is genuinely the user's."
   author: "you@example.com"
-  category: "coding"
-
+  category: "developer-tools"
 ui:
   workspace:
     # Enable GitHub source control (connect, open/clone a repo, commit, push/pull).

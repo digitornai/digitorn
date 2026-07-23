@@ -15,7 +15,7 @@ app:
     is delivered back on the SAME channel it came from. Swap the kb/ folder for
     your docs and it becomes your desk.
   author: "Digitorn"
-  category: "support"
+  category: "communication"
   tags: [support, customer-service, omnichannel, rag, background]
 
 runtime:

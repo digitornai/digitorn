@@ -9,7 +9,7 @@ app:
   version: "0.1.1"
   description: "A collaborative whiteboard the agent can draw on in real time."
   author: "you@example.com"
-  category: "design"
+  category: "creative"
   tags: [design, whiteboard, diagram, draw]
 
 runtime:

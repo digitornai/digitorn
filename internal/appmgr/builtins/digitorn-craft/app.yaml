@@ -6,7 +6,7 @@ app:
   description: "Build React + Vite apps from a single prompt. Pick a starter template or describe what you want — the AI writes the code, installs deps, and ships a production build."
   icon: ""
   color: "#14B8A6"
-  category: development
+  category: "developer-tools"
   tags: [ai, builder, react, no-code]
 
 runtime:
